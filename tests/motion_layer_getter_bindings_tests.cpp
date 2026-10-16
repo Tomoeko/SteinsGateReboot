@@ -512,6 +512,7 @@ static void TestSelectedLayerSetterControls() {
 	static_cast<void>(fixture.Call(setter, "setOpacity", {std::int32_t{77}}));
 	Require(fixture.Read(alias, "left") == sgre::script::SquirrelValue{13.0f} && fixture.Read(alias, "top") == sgre::script::SquirrelValue{19.0f} && fixture.Read(alias, "zoomX") == sgre::script::SquirrelValue{4.0f} && fixture.Read(alias, "zoomY") == sgre::script::SquirrelValue{5.0f} && fixture.Read(alias, "flipX") == sgre::script::SquirrelValue{false} && fixture.Read(alias, "flipY") == sgre::script::SquirrelValue{true} && fixture.Read(alias, "slantX") == sgre::script::SquirrelValue{0.75f} && fixture.Read(alias, "slantY") == sgre::script::SquirrelValue{0.125f} && fixture.Read(alias, "angleDeg") == sgre::script::SquirrelValue{90.0f} && fixture.Read(alias, "opacity") == sgre::script::SquirrelValue{std::int32_t{77}}, "scalar layer controls must update independent real override fields");
 	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{20.0f}, "pending controls must not overwrite the completed numeric pose");
+	Require(fixture.Read(getter, "zoomX") == sgre::script::SquirrelValue{2.0f} && fixture.Read(getter, "zoomY") == sgre::script::SquirrelValue{3.0f} && fixture.Read(getter, "angleDeg") == sgre::script::SquirrelValue{0.0f} && fixture.Read(getter, "opacity") == sgre::script::SquirrelValue{std::int32_t{255}}, "scalar numeric getters must retain completed values while setter controls are pending");
 	RequireFailure([&] {
 		static_cast<void>(fixture.Call(setter, "setOpacity", {std::int32_t{-1}}));
 	},
@@ -519,6 +520,7 @@ static void TestSelectedLayerSetterControls() {
 	Require(fixture.Read(alias, "opacity") == sgre::script::SquirrelValue{std::int32_t{77}}, "invalid override admission must preserve every retained field");
 	fixture.Second().Update();
 	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{33.0f} && fixture.Read(getter, "top") == sgre::script::SquirrelValue{59.0f}, "next real numeric phase must compose actual layer coordinate overrides");
+	Require(fixture.Read(getter, "flipX") == sgre::script::SquirrelValue{false} && fixture.Read(getter, "flipY") == sgre::script::SquirrelValue{true} && fixture.Read(getter, "zoomX") == sgre::script::SquirrelValue{8.0f} && fixture.Read(getter, "zoomY") == sgre::script::SquirrelValue{15.0f} && fixture.Read(getter, "slantX") == sgre::script::SquirrelValue{0.75f} && fixture.Read(getter, "slantY") == sgre::script::SquirrelValue{0.125f} && fixture.Read(getter, "angleDeg") == sgre::script::SquirrelValue{90.0f} && fixture.Read(getter, "angleRad") == sgre::script::SquirrelValue{90.0f * 6.28318548f / 360.0f} && fixture.Read(getter, "opacity") == sgre::script::SquirrelValue{std::int32_t{77}}, "all scalar numeric getters must read composed attributes after the genuine numeric phase");
 	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
 	const auto child_root = fixture.Vm.Retain(child);
 	Require(std::holds_alternative<std::monostate>(fixture.Call(child, "getLayerSetter", {std::string("rectangle map key")})), "child setter lookup cannot escape to its containing sibling");

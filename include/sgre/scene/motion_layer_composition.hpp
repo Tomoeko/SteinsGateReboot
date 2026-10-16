@@ -69,6 +69,8 @@ namespace sgre::scene {
 		// Raw native getters read owned numeric words before initial composition and while newer input remains pending.
 		[[nodiscard]] std::array<float, 3> RetainedCoordinate(std::uint32_t layer) const;
 		[[nodiscard]] MotionLayerVisibility RetainedVisibility(std::uint32_t layer) const;
+		// Borrows completed numeric storage until this composition owner mutates or retires.
+		[[nodiscard]] const MotionComposedLayer& RetainedLayer(std::uint32_t layer) const;
 		// The normal conditional phase exposes the actual native Changed gate consumed by geometry.
 		[[nodiscard]] bool Changed(std::uint32_t layer) const;
 		[[nodiscard]] const MotionLocalFrames& LocalFrames() const;

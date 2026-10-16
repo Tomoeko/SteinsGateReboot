@@ -33,6 +33,32 @@ namespace sgre::script {
 		return 0;
 	}
 
+	static SquirrelValue NumericAttribute(const scene::MotionComposedLayer& layer, std::size_t index) {
+		const auto& value = layer.Hierarchy.Attributes;
+		switch (index) {
+		case 0:
+			return value.FlipX;
+		case 1:
+			return value.FlipY;
+		case 2:
+			return value.ZoomX;
+		case 3:
+			return value.ZoomY;
+		case 4:
+			return value.ShearX;
+		case 5:
+			return value.ShearY;
+		case 6:
+			return value.Angle * 6.28318548f / 360.0f;
+		case 7:
+			return value.Angle;
+		case 8:
+			return static_cast<std::int32_t>(value.Opacity);
+		default:
+			throw std::runtime_error("motion numeric getter index is invalid");
+		}
+	}
+
 	class ScriptMotionLayerGetters::Implementation {
 	public:
 		struct GetterRecord {
@@ -365,7 +391,21 @@ namespace sgre::script {
 					return SquirrelNativeResult::ReturnValue(values[index]);
 				}));
 			}
-			static constexpr std::array<std::string_view, 11> unsupported{"getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "containsArea"};
+			static constexpr std::array<std::string_view, 9> numeric_methods{"getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity"};
+			for (std::size_t index = 0; index != numeric_methods.size(); ++index) {
+				const auto method = numeric_methods[index];
+				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, index](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+					const auto owner = weak.lock();
+					if (!owner || arguments.empty()) {
+						throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
+					}
+					const auto& record = owner->Getter(arguments[0]);
+					const auto& numeric = ActualScene(record.Task, record.Child).LayerNumeric(record.Layer);
+
+					return SquirrelNativeResult::ReturnValue(NumericAttribute(numeric, index));
+				}));
+			}
+			static constexpr std::array<std::string_view, 2> unsupported{"getPosition", "containsArea"};
 			for (const auto method : unsupported) {
 				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, method](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
 					const auto owner = weak.lock();

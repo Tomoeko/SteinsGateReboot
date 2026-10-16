@@ -405,20 +405,22 @@ namespace sgre::scene {
 		return m_Layers;
 	}
 
-	std::array<float, 3> MotionLayerComposition::RetainedCoordinate(std::uint32_t layer) const {
+	const MotionComposedLayer& MotionLayerComposition::RetainedLayer(std::uint32_t layer) const {
 		RequireSelectedOwner(false);
 		if (layer >= m_Layers.size() || (m_SelectedOwner != nullptr && m_SelectedOwner->m_CompositionOwner != this)) {
-			throw std::runtime_error("motion retained numeric coordinate requires its exact live owner and selected layer");
+			throw std::runtime_error("motion retained numeric fields require their exact live owner and selected layer");
 		}
-		return m_Layers[layer].Hierarchy.Attributes.Coordinate;
+		return m_Layers[layer];
+	}
+
+	std::array<float, 3> MotionLayerComposition::RetainedCoordinate(std::uint32_t layer) const {
+		return RetainedLayer(layer).Hierarchy.Attributes.Coordinate;
 	}
 
 	MotionLayerVisibility MotionLayerComposition::RetainedVisibility(std::uint32_t layer) const {
-		RequireSelectedOwner(false);
-		if (layer >= m_Layers.size() || (m_SelectedOwner != nullptr && m_SelectedOwner->m_CompositionOwner != this)) {
-			throw std::runtime_error("motion retained visibility requires its exact live owner and selected layer");
-		}
-		return {m_Layers[layer].Active, m_Layers[layer].Visible};
+		const auto& retained = RetainedLayer(layer);
+
+		return {retained.Active, retained.Visible};
 	}
 
 	bool MotionLayerComposition::Changed(std::uint32_t layer) const {
