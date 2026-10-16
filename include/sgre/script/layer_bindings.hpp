@@ -95,6 +95,9 @@ namespace sgre::script {
 		// Read the actual native Layer state for its already scoped receiver; retain no additional script owner.
 		[[nodiscard]] scene::LayerFolderFrameState FolderFrameState(const SquirrelValue& receiver) const;
 		[[nodiscard]] scene::MotionLayerFrameState MotionFrameState(const SquirrelValue& receiver) const;
+		// Native Affine Process publishes only scale, radians and offset into its actual common camera.
+		// Independent center/clip fields and later common setters retain their existing ownership.
+		void PublishAffineCamera(const SquirrelValue& instance, const scene::LayerCameraParameters& camera);
 		// The returned task owner borrows its live actual Layer; services remain alive through VM Close.
 		[[nodiscard]] scene::MotionLayerTasks& MotionTasks(const SquirrelValue& instance);
 		// Ordinary Folder/Motion owners contain their real common serial/parallel task sets; RawTex owns its graph separately.

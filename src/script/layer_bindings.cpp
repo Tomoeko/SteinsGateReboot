@@ -1300,6 +1300,18 @@ namespace sgre::script {
 		return state;
 	}
 
+	void ScriptLayerBindings::PublishAffineCamera(const SquirrelValue& instance, const scene::LayerCameraParameters& camera) {
+		const auto& record = m_Implementation->MotionRecord(instance);
+		if (record.Releasing) {
+			throw std::runtime_error("Affine camera publication cannot borrow its retiring native Layer owner");
+		}
+
+		auto& tree = m_Implementation->Tree;
+		tree.SetScale(record.Handle, {camera.Scale.X, camera.Scale.Y});
+		tree.SetAngleRadians(record.Handle, camera.RotationRadians);
+		tree.SetOffset(record.Handle, {camera.Offset.X, camera.Offset.Y});
+	}
+
 	scene::MotionLayerTasks& ScriptLayerBindings::MotionTasks(const SquirrelValue& instance) {
 		auto& record = m_Implementation->MotionRecord(instance);
 		if (record.Releasing) {

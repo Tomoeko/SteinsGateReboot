@@ -631,6 +631,8 @@ namespace sgre::script {
 			record.Task.Camera.RotationRadians = angle;
 			// Native onScale can reenter the stored transform through another callback before these reads.
 			record.Task.Camera.Offset = {-record.Task.Projected.TranslationX, -record.Task.Projected.TranslationY};
+			// Original058c1f/058c2b/058c45 update this same common camera before common Process.
+			Layers.PublishAffineCamera(instance, record.Task.Camera);
 			// Native never clears the matrix dirty byte here: later frames recompute while it remains set.
 		}
 

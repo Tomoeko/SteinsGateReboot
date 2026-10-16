@@ -16,6 +16,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using SquirrelValue = sgre::script::SquirrelValue;
@@ -517,6 +518,137 @@ static void CheckNativeDraw(std::string_view plan_path, std::string_view expecte
 	std::cout << "Matched " << count << " native affine Draw cases and " << words << " selected words\n";
 }
 
+static sgre::scene::LayerCameraFrameState PublicationFrameState() {
+	sgre::scene::LayerCameraFrameState state;
+	state.Viewport = {1280, 720};
+	state.View.Coefficients = {2.0f / 1280, 0, 0, -1, 0, -2.0f / 720, 0, 1, 0, 0, 1, 0};
+	state.RawScissor = {0, 0, 1280, 720};
+	state.RoundedScissor = state.RawScissor;
+	state.AppliedRoundedScissor = state.RawScissor;
+
+	return state;
+}
+
+static void CheckCommonCameraPublicationAndDraw() {
+	const std::array<sgre::scene::MotionScissorMatrix, 1> initial_models{};
+	sgre::scene::LayerCameraDrawScope camera(PublicationFrameState(), initial_models, [](const auto&) {
+	});
+	Services services;
+	const auto derived = services.Vm.CreateClass(services.Affine.AffineLayerClass());
+	std::vector<std::string> phases;
+	bool old_camera_seen = false;
+	services.Vm.NewSlot(derived, std::string("calcMatrix"), services.Vm.CreateNativeClosure("publication actual local matrix", [&](auto&, const auto arguments) {
+		phases.emplace_back("local");
+		sgre::scene::TranslateAffineMatrix(services.Matrices.Matrix(arguments[1]), 5, 7);
+
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	services.Vm.NewSlot(derived, std::string("calcImageMatrix"), services.Vm.CreateNativeClosure("publication actual image matrix", [&](auto&, const auto arguments) {
+		phases.emplace_back("image");
+		sgre::scene::ScaleAffineMatrix(services.Matrices.Matrix(arguments[1]), 2, 3);
+
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	services.Vm.NewSlot(derived, std::string("onScale"), services.Vm.CreateNativeClosure("publication original scale callback order", [&](auto& vm, const auto arguments) -> sgre::script::SquirrelNativeResult {
+		phases.emplace_back("scale");
+		const auto handle = services.Layers.Handle(arguments[0]);
+		const auto before = services.Tree.State(handle);
+		old_camera_seen = before.Transform.Scale == sgre::scene::LayerPoint{7, 8} && before.Transform.Offset == sgre::scene::LayerPoint{70, 80} && before.Transform.AngleRadians == 0.75f;
+		services.Tree.SetScale(handle, {9, 10});
+		services.Tree.SetOffset(handle, {90, 100});
+		services.Tree.SetCenter(handle, {16, -5});
+		services.Tree.SetClip(handle, {0, 0}, {100, 100});
+		vm.SetLastError(81);
+		throw sgre::script::SquirrelVmException(81, "original ignored onScale failure before camera publication");
+	}));
+	const auto instance = services.Create(derived);
+	const auto handle = services.Layers.Handle(instance);
+	services.Tree.SetCenter(handle, {4, -3});
+	services.Tree.SetScale(handle, {7, 8});
+	services.Tree.SetOffset(handle, {70, 80});
+	services.Tree.SetAngleRadians(handle, 0.75f);
+	services.Tree.SetBaseClip(handle, {0, 0}, {1280, 720});
+	services.Tree.SetClip(handle, {10, 20}, {30, 40});
+	sgre::script::ScriptMotionFrameServices frame_services;
+	frame_services.State = [&](const auto& receiver) {
+		return services.Layers.MotionFrameState(receiver);
+	};
+	frame_services.SecondaryDraw = [](const auto&, auto) {
+	};
+	frame_services.PrimaryDraw = [](const auto&, auto) {
+	};
+	services.Layers.AttachMotionFrame(instance, camera, std::move(frame_services));
+	std::array<float, 12> drawn_model{};
+	std::size_t draws = 0;
+	sgre::scene::ParallelTaskCallbacks child;
+	child.Draw = [&](auto, auto argument) {
+		Require(argument == 0x87654321u, "affine camera publication changed the real Motion frame draw argument");
+		drawn_model = camera.CurrentModel().Coefficients;
+		++draws;
+	};
+	static_cast<void>(services.Layers.MotionTasks(instance).Group(sgre::scene::MotionTaskGroup::First).Append(std::move(child)));
+	static_cast<void>(services.Call(instance, "updateAffine"));
+	bool common_saw_publication = false;
+	services.Layers.DispatchMotionFrame(handle, [&](const auto& receiver, auto& frame) {
+		services.Affine.Process(receiver, [&] {
+			phases.emplace_back("common");
+			const auto state = services.Layers.MotionFrameState(receiver);
+			common_saw_publication = state.Camera.Scale.X == 2 && state.Camera.Scale.Y == 3 && state.Camera.RotationRadians == 0 && state.Camera.Offset.X == -5 && state.Camera.Offset.Y == -7;
+			frame.Update();
+		});
+	});
+	Require(old_camera_seen && common_saw_publication && phases == std::vector<std::string>{"local", "image", "scale", "common"}, "actual affine publication must follow onScale and precede common Process even after an ignored script failure");
+	Require(services.Vm.LastErrorInContext(services.Vm.RootContext()) == SquirrelValue{81}, "camera publication replaced the original callback failure diagnostic");
+	const auto state = services.Tree.State(handle);
+	Require(state.Transform.Center == sgre::scene::LayerPoint{16, -5} && state.Clip == sgre::scene::LayerClip{0, 0, 100, 100} && state.BaseClip == sgre::scene::LayerClip{0, 0, 1280, 720}, "publishing affine camera fields must retain the actual center and independent clip owners");
+	services.Layers.DispatchMotionFrame(handle, [&](const auto& receiver, auto& frame) {
+		services.Affine.Draw(receiver, 0x87654321u, [&](auto argument) {
+			frame.Draw(argument);
+		});
+	});
+	// Pivot(16,-5), scale(2,3), negative offset(-5,-7): T(pivot)*S*T(-pivot)-offset.
+	const std::array<float, 12> expected{2, 0, 0, -11, 0, 3, 0, 17, 0, 0, 1, 0};
+	Require(draws == 1 && drawn_model == expected && camera.Depth() == 1 && camera.CurrentModel().Coefficients == initial_models[0].Coefficients, "actual Motion camera child did not consume the published common transform or restore its scope");
+	services.Affine.ReleaseInstance(instance);
+}
+
+static void CheckCommonCameraLastWriterAndRetirement() {
+	Services services;
+	const auto instance = services.Create();
+	const auto handle = services.Layers.Handle(instance);
+	services.Set(instance, "setXpos", 5.0f);
+	services.Set(instance, "setRotate", 30.0f);
+	services.Affine.Process(instance, [] {
+	});
+	const auto calculated = services.Affine.TaskState(instance).Camera;
+	const auto published = services.Layers.MotionFrameState(instance).Camera;
+	Require(calculated.RotationRadians != 0 && std::bit_cast<std::uint32_t>(published.RotationRadians) == std::bit_cast<std::uint32_t>(calculated.RotationRadians), "computed native radians must publish without a degree conversion");
+	Require(published.Offset.X == calculated.Offset.X && published.Offset.Y == calculated.Offset.Y && published.Scale.X == calculated.Scale.X && published.Scale.Y == calculated.Scale.Y, "common camera must receive the exact completed derived words");
+	services.Affine.Draw(instance, 0, [](auto) {
+	});
+	Require(!services.Affine.TaskState(instance).MatrixInvalidated, "real Draw must establish the clean matrix phase before the last-writer check");
+	// Exercise real inherited Layer setters, independently of Affine's own scalar properties.
+	static_cast<void>(services.Vm.Invoke(services.Vm.GetSlot(services.Layers.LayerBaseClass(), std::string("setOffset")), std::array<SquirrelValue, 3>{instance, 8.0f, 9.0f}));
+	static_cast<void>(services.Vm.Invoke(services.Vm.GetSlot(services.Layers.LayerBaseClass(), std::string("setAngleRad")), std::array<SquirrelValue, 2>{instance, -0.25f}));
+	services.Affine.Process(instance, [] {
+	});
+	const auto unchanged = services.Layers.MotionFrameState(instance).Camera;
+	Require(unchanged.Offset.X == 8 && unchanged.Offset.Y == 9 && unchanged.RotationRadians == -0.25f, "clean affine Process or read-time overlay must not overwrite later genuine common setters");
+	services.Set(instance, "setXpos", 6.0f);
+	services.Affine.Process(instance, [] {
+	});
+	const auto updated = services.Layers.MotionFrameState(instance).Camera;
+	const auto next = services.Affine.TaskState(instance).Camera;
+	Require(updated.Offset.X == next.Offset.X && updated.Offset.Y == next.Offset.Y && updated.RotationRadians == next.RotationRadians && updated.Offset.X != 8, "next actual invalidation must republish the derived common transform");
+	Require(!services.Vm.HasSlot(services.Affine.AffineLayerClass(), std::string("PublishAffineCamera")), "native containing-owner publication must not invent a script method");
+	services.Affine.ReleaseInstance(instance);
+	Require(!services.Tree.Contains(handle), "affine camera publication must not retain a released native Layer");
+	RequireFailure([&] {
+		services.Layers.PublishAffineCamera(instance, next);
+	},
+	    "no live native scene state");
+}
+
 int main(int argc, char** argv) {
 	try {
 		if (argc == 4 && std::string_view(argv[1]) == "--draw") {
@@ -537,6 +669,8 @@ int main(int argc, char** argv) {
 			CheckDrawDirtyAndSelfRoot();
 			std::cout << "Checking CheckBorrowedCleanupAndClose" << std::endl;
 			CheckBorrowedCleanupAndClose();
+			CheckCommonCameraPublicationAndDraw();
+			CheckCommonCameraLastWriterAndRetirement();
 		}
 		std::cout << "AffineLayer binding tests passed\n";
 
