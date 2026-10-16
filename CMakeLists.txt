@@ -277,6 +277,7 @@ add_library(sgre_resource
 	src/script/draw_object_bindings.cpp
 	src/script/layer_draw_bindings.cpp
 	src/script/layer_picture_bindings.cpp
+	src/script/layer_proxy_bindings.cpp
 	src/script/fill_rectangle_bindings.cpp
 	src/scene/fill_rectangle_task.cpp
 	src/scene/capture_task.cpp
@@ -746,6 +747,7 @@ if(SGRE_BUILD_TESTS)
 		image_resource_publication
 		image_bindings
 		layer_picture_bindings
+		layer_proxy_bindings
 		fill_rectangle_bindings
 		capture_bindings
 		captured_bindings
