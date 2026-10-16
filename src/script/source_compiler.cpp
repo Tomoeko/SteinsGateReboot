@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <charconv>
 #include <cstdint>
 #include <limits>
@@ -12,6 +13,7 @@
 #include <vector>
 
 namespace sgre::script {
+	static constexpr std::size_t kMaximumHexadecimalDigits = 8;
 	static constexpr std::size_t kMaximumSourceBytes = 1024 * 1024;
 	static constexpr std::size_t kMaximumCompilerDepth = 64;
 	static constexpr std::size_t kMaximumCompilerInstructions = 16384;
@@ -53,6 +55,10 @@ namespace sgre::script {
 		std::size_t Offset = 0;
 		bool NewlineBefore = false;
 	};
+
+	static bool SourceHexDigit(char value) {
+		return (value >= '0' && value <= '9') || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
+	}
 
 	static bool SourceIdentifierStart(char value) {
 		return value == '_' || (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
@@ -97,8 +103,18 @@ namespace sgre::script {
 			}
 			if (value >= '0' && value <= '9') {
 				token.Kind = SourceTokenKind::Integer;
-				while (m_Position < m_Source.size() && m_Source[m_Position] >= '0' && m_Source[m_Position] <= '9') {
-					++m_Position;
+				if (value == '0' && m_Position < m_Source.size() && (m_Source[m_Position] == 'x' || m_Source[m_Position] == 'X')) {
+					const auto digits_begin = ++m_Position;
+					while (m_Position < m_Source.size() && SourceHexDigit(m_Source[m_Position])) {
+						++m_Position;
+					}
+					if (m_Position - digits_begin > kMaximumHexadecimalDigits) {
+						Fail(token.Offset, "too many digits for a hexadecimal integer");
+					}
+				} else {
+					while (m_Position < m_Source.size() && m_Source[m_Position] >= '0' && m_Source[m_Position] <= '9') {
+						++m_Position;
+					}
 				}
 				token.Text = m_Source.substr(token.Offset, m_Position - token.Offset);
 				return token;
@@ -480,6 +496,27 @@ namespace sgre::script {
 				return LoadConstant(state, SquirrelString(token.Text));
 			}
 			if (Accept(SourceTokenKind::Integer)) {
+				if (token.Text.size() >= 2 && token.Text.front() == '0' && (token.Text[1] == 'x' || token.Text[1] == 'X')) {
+					std::uint32_t bits = 0;
+					const auto digits = std::string_view(token.Text).substr(2);
+					if (!digits.empty()) {
+						const auto parsed = std::from_chars(digits.data(), digits.data() + digits.size(), bits, 16);
+						if (parsed.ec != std::errc{} || parsed.ptr != digits.data() + digits.size()) {
+							Fail("hexadecimal integer exceeds its original 32-bit word");
+						}
+					}
+					// Original ReadNumber accumulates a DWORD; Primary stores negative words in the literal pool.
+					const auto value = std::bit_cast<std::int32_t>(bits);
+					if (value < 0) {
+						SourceOperand result;
+						result.Register = Allocate(state);
+						Emit(state, 1, result.Register, Literal(state, value));
+
+						return result;
+					}
+
+					return LoadConstant(state, value);
+				}
 				std::int32_t value = 0;
 				const auto parsed = std::from_chars(token.Text.data(), token.Text.data() + token.Text.size(), value);
 				if (parsed.ec != std::errc{} || parsed.ptr != token.Text.data() + token.Text.size() || (token.Text.size() > 1 && token.Text.front() == '0')) {

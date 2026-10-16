@@ -693,6 +693,69 @@ static void TestActualRegisteredKeyMemberConditional() {
 	Require(std::get<std::int32_t>(vm.Invoke(closure, arguments).Value) == 1 && std::get<std::int32_t>(vm.Invoke(different, arguments).Value) == 0 && calls == 6, "registered bytecode retained a runtime dependency on the enum table");
 }
 
+static void TestHexadecimalWordsAndPrefixBoundaries() {
+	SquirrelVm vm;
+	const std::array<std::pair<std::string_view, std::int32_t>, 16> cases{{{"0x00000000", 0}, {"0X0", 0}, {"0x1", 1}, {"0X9", 9}, {"0xa", 10}, {"0xAbCdEf", 11259375}, {"0x1e2", 482}, {"0X7fFfFfFf", 2147483647}, {"0x80000000", std::numeric_limits<std::int32_t>::min()}, {"0x80000001", -2147483647}, {"0XFFFFFFFE", -2}, {"0xFFFFFFFF", -1}, {"0x89aBcDeF", -1985229329}, {"0x0000000F", 15}, {"0x", 0}, {"0X", 0}}};
+	for (const auto& [literal, expected] : cases) {
+		const auto source = std::string("return ") + std::string(literal) + ";";
+		Require(std::get<std::int32_t>(Run(vm, source, vm.RootTable())) == expected, "hexadecimal prefix, digit or signed32 word differs");
+		const auto program = CompileSquirrelSource(vm, source, "hex-word-emission");
+		const auto& instructions = program.MainFunction.Instructions;
+		if (expected < 0) {
+			Require(program.MainFunction.Literals == std::vector<sgre::script::SquirrelLiteral>{expected} && !instructions.empty() && instructions.front().Opcode == 1, "negative original integer word must use its owned literal and LOAD instruction");
+		} else {
+			Require(program.MainFunction.Literals.empty() && !instructions.empty() && instructions.front().Opcode == 2 && instructions.front().Argument1 == expected, "nonnegative original integer word must use its immediate LOADINT instruction");
+		}
+	}
+	Require(std::get<std::int32_t>(Run(vm, "return 0x", vm.RootTable())) == 0, "native empty hexadecimal prefix at EOF differs");
+	Require(std::get<bool>(Run(vm, "return 0x80000000 < 0;", vm.RootTable())), "hexadecimal sign bit must participate in signed integer comparison");
+	Require(std::get<bool>(Run(vm, "return 0xA == 10 && 0Xff == 255;", vm.RootTable())), "hexadecimal token consumed the following expression operator");
+	Require(std::get<std::int32_t>(Run(vm, "return true ? 0x123 : 0Xffffffff;", vm.RootTable())) == 291, "hexadecimal token changed conditional arm parsing");
+}
+
+static void TestHexadecimalDigitLimitsAndDiagnostics() {
+	SquirrelVm vm;
+	for (const auto source : {"return 0x000000000;", "return 0X100000000;", "return 0xFFFFFFFFF;"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "hex-limit-source"));
+		},
+		    "too many digits for a hexadecimal integer");
+	}
+	for (const auto source : {"return 0xG;", "return 0x1g;", "return 0x1.0;", "return 0x 1;"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "hex-boundary-source"));
+		},
+		    "hex-boundary-source");
+	}
+	RequireFailure([&] {
+		static_cast<void>(CompileSquirrelSource(vm, "\nreturn 0x000000000;", "hex-line-source"));
+	},
+	    "hex-line-source:2: source compiler at byte 8");
+}
+
+static void TestRegisteredColorHexAndActualArgumentWords() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto compiler = vm.GetSlot(vm.RootTable(), std::string("compilestring"));
+	const std::array<SquirrelValue, 3> compile_arguments{vm.RootTable(), std::string("return 0x00000000"), std::string("image-color-source")};
+	const auto result = vm.Invoke(compiler, compile_arguments);
+	Require(result.State == sgre::script::SquirrelRunState::Completed && vm.Type(result.Value) == sgre::script::SquirrelValueType::Closure, "registered compiler did not produce a real closure for the original image color expression");
+	const std::array<SquirrelValue, 1> actual_arguments{vm.RootTable()};
+	const auto color = vm.Invoke(result.Value, actual_arguments);
+	Require(color.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(color.Value) == 0, "original transparent-black expression lost its zero word through registered compilation");
+	const auto receiver = vm.CreateTable();
+	std::size_t calls = 0;
+	vm.NewSlot(receiver, std::string("accept"), vm.CreateNativeClosure("hexadecimal_arguments", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 4 && arguments.front() == receiver && std::get<std::int32_t>(arguments[1]) == -1985229329 && std::get<std::int32_t>(arguments[2]) == 0 && std::get<std::int32_t>(arguments[3]) == -1, "compiled hexadecimal values changed the real callback receiver or argument words");
+		++calls;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{71});
+	}));
+	const auto closure = vm.CreateClosure(CompileSquirrelSource(vm, "return this.accept(0x89aBcDeF, 0x0, 0XFFFFFFFF);", "hex-call-source"));
+	Require(calls == 0, "hexadecimal compilation executed its callback");
+	const std::array<SquirrelValue, 1> receiver_arguments{receiver};
+	Require(std::get<std::int32_t>(vm.Invoke(closure, receiver_arguments).Value) == 71 && calls == 1, "compiled hexadecimal callback changed its result or invocation count");
+}
+
 int main() {
 	try {
 		TestLiteralsStatementsAndMainPrototype();
@@ -709,6 +772,9 @@ int main() {
 		TestActualCompilestringRegistration();
 		TestQualifiedConstantMembersAndOwnedSnapshots();
 		TestActualRegisteredKeyMemberConditional();
+		TestHexadecimalWordsAndPrefixBoundaries();
+		TestHexadecimalDigitLimitsAndDiagnostics();
+		TestRegisteredColorHexAndActualArgumentWords();
 		std::cout << "source compiler: real prototypes, receiver/context lookup, inert compilation, calls and grammar rejection passed\n";
 		return 0;
 	} catch (const std::exception& error) {
