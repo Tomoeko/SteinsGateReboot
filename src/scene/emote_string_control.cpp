@@ -179,8 +179,8 @@ namespace sgre::scene {
 			if (&Uids.UltimatePlayer() != &primary || Definition.Physics.Uid.size() > kMaximumMotionCommandNameBytes || !(Definition.PixelsPerMeter > 0) || !std::isfinite(Definition.PixelsPerMeter) || Definition.PredictionDegree > 3 || Definition.Output.Fixes.size() > 3) {
 				throw std::runtime_error("Emote String control requires its actual primary UID owner and bounded metadata");
 			}
-			if (!Definition.InheritShape && (Definition.Output.CorrectFix || Definition.Output.CorrectScale)) {
-				throw std::runtime_error("Emote String correction flags require actual inherited-shape metadata");
+			if (Definition.InheritShape && (Definition.Output.CorrectFix || Definition.Output.CorrectScale)) {
+				throw std::runtime_error("Emote String inherited-shape metadata suppresses correction flags");
 			}
 			if (Definition.RequiresEmissions) {
 				throw std::runtime_error("Emote String control resolved emission owner join is not recovered");
@@ -359,7 +359,7 @@ namespace sgre::scene {
 					owner->Physics.SetPosture(pose.Physical);
 					std::array<resource::MotionPoint, 3> fixes{};
 					std::span<resource::MotionPoint> current_fixes;
-					if (Definition.InheritShape && !Definition.Output.Fixes.empty()) {
+					if (Definition.Output.CorrectFix && !Definition.Output.Fixes.empty()) {
 						current_fixes = std::span(fixes).first(Definition.Output.Fixes.size());
 						const auto actual = Posture.WorldFixes();
 						std::copy(actual.begin(), actual.end(), current_fixes.begin());

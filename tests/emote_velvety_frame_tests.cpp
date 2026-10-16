@@ -538,6 +538,7 @@ static void TestSkipFiveActualOccurrenceResetFlags() {
 	string.Physics.Tresses = {{.5f, 0, .5f, 1}};
 	string.Output.Fixes = {{.25f, .25f}};
 	string.Output.CorrectFix = true;
+	string.InheritShape = false;
 	string.PredictionDegree = 3;
 	CheckActualControlSkipReset<sgre::scene::EmoteStringControl>(string, "String");
 

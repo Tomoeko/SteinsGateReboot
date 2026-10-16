@@ -90,8 +90,8 @@ namespace sgre::scene {
 			}
 			definition.RigidIterations = static_cast<std::uint32_t>(iterations);
 			const auto inherit = OutputFlag(control, "inheritShape", true);
-			definition.CorrectFix = inherit && OutputFlag(control, "correctFix", false);
-			definition.CorrectScale = inherit && OutputFlag(control, "correctScale", false);
+			definition.CorrectFix = !inherit && OutputFlag(control, "correctFix", false);
+			definition.CorrectScale = !inherit && OutputFlag(control, "correctScale", false);
 			const auto* fixes = std::get_if<resource::PsbArray>(&OutputField(control, "fixes").Data);
 			if (fixes == nullptr || fixes->size() > 3) {
 				throw std::runtime_error("Emote String output fixes exceed actual native three-point storage");

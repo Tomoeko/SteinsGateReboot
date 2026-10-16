@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -200,12 +201,53 @@ static void TestExplicitRemainingConstraintDomains() {
 	    "invalid after a failed");
 }
 
+static void TestSerializedCorrectionFlagSelection() {
+	// Native2ed271..2ed2e5 reads both correction options only when inheritance is false.
+	for (std::int32_t inheritance = -1; inheritance != 2; ++inheritance) {
+		for (std::int32_t correction_fix = -1; correction_fix != 2; ++correction_fix) {
+			for (std::int32_t correction_scale = -1; correction_scale != 2; ++correction_scale) {
+				auto control = StringControl();
+				Set(control, "rigidRange", Atom(sgre::resource::PsbObject{{"l", Atom(0.0)}, {"t", Atom(0.0)}, {"r", Atom(1.0)}, {"b", Atom(1.0)}}));
+				Set(control, "rigidIter", Atom(std::int64_t{0}));
+				Set(control, "fixes", Atom(sgre::resource::PsbArray{}));
+				if (inheritance >= 0) {
+					Set(control, "inheritShape", Atom(inheritance != 0));
+				}
+				if (correction_fix >= 0) {
+					Set(control, "correctFix", Atom(correction_fix != 0));
+				}
+				if (correction_scale >= 0) {
+					Set(control, "correctScale", Atom(correction_scale != 0));
+				}
+				const auto definitions = sgre::scene::ReadEmoteStringMeshOutputDefinitions(Document(std::move(control)));
+				Require(definitions.size() == 1, "every actual optional flag triple retains exactly one String output definition");
+				Require(definitions.front().CorrectFix == (inheritance == 0 && correction_fix == 1), "native inherited/default String suppresses fix correction; only explicit noninherit reads its independent flag");
+				Require(definitions.front().CorrectScale == (inheritance == 0 && correction_scale == 1), "native inherited/default String suppresses scale correction independently of fix correction");
+			}
+		}
+	}
+	for (const bool explicit_inheritance : {false, true}) {
+		auto control = StringControl();
+		Set(control, "rigidRange", Atom(sgre::resource::PsbObject{{"l", Atom(0.0)}, {"t", Atom(0.0)}, {"r", Atom(1.0)}, {"b", Atom(1.0)}}));
+		Set(control, "rigidIter", Atom(std::int64_t{0}));
+		Set(control, "fixes", Atom(sgre::resource::PsbArray{}));
+		Set(control, "correctFix", Atom(std::numeric_limits<double>::quiet_NaN()));
+		Set(control, "correctScale", Atom(std::numeric_limits<double>::quiet_NaN()));
+		if (explicit_inheritance) {
+			Set(control, "inheritShape", Atom(true));
+		}
+		const auto definitions = sgre::scene::ReadEmoteStringMeshOutputDefinitions(Document(std::move(control)));
+		Require(!definitions.front().CorrectFix && !definitions.front().CorrectScale, "the inherited branch never converts ignored correction fields, including absent inheritShape default");
+	}
+}
+
 int main() {
 	try {
 		TestActualPhysicalSamplesBecomeCorrectedLattice();
 		TestTranslatedRotatedActualReactivationNormalization();
 		TestActualWorldFixTargetsAndIndependentBaseline();
 		TestExplicitRemainingConstraintDomains();
+		TestSerializedCorrectionFlagSelection();
 		std::cout << "Actual String physical owner to sampled inverse, horizontal rotation, initial baseline and zero/one-point world correction passed\n";
 		return 0;
 	} catch (const std::exception& error) {

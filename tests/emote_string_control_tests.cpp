@@ -286,7 +286,7 @@ static void TestZeroTimeRequiresActualActiveDispatch() {
 		definition.Output.Fixes = {{0.5f, 0.5f}};
 		definition.Output.CorrectFix = true;
 		definition.Output.CorrectScale = true;
-		definition.InheritShape = true;
+		definition.InheritShape = false;
 		if (!physical_zero) {
 			definition.SpeedVariables = {"zero-speed"};
 		}
@@ -560,6 +560,66 @@ static void TestPartsTreeExactLookupAndOwner() {
 	fixture.Tasks.Clear();
 }
 
+static void TestSerializedCorrectionDispatchAndConstructorContract() {
+	for (const bool inherit : {false, true}) {
+		for (const bool correct_fix : {false, true}) {
+			for (const bool correct_scale : {false, true}) {
+				Fixture fixture;
+				auto task = sgre::scene::MotionPlayerTask::Attach(*fixture.Runtime, fixture.Tasks, false, "character", [](const auto&) {
+				});
+				auto metadata = ControlMetadata();
+				Set(metadata, "inheritShape", Atom(inherit));
+				Set(metadata, "correctFix", Atom(correct_fix));
+				Set(metadata, "correctScale", Atom(correct_scale));
+				Set(metadata, "fixes", Atom(sgre::resource::PsbArray{Atom(sgre::resource::PsbObject{{"x", Atom(0.25)}, {"y", Atom(0.25)}}), Atom(sgre::resource::PsbObject{{"x", Atom(0.75)}, {"y", Atom(0.75)}})}));
+				const auto definition = ReadDefinition(std::move(metadata));
+				Require(definition.InheritShape == inherit && definition.Output.CorrectFix == (!inherit && correct_fix) && definition.Output.CorrectScale == (!inherit && correct_scale), "actual driver metadata preserves the native independent correction predicates");
+				sgre::scene::EmoteStringControl control(task.Commands(), definition);
+				task.SetVisible(true);
+				task.Play("main");
+				task.Progress(0);
+				const auto* plain = task.GenericPlayer();
+				Require(plain && plain->Scene() && control.InstanceCount() == 1, "serialized correction cases use a genuine active completed UID occurrence");
+				sgre::scene::EmoteVelvetyFrameDefinition frame_definition;
+				frame_definition.PixelsPerMeter = 2;
+				sgre::scene::EmoteVelvetyFrameOwner global(task.Root(), task.Commands(), *plain, frame_definition, 720);
+				sgre::scene::EmoteVelvetyGlobalControls globals;
+				globals.Flags = 0x200;
+				for (std::size_t phase = 0; phase != 4; ++phase) {
+					task.SetCoordinate({10 + static_cast<float>(phase), 20 - static_cast<float>(phase)});
+					task.SetAngleRadians(static_cast<float>(phase) * 0.1f);
+					task.SetZoom(1 + static_cast<float>(phase) * 0.125f, 1 + static_cast<float>(phase) * 0.125f);
+					task.Progress(0);
+					const auto before = Positions(*plain->Scene());
+					control.Update(1, global.Prepare(1, globals));
+					Require(control.LastUpdatedCount() == 1 && control.LastMeshWriteCount() <= 1, "effective native correction flags dispatch one real positive String step without missing transformed fix targets");
+					RequirePoints(Positions(*plain->Scene()), before, "native correction dispatch leaves the completed frame unchanged until the next genuine plain phase");
+					const auto target = task.Commands().LayerUids().Matches("mesh-uid").front().Layer;
+					for (const auto& point : target.CurrentMesh().Controls) {
+						Require(std::isfinite(point.X) && std::isfinite(point.Y), "the actual pending correction output must stay finite through moving/rotating/scaling poses");
+					}
+				}
+				control.Close();
+				Require(task.Commands().LayerUids().SubscriptionCount() == 0, "each actual serialized correction control retires before its selected owner");
+				if (inherit) {
+					for (const bool scale_only : {false, true}) {
+						auto invalid = definition;
+						invalid.Output.CorrectFix = !scale_only;
+						invalid.Output.CorrectScale = scale_only;
+						RequireFailure([&] {
+							sgre::scene::EmoteStringControl rejected(task.Commands(), invalid);
+						},
+						    "inherited-shape metadata suppresses correction flags");
+						Require(task.Commands().LayerUids().SubscriptionCount() == 0, "invalid manually contradictory inherited definitions reject before subscribing an actual UID");
+					}
+				}
+				fixture.Tasks.Clear();
+				Require(fixture.Runtime->Identifiers().LiveCount() == 0, "actual correction cases return all layer identifiers before resource retirement");
+			}
+		}
+	}
+}
+
 int main() {
 	try {
 		TestConnectedRealPrimaryControl();
@@ -570,6 +630,7 @@ int main() {
 		TestCapturedNativeZeroStringComparison();
 		TestActualPartsTreeStringOrder();
 		TestPartsTreeExactLookupAndOwner();
+		TestSerializedCorrectionDispatchAndConstructorContract();
 		std::cout << "Actual primary String control: real UID lifetime/origin, global frame, pose/physical/output phases, held geometry, inactive/reactivation and ordered retirement passed\n";
 		return 0;
 	} catch (const std::exception& error) {
