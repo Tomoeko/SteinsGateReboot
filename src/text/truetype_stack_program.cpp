@@ -1,8 +1,10 @@
 #include "sgre/text/truetype_stack_program.hpp"
 
+#include "sgre/text/truetype_control_program.hpp"
 #include "sgre/text/truetype_program.hpp"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <cstddef>
 #include <stdexcept>
@@ -277,6 +279,196 @@ namespace sgre::text {
 
 			offset += instruction.ByteCount;
 		}
+
+		return result;
+	}
+
+	static constexpr std::size_t kControlCallCapacity = 32;
+	static constexpr std::uint32_t kMaximumControlScans = 4000000;
+
+	struct TrueTypeControlCall {
+		TrueTypeProgramRange CallerRange = TrueTypeProgramRange::Preparation;
+		std::uint32_t ReturnOffset = 0;
+		std::int32_t Remaining = 0;
+		const TrueTypeFunctionDefinition* Definition = nullptr;
+	};
+
+	static std::span<const std::uint8_t> ControlCode(const std::array<std::span<const std::uint8_t>, 3>& ranges, TrueTypeProgramRange range, std::uint32_t offset) {
+		const auto index = static_cast<std::uint32_t>(range);
+		if (index < 1 || index > ranges.size()) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidArgument, offset, "code range is outside the original three slots");
+		}
+		if (ranges[index - 1].data() == nullptr) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::MissingCodeRange, offset, "code range has no original program owner");
+		}
+
+		return ranges[index - 1];
+	}
+
+	static std::size_t ControlOperands(TrueTypeStackProgramResult& operands, std::size_t count, bool strict, std::uint32_t offset) {
+		if (operands.Stack.size() >= count) {
+			return operands.Stack.size() - count;
+		}
+		if (strict) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::StackUnderflow, offset, "control instruction lacks its complete fixed operand group");
+		}
+
+		operands.Stack.assign(count, 0);
+
+		return 0;
+	}
+
+	static std::uint32_t SkipControlBranch(std::span<const std::uint8_t> code, const TrueTypeInstruction& origin, bool stop_at_else, TrueTypeControlProgramResult& result) {
+		auto offset = origin.Offset + origin.ByteCount;
+		std::uint32_t depth = 1;
+		while (true) {
+			if (++result.ScannedInstructions > kMaximumControlScans) {
+				throw std::runtime_error("TrueType control program exceeds its bounded lexical scan work");
+			}
+
+			const auto instruction = DecodeTrueTypeInstruction(code, offset);
+			if (instruction.Opcode == 0x58) {
+				++depth;
+			} else if (instruction.Opcode == 0x59) {
+				--depth;
+				if (depth == 0) {
+					return offset + instruction.ByteCount;
+				}
+			} else if (stop_at_else && instruction.Opcode == 0x1b && depth == 1) {
+				return offset + instruction.ByteCount;
+			}
+
+			offset += instruction.ByteCount;
+		}
+	}
+
+	static std::uint32_t RelativeControlJump(std::uint32_t offset, std::int32_t distance, std::size_t retained_operands, std::span<const TrueTypeControlCall> calls) {
+		const auto target = offset + static_cast<std::uint32_t>(distance);
+		if (distance == 0 && retained_operands == 0) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidArgument, target, "zero relative jump has no retained preceding operands");
+		}
+		if (WordValue(target) < 0 || (!calls.empty() && target > calls.back().Definition->EndOffset)) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidArgument, target, "relative jump escapes the signed code or current function end");
+		}
+
+		return target;
+	}
+
+	TrueTypeControlProgramResult ExecuteTrueTypeControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
+		const std::array ranges{font.Program(), code.Preparation, code.Glyph};
+		for (const auto range : ranges) {
+			if (range.size() > kMaximumStackProgramBytes) {
+				throw std::runtime_error("TrueType control code range exceeds its bounded preparation size");
+			}
+		}
+
+		auto current = ControlCode(ranges, entry, 0);
+		if (current.empty()) {
+			throw std::runtime_error("TrueType control execution requires nonempty entry code");
+		}
+
+		TrueTypeControlProgramResult result;
+		result.Operands.StackCapacity = font.StackCapacity();
+		if (initial_stack.size() > result.Operands.StackCapacity) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::StackOverflow, 0, "initial control operands exceed the actual font stack capacity");
+		}
+
+		result.Operands.Stack.reserve(result.Operands.StackCapacity);
+		result.Operands.Stack.assign(initial_stack.begin(), initial_stack.end());
+		TrueTypeStackLimits stack_limits;
+		stack_limits.MaxStackElements = static_cast<std::uint16_t>(font.StackCapacity() - kExtraStackCells);
+		stack_limits.StrictStackUnderflow = strict_stack_underflow;
+		std::array<TrueTypeControlCall, kControlCallCapacity> calls;
+		std::size_t call_depth = 0;
+		auto range = entry;
+		std::uint32_t offset = 0;
+		while (offset < current.size()) {
+			const auto instruction = DecodeTrueTypeInstruction(current, offset);
+			auto next_offset = offset + instruction.ByteCount;
+			if (instruction.IsPush()) {
+				if (instruction.PushCount > result.Operands.StackCapacity - result.Operands.Stack.size()) {
+					throw TrueTypeProgramError(TrueTypeProgramFailure::StackOverflow, offset, "PUSH exceeds the actual font operand capacity");
+				}
+
+				for (std::size_t index = 0; index < instruction.PushCount; ++index) {
+					result.Operands.Stack.push_back(instruction.PushValue(index));
+				}
+			} else if (instruction.Opcode == 0x2a || instruction.Opcode == 0x2b) {
+				const bool loop = instruction.Opcode == 0x2a;
+				const auto arguments = ControlOperands(result.Operands, loop ? 2 : 1, strict_stack_underflow, offset);
+				const auto identifier = result.Operands.Stack[arguments + (loop ? 1 : 0)];
+				const auto* definition = font.FindFunction(static_cast<std::uint32_t>(identifier));
+				if (!definition) {
+					throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "CALL has no active original function definition");
+				}
+				if (call_depth == calls.size()) {
+					throw TrueTypeProgramError(TrueTypeProgramFailure::StackOverflow, offset, "CALL exceeds the original32-frame capacity");
+				}
+
+				const auto count = loop ? result.Operands.Stack[arguments] : 1;
+				result.Operands.Stack.resize(arguments);
+				++result.CallInstructions;
+				if (count > 0) {
+					auto& call = calls[call_depth++];
+					call.CallerRange = range;
+					call.ReturnOffset = next_offset;
+					call.Remaining = count;
+					call.Definition = definition;
+					result.MaximumCallDepth = std::max(result.MaximumCallDepth, static_cast<std::uint32_t>(call_depth));
+					range = static_cast<TrueTypeProgramRange>(definition->ProgramRange);
+					current = ControlCode(ranges, range, offset);
+					next_offset = definition->StartOffset;
+				}
+			} else if (instruction.Opcode == 0x2d) {
+				if (call_depth == 0) {
+					throw TrueTypeProgramError(TrueTypeProgramFailure::EndWithoutCall, offset, "ENDF has no original return record");
+				}
+
+				auto& call = calls[call_depth - 1];
+				if (--call.Remaining > 0) {
+					next_offset = call.Definition->StartOffset;
+				} else {
+					range = call.CallerRange;
+					current = ControlCode(ranges, range, offset);
+					next_offset = call.ReturnOffset;
+					--call_depth;
+				}
+			} else if (instruction.Opcode == 0x58) {
+				const auto arguments = ControlOperands(result.Operands, 1, strict_stack_underflow, offset);
+				const bool condition = result.Operands.Stack[arguments] != 0;
+				result.Operands.Stack.resize(arguments);
+				if (!condition) {
+					next_offset = SkipControlBranch(current, instruction, true, result);
+				}
+			} else if (instruction.Opcode == 0x1b) {
+				next_offset = SkipControlBranch(current, instruction, false, result);
+			} else if (instruction.Opcode == 0x59) {
+				// Original EIF is an unconditional no-op; there is no branch-frame owner.
+			} else if (instruction.Opcode == 0x1c || instruction.Opcode == 0x78 || instruction.Opcode == 0x79) {
+				const bool conditional = instruction.Opcode != 0x1c;
+				const auto arguments = ControlOperands(result.Operands, conditional ? 2 : 1, strict_stack_underflow, offset);
+				const auto distance = result.Operands.Stack[arguments];
+				const bool taken = !conditional || (result.Operands.Stack[arguments + 1] != 0) == (instruction.Opcode == 0x78);
+				result.Operands.Stack.resize(arguments);
+				if (taken) {
+					next_offset = RelativeControlJump(offset, distance, arguments, std::span(calls).first(call_depth));
+				}
+			} else {
+				ExecuteFixed(instruction, stack_limits, result.Operands);
+			}
+
+			offset = next_offset;
+			if (++result.Operands.ExecutedInstructions > kMaximumStackInstructions) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InstructionLimit, offset, "executed control instruction count exceeds the original limit");
+			}
+		}
+
+		if (call_depth != 0) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::CodeOverflow, offset, "code range ended before the original function return");
+		}
+
+		result.FinalRange = range;
+		result.FinalOffset = offset;
 
 		return result;
 	}

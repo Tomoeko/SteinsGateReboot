@@ -833,6 +833,7 @@ if(SGRE_BUILD_TESTS)
 		truetype_outline
 		truetype_program
 		truetype_stack_program
+		truetype_control_program
 		truetype_vector_font_metric
 		voice_uniqueness
 		squirrel_lifetime
