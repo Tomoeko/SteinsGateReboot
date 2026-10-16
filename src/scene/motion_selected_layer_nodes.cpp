@@ -216,9 +216,9 @@ namespace sgre::scene {
 			m_Commands.ParameterValues().BindSelected(*this);
 			FinalizeNodes();
 			m_Published = true;
-			for (auto& owner : m_Owners) {
-				if (owner->Stencil) {
-					owner->Stencil->BindMaskLayers(*this);
+			for (auto& actual_owner : m_Owners) {
+				if (actual_owner->Stencil) {
+					actual_owner->Stencil->BindMaskLayers(*this);
 				}
 			}
 		} catch (...) {
@@ -710,6 +710,17 @@ namespace sgre::scene {
 			incoming.Selected->m_OwnerDepth = m_OwnerDepth + 1;
 			incoming.Selected->m_Slots = std::move(action_service);
 		}
+	}
+
+	void MotionSelectedLayerNodes::RetireChildNodes(std::uint32_t layer) {
+		if (m_Mutating) {
+			throw std::runtime_error("motion selected child retirement must not reenter tree mutation");
+		}
+		auto& owner = ReadChildOwner(layer);
+		m_Mutating = true;
+		// Native50fd90 keeps the player/root; this exclusive facade owns only its retired nonroot nodes.
+		owner.Selected.reset();
+		m_Mutating = false;
 	}
 
 	void MotionSelectedLayerNodes::RebuildChildNodes(std::uint32_t layer, const resource::MotionTimeline& timeline, const PreparedMotionTimeline& preparation, MotionChildFrameSlotServices child_slots) {

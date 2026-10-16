@@ -385,9 +385,7 @@ namespace sgre::scene {
 				const auto action = SelectMotionChildFrameCommands(Selected.ChildSlots(layer), *Composition, [&] {
 					Scene.InvalidateGraph();
 					stored.reset();
-					if (auto* previous = Selected.ChildNodes(layer)) {
-						previous->Retire();
-					}
+					Selected.RetireChildNodes(layer);
 				});
 				if (action == MotionChildFrameSelection::Reset) {
 					return;
@@ -786,11 +784,15 @@ namespace sgre::scene {
 				destination.Update->EnqueueAction(layer, action);
 			};
 			for (std::size_t layer = 0; layer < source.Children.size(); ++layer) {
-				if (source.Children[layer]) {
+				if (source.Selected.Nodes()[layer].Prepared->Type == 3) {
 					auto& child = destination.Selected.Child(static_cast<std::uint32_t>(layer));
 					if (!child.m_PreparationOwner.IsEmpty()) {
+						// A dormant cleared child still retains immutable cache metadata in its new runtime.
 						child.m_PreparationOwner = Runtime.ClonePreparation(child.m_PreparationOwner).Owner;
 					}
+				}
+				if (source.Children[layer]) {
+					auto& child = destination.Selected.Child(static_cast<std::uint32_t>(layer));
 					auto* selected = destination.Selected.ChildNodes(static_cast<std::uint32_t>(layer));
 					if (selected == nullptr) {
 						throw std::runtime_error("motion clone lost an actual selected child owner");

@@ -128,6 +128,7 @@ namespace sgre::scene {
 		MotionSelectedLayerNodes(const MotionPlayerCommands& commands, const MotionRootScene& root, const MotionPlayerRenderControls& render, MotionChildConstructionState* owner, MotionParticlePlayerState* particle, const resource::MotionTimeline& timeline, const PreparedMotionTimeline& preparation, MotionLayerIdentifierPool& identifiers, MotionChildConstructionServices construction, MotionChildFrameSlotServices slots, std::size_t owner_depth);
 		MotionSelectedLayerNodes(const MotionPlayerCommands& commands, const MotionRootScene& root, const MotionPlayerRenderControls& render, MotionChildConstructionState* owner, MotionParticlePlayerState* particle, const MotionSelectedLayerNodes& source, MotionLayerIdentifierPool& identifiers, MotionChildConstructionServices construction, MotionChildFrameSlotServices slots);
 		void CloneOwners(const MotionSelectedLayerNodes& source);
+		void RetireChildNodes(std::uint32_t layer);
 		void ValidateLayers(const std::vector<resource::MotionLayer>& layers, std::optional<std::uint32_t> parent, std::size_t depth, std::size_t& index, std::size_t& frames) const;
 		void ConstructLayers(const std::vector<resource::MotionLayer>& layers, std::optional<std::uint32_t> parent, std::size_t& index);
 		void QueueAction(std::string_view label, std::string_view action);

@@ -10,6 +10,7 @@
 #include "sgre/scene/motion_scene_draw_context.hpp"
 #include "sgre/scene/motion_scene_evaluation.hpp"
 #include "sgre/scene/motion_scene_player.hpp"
+#include "sgre/scene/motion_selected_layer_nodes.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1710,6 +1711,191 @@ static void WriteValidationReport(const ValidationReport& report, const char* pa
 	Require(static_cast<bool>(output), "cannot write complete validation differential output");
 }
 
+static void DormantCloneTimelineExtent(sgre::resource::PsbValue& timeline, std::size_t layer_count) {
+	MutableProperty(timeline, "lastTime") = Atom(64.0);
+	auto& priority = std::get<sgre::resource::PsbArray>(MutableProperty(timeline, "priority").Data);
+	MutableProperty(priority.back(), "time") = Atom(64.0);
+	sgre::resource::PsbArray order;
+	for (std::size_t index = 0; index < layer_count; ++index) {
+		order.push_back(Atom(static_cast<std::int64_t>(index)));
+	}
+	MutableProperty(priority.front(), "content") = Atom(std::move(order));
+	for (auto& layer : std::get<sgre::resource::PsbArray>(MutableProperty(timeline, "layer").Data)) {
+		auto& frames = std::get<sgre::resource::PsbArray>(MutableProperty(layer, "frameList").Data);
+		MutableProperty(frames.back(), "time") = Atom(64.0);
+	}
+}
+
+static std::shared_ptr<sgre::resource::PsbDocument> DormantCloneDocument() {
+	auto document = Document();
+	auto& objects = MutableProperty(document->Root, "object");
+	auto& outer = MutableProperty(MutableProperty(MutableProperty(objects, "character"), "motion"), "main");
+	DormantCloneTimelineExtent(outer, 2);
+	std::get<sgre::resource::PsbObject>(outer.Data).emplace_back("layerIndexMap", Atom(sgre::resource::PsbObject{{"selected-child", Atom(std::int64_t{1})}}));
+	auto& middle = MutableProperty(MutableProperty(MutableProperty(objects, "child"), "motion"), "main");
+	auto branch = Layer("dormant-child", true);
+	auto& frames = std::get<sgre::resource::PsbArray>(MutableProperty(branch, "frameList").Data);
+	for (auto& frame : frames) {
+		MutableProperty(MutableProperty(frame, "content"), "src") = Atom(std::string("grandchild"));
+	}
+	const auto visible = frames.front();
+	const auto hidden = frames.back();
+	frames = {visible, hidden, visible, hidden};
+	const std::array<double, 4> times{0, 4, 8, 64};
+	for (std::size_t index = 0; index < frames.size(); ++index) {
+		MutableProperty(frames[index], "time") = Atom(times[index]);
+	}
+	std::get<sgre::resource::PsbArray>(MutableProperty(middle, "layer").Data).push_back(std::move(branch));
+	DormantCloneTimelineExtent(middle, 2);
+	std::get<sgre::resource::PsbObject>(middle.Data).emplace_back("layerIndexMap", Atom(sgre::resource::PsbObject{{"dormant-child", Atom(std::int64_t{1})}}));
+	auto inner = Timeline(true);
+	DormantCloneTimelineExtent(inner, 1);
+	std::get<sgre::resource::PsbObject>(objects.Data).emplace_back("grandchild", Atom(sgre::resource::PsbObject{{"type", Atom(std::int64_t{0})}, {"motion", Atom(sgre::resource::PsbObject{{"main", std::move(inner)}})}}));
+	return document;
+}
+
+static void TestDormantDeepChildCloneAfterActualReset() {
+	for (const bool cross_manager : {false, true}) {
+		Fixture fixture(false, false, false, false, 32, false, 0, DormantCloneDocument());
+		sgre::scene::MotionResourceManager destination(fixture.Cache);
+		sgre::core::FrameClock destination_clock(0);
+		sgre::scene::MotionLayerTasks destination_tasks(8);
+		const auto destination_project = destination.Register(fixture.Asset->Identity, fixture.Asset->Model, *fixture.Asset->Backing);
+		sgre::scene::MotionManagerRuntimeServices services;
+		services.SceneAssets = &fixture.Catalog;
+		services.ReadSourceAliases = [&](auto project) {
+			Require(project == destination_project, "dormant clone aliases require their actual destination registration");
+			return std::span<const sgre::scene::MotionSourceAlias>(fixture.Asset->Aliases);
+		};
+		services.ReadRegisteredAsset = [&](auto project) -> const sgre::scene::LoadedMotionAsset& {
+			Require(project == destination_project, "dormant clone asset requires its actual destination registration");
+			return *fixture.Asset;
+		};
+		sgre::scene::MotionManagerRuntime destination_runtime(destination, destination_clock, fixture.Seed, std::move(services), 32);
+		SceneCloneEndpointCleanup endpoint_cleanup{destination_runtime, destination_tasks};
+		auto source = fixture.Attach();
+		source.SetVisible(true);
+		source.Play("main");
+		source.Progress(0);
+		auto* source_scene = source.GenericPlayer()->Scene();
+		Require(source_scene && fixture.Runtime->Identifiers().LiveCount() == 5 && source_scene->PacketRows().size() == 5, "dormant clone must first construct genuine root, child and grandchild selected owners");
+		const auto outer_layer = source_scene->FindLayer("selected-child");
+		Require(outer_layer.has_value(), "dormant clone requires the serialized outer layer index map");
+		const auto& outer_child = source_scene->LayerChild(*outer_layer);
+		const auto nested_layer = source_scene->FindLayer("dormant-child", outer_child.Commands());
+		Require(nested_layer.has_value(), "dormant clone requires its actual nested selected child reference");
+		const auto source_child = source_scene->LayerChild(*nested_layer).Borrow();
+		Require(source_child.IsLive(), "initial dormant-child lookup requires its actual live borrow");
+		const auto* cached_timeline = source_scene->LayerChild(*nested_layer).Commands().CachedTimeline();
+		source.Progress(5);
+		Require(source_child.IsLive(), "post-reset child lookup requires its actual surviving player borrow");
+		const auto& dormant = source_scene->LayerChild(*nested_layer);
+		const auto dormant_clock = dormant.Commands().ClockState();
+		const auto dormant_serial = dormant.Commands().SelectionSerial();
+		const auto dormant_random = dormant.Random().State();
+		Require(cached_timeline && dormant.Commands().CachedTimeline() == cached_timeline && dormant.Commands().SelectedProject() && dormant.Commands().Names().CurrentMotion.empty() && dormant.Commands().Names().RequestedMotion.empty() && !dormant_clock.Playing && fixture.Runtime->Identifiers().LiveCount() == 4 && source_scene->PacketRows().size() == 4, "actual hidden child frame must retire only grandchild selected rows while retaining the live dormant player and cached selection");
+		const auto source_random = source.Random().State();
+		auto& clone_runtime = cross_manager ? destination_runtime : *fixture.Runtime;
+		auto& clone_tasks = cross_manager ? destination_tasks : fixture.Tasks;
+		auto clone = sgre::scene::MotionPlayerTask::AttachClone(clone_runtime, clone_tasks, source, false, [](const auto&) {
+		});
+		auto* clone_scene = clone.GenericPlayer()->Scene();
+		Require(clone_scene && clone_scene != source_scene && clone_scene->PacketRows().size() == source_scene->PacketRows().size() && source.Random().State() == source_random && clone.Random().State() == source_random, "deep clone must copy a genuine dormant child without a Play, root advance or source RNG sample");
+		const auto copied_outer = clone_scene->FindLayer("selected-child");
+		Require(copied_outer.has_value(), "cloned root catalogue must retain the original serialized layer map");
+		const auto& copied_child = clone_scene->LayerChild(*copied_outer);
+		const auto copied_nested = clone_scene->FindLayer("dormant-child", copied_child.Commands());
+		Require(copied_nested.has_value(), "cloned nested context must retain its real layer map while its child is dormant");
+		const auto copied_borrow = clone_scene->LayerChild(*copied_nested).Borrow();
+		Require(copied_borrow.IsLive(), "cloned dormant-child lookup requires its independent live player borrow");
+		const auto& copied_dormant = clone_scene->LayerChild(*copied_nested);
+		Require(!copied_borrow.SameTarget(source_child) && copied_dormant.Commands().CachedTimeline() == cached_timeline && copied_dormant.Commands().SelectionSerial() == dormant_serial && copied_dormant.Commands().Names().CurrentMotion.empty() && copied_dormant.Commands().Names().RequestedMotion.empty() && !copied_dormant.Commands().ClockState().Playing && copied_dormant.Commands().ClockState().TickCount == dormant_clock.TickCount && copied_dormant.Random().State() == dormant_random, "dormant clone must own an independent live child with exact retained cache, clock, empty names and random state");
+		const auto source_packets = source_scene->Packets().Nodes();
+		const auto clone_packets = clone_scene->Packets().Nodes();
+		Require(source_packets.size() == clone_packets.size(), "dormant clone must retain the exact completed packet layout");
+		for (std::size_t index = 0; index < source_packets.size(); ++index) {
+			const auto* a = source_packets[index].Command.Geometry;
+			const auto* b = clone_packets[index].Command.Geometry;
+			Require((a == nullptr) == (b == nullptr), "dormant clone changed actual packet geometry presence");
+			if (a == nullptr) {
+				continue;
+			}
+			Require(a != b && a->Positions.size() == b->Positions.size(), "dormant clone must independently own completed geometry before any update");
+			for (std::size_t point = 0; point < a->Positions.size(); ++point) {
+				Require(std::bit_cast<std::uint32_t>(a->Positions[point].X) == std::bit_cast<std::uint32_t>(b->Positions[point].X) && std::bit_cast<std::uint32_t>(a->Positions[point].Y) == std::bit_cast<std::uint32_t>(b->Positions[point].Y), "dormant clone changed a completed native vertex word");
+			}
+		}
+		const std::array<sgre::resource::MotionPoint, 1> sizes{{{4, 4}}};
+		clone_tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		{
+			const auto frame = clone_runtime.SceneContext().Prepare(Globals(sizes));
+			Require(frame.Queue.size() == (cross_manager ? 2u : 4u), "dormant child clone group must draw its two actual surviving sprite rows and the still-live same-manager source before the clone first updates");
+		}
+		clone_runtime.SceneContext().Clear();
+		auto removed = fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Extract(source.Handle());
+		removed.Release();
+		Require(!source_child.IsLive() && copied_borrow.IsLive(), "source-first retirement must release only the original dormant child lifetime");
+		if (cross_manager) {
+			Require(fixture.Manager.Unregister(fixture.Project), "dormant cross-manager source registration must genuinely retire");
+			Require(fixture.Runtime->CanClose(), "dormant clone must import cached preparation into its own runtime before source retirement");
+			fixture.Runtime->Close();
+			fixture.Runtime.reset();
+		}
+		clone.Progress(0);
+		Require(copied_borrow.IsLive() && !clone_scene->LayerChild(*copied_nested).Commands().ClockState().Playing && clone_scene->PacketRows().size() == 4, "zero-time continuation must preserve the actual dormant player without resurrecting selected rows");
+		clone.Progress(4);
+		Require(copied_borrow.IsLive() && clone_scene->LayerChild(*copied_nested).Commands().ClockState().Playing && clone_scene->LayerChild(*copied_nested).Commands().CachedTimeline() == cached_timeline && clone_scene->LayerChild(*copied_nested).Commands().SelectionSerial() > dormant_serial && clone_scene->PacketRows().size() == 5 && clone_runtime.Identifiers().LiveCount() == 5, "a later genuine visible child frame must issue normal selection and build its new independent grandchild tree");
+		clone.Progress(1);
+		clone_tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		{
+			const auto frame = clone_runtime.SceneContext().Prepare(Globals(sizes));
+			Require(frame.Queue.size() == 3, "rebound dormant clone must emit its three genuine current sprite rows");
+		}
+		clone_runtime.SceneContext().Clear();
+		clone_tasks.Clear();
+		Require(!copied_borrow.IsLive() && clone_runtime.Identifiers().LiveCount() == 0, "dormant child clone retirement must release its final selected and player ownership");
+		if (!cross_manager) {
+			Require(fixture.Manager.Unregister(fixture.Project), "same-manager dormant clone must retire its original registration only after both tasks");
+		}
+		Require(destination.Unregister(destination_project), "dormant clone must retire its independent destination registration");
+		destination_runtime.Close();
+		if (fixture.Runtime) {
+			fixture.Runtime->Close();
+			fixture.Runtime.reset();
+		}
+		Require(fixture.Cache.Count() == 0 && fixture.Uploads == fixture.Releases, "dormant deep clone must balance all real texture registration owners");
+	}
+}
+
+static void TestUnpublishedSelectedTreeCloneRemainsRejected() {
+	Fixture fixture;
+	sgre::scene::MotionPlayerCommands source(fixture.Manager);
+	source.SetCharacter("child");
+	source.Play("main");
+	const auto* timeline = source.CachedTimeline();
+	Require(timeline != nullptr, "unpublished clone negative requires an actual original selected timeline");
+	const auto prepared = sgre::scene::PrepareMotionTimeline(*timeline, *fixture.Asset->Model);
+	sgre::scene::MotionRootScene root;
+	sgre::scene::MotionPlayerRenderControls render;
+	sgre::scene::MotionChildConstructionServices construction;
+	construction.ReadManagerRandom = [](const auto&) -> float {
+		throw std::runtime_error("ordinary unpublished clone negative must not sample child construction RNG");
+	};
+	sgre::scene::MotionChildFrameSlotServices slots;
+	slots.EnqueueAction = [](auto, auto) {
+		throw std::runtime_error("unpublished clone negative must not enqueue actions");
+	};
+	sgre::scene::MotionSelectedLayerNodes selected(source, root, render, *timeline, prepared, fixture.Runtime->Identifiers(), construction, slots);
+	sgre::scene::MotionPlayerCommands destination(fixture.Manager);
+	destination.CopyForClone(source);
+	selected.Retire();
+	RequireFailure([&] {
+		sgre::scene::MotionSelectedLayerNodes rejected(destination, root, render, selected, fixture.Runtime->Identifiers(), construction, slots);
+	},
+	    "motion selected clone requires independent exact cloned commands and its idle live source graph");
+	Require(fixture.Runtime->Identifiers().LiveCount() == 0 && source.ParameterValues().RegisteredParameterCount() == 0 && destination.ParameterValues().RegisteredParameterCount() == 0, "unpublished clone rejection must not acquire IDs or selected parameter ownership");
+}
+
 int main(int argc, char** argv) {
 	try {
 		if (argc == 3 && std::string_view(argv[1]) == "--validation-work") {
@@ -1719,6 +1905,8 @@ int main(int argc, char** argv) {
 		}
 		Require(argc == 1, "usage: motion_scene_player_task_tests [--validation-work output.json]");
 		static_cast<void>(TestNestedValidationWorkAndOutput());
+		TestDormantDeepChildCloneAfterActualReset();
+		TestUnpublishedSelectedTreeCloneRemainsRejected();
 		TestFreshSceneSelectionAfterClearedSnapshotRetires();
 		TestScenePreparationKeepsEveryCurrentSnapshotMember();
 		TestActualSceneCloneWithUnrelatedClearedSnapshots();
