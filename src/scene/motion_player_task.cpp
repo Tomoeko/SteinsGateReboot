@@ -107,7 +107,7 @@ namespace sgre::scene {
 		      }),
 		      Root(source.Root), Render(source.Render) {
 			source.RequireMutable();
-			if (!runtime.HasSceneServices() || !source.ScenePlayer || !source.Borrow.Runtime.ResourceBorrowsLive() || (source.Alternates && source.Alternates->Count() != 0)) {
+			if (!runtime.HasSceneServices() || !source.ScenePlayer || !source.ScenePlayer->ResourcesLive() || (source.Alternates && source.Alternates->Count() != 0)) {
 				throw std::runtime_error("motion clone requires actual generic scene ownership without unrecovered external texture wrapper copies");
 			}
 			Commands.CopyForClone(source.Commands);
@@ -361,7 +361,7 @@ namespace sgre::scene {
 	void MotionPlayerTask::SetTickLabel(std::string_view label) {
 		const auto owner = Require();
 		owner->RequireMutable();
-		if (!owner->Borrow.Runtime.ResourceBorrowsLive()) {
+		if (owner->ScenePlayer ? !owner->ScenePlayer->ResourcesLive() : !owner->Borrow.Runtime.ResourceBorrowsLive()) {
 			throw std::runtime_error("motion tick label requires its actual live selected resource borrows");
 		}
 		const MotionTaskControlScope control(owner->Controlling);

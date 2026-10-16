@@ -155,9 +155,10 @@ namespace sgre::scene {
 			}
 
 			void RequireSelected() const {
-				if (Commands.CachedTimeline() != Timeline || Commands.SelectionSerial() != SelectionSerial || !Scene.Runtime.ResourceBorrowsLive() || Selected.Nodes().size() != CurrentIndices.size()) {
+				if (Commands.CachedTimeline() != Timeline || Commands.SelectionSerial() != SelectionSerial || Selected.Nodes().size() != CurrentIndices.size()) {
 					throw std::runtime_error("motion scene phase requires its exact live selected generation and source registrations");
 				}
+				Sources->RequireRegistrations();
 			}
 
 			void Select(MotionFrameTraversal traversal, const MotionPlayerFrameContext& frame) {
@@ -1520,10 +1521,11 @@ namespace sgre::scene {
 	void MotionSceneEvaluation::RebuildRoot(MotionSelectedLayerNodes& selected, MotionPlayerCommands& commands, MotionRootScene& root, const MotionPlayerRenderControls& render) {
 		auto& state = *m_Implementation;
 		state.Services.RequireUnqueued();
-		if (state.Root || state.Updating || !state.Runtime.ResourceBorrowsLive()) {
+		if (state.Root || state.Updating) {
 			throw std::runtime_error("motion root rebuild requires the retired old root and actual live resource owners");
 		}
 		const MotionScenePhaseScope operation(state.Operating);
+		// The new context validates its exact selected resource and complete current source/alias snapshot.
 		state.Root = std::make_unique<Implementation::Context>(state, selected, commands, root, render, &state.ActualUpdate, nullptr, nullptr, nullptr, 0);
 		state.GraphDirty = true;
 		state.Published = false;

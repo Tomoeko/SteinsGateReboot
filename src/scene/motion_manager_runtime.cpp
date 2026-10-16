@@ -16,6 +16,8 @@
 
 namespace sgre::scene {
 
+	static constexpr std::size_t kMaximumMotionSnapshotRegistrations = 256;
+
 	class MotionManagerRuntime::LayerBindingLifetime {
 	public:
 		MotionManagerRuntime* Owner = nullptr;
@@ -371,6 +373,28 @@ namespace sgre::scene {
 		});
 	}
 
+	bool MotionManagerRuntime::PreparationResourcesLive(const MotionPreparationLease& owner) const {
+		const auto& state = *m_Implementation;
+		const auto& preparation = owner.m_Data;
+		if (state.Closed || !preparation || preparation->Runtime != this || preparation->Manager != &state.Manager || preparation->Raw == nullptr || !preparation->Timeline || !preparation->Sources || preparation->RegistrationOrder.size() > kMaximumMotionSnapshotRegistrations || preparation->Metadata.size() != preparation->RegistrationOrder.size() || state.Manager.Count() != preparation->RegistrationOrder.size() || !state.Manager.Contains(preparation->Project)) {
+			return false;
+		}
+
+		std::array<MotionProjectId, kMaximumMotionSnapshotRegistrations> current{};
+		const auto count = state.Manager.WriteRegistrationOrder(current);
+		if (count != preparation->RegistrationOrder.size() || !std::equal(preparation->RegistrationOrder.begin(), preparation->RegistrationOrder.end(), current.begin())) {
+			return false;
+		}
+		for (std::size_t index = 0; index < count; ++index) {
+			const auto project = current[index];
+			if (!state.Manager.Contains(project) || !preparation->Metadata[index] || preparation->Metadata[index].get() != &state.Manager.Resource(project)) {
+				return false;
+			}
+		}
+
+		return true;
+	}
+
 	MotionRuntimeSelection MotionManagerRuntime::Prepare(const ResolvedMotionTimeline& selection) {
 		return Prepare(selection, MotionAttributeBlendPolicy::Unchanged);
 	}
@@ -383,7 +407,8 @@ namespace sgre::scene {
 	MotionRuntimeSelection MotionManagerRuntime::Prepare(const ResolvedMotionTimeline& selection, MotionAttributeBlendPolicy policy) {
 		auto& state = *m_Implementation;
 		state.RequireLive();
-		if (state.Preparing || !ResourceBorrowsLive() || !state.Manager.Contains(selection.Project) || state.Manager.Identity(selection.Project) != selection.Identity || selection.Timeline == nullptr || selection.Character == nullptr) {
+		// A fresh scene snapshots the current registry; unrelated retained CPU preparations do not supply its sources.
+		if (state.Preparing || (policy == MotionAttributeBlendPolicy::Unchanged && !ResourceBorrowsLive()) || !state.Manager.Contains(selection.Project) || state.Manager.Identity(selection.Project) != selection.Identity || selection.Timeline == nullptr || selection.Character == nullptr) {
 			throw std::runtime_error("motion full preparation requires its actual live selection and registered backing outside reentry");
 		}
 
@@ -466,7 +491,8 @@ namespace sgre::scene {
 		auto& state = *m_Implementation;
 		state.RequireLive();
 		const auto& original = source.m_Data;
-		if (state.Preparing || !ResourceBorrowsLive() || !original || original->Manager == nullptr || original->Runtime == nullptr || !original->Runtime->ResourceBorrowsLive() || !original->Manager->Contains(original->Project) || original->Raw == nullptr || !original->Timeline || !original->Sources) {
+		const bool scene_preparation = original && original->Policy == MotionAttributeBlendPolicy::HalveRgbForClearBlendNibble;
+		if (state.Preparing || (!scene_preparation && !ResourceBorrowsLive()) || !original || original->Manager == nullptr || original->Runtime == nullptr || (scene_preparation ? !original->Runtime->PreparationResourcesLive(source) : !original->Runtime->ResourceBorrowsLive()) || !original->Manager->Contains(original->Project) || original->Raw == nullptr || !original->Timeline || !original->Sources) {
 			throw std::runtime_error("motion preparation clone requires an idle live immutable source and actual destination registrations");
 		}
 		if (original->Runtime == this) {
@@ -543,7 +569,7 @@ namespace sgre::scene {
 	}
 
 	bool MotionManagerRuntime::RegistrationOrderMatches(const PreparedMotionSourceRegistry& sources) const {
-		if (!ResourceBorrowsLive()) {
+		if (IsClosed()) {
 			return false;
 		}
 
@@ -556,6 +582,12 @@ namespace sgre::scene {
 			}
 		}
 		if (!found) {
+			return false;
+		}
+		if (found->Policy == MotionAttributeBlendPolicy::HalveRgbForClearBlendNibble) {
+			return PreparationResourcesLive(MotionPreparationLease(found));
+		}
+		if (!ResourceBorrowsLive()) {
 			return false;
 		}
 

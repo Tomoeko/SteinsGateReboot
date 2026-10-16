@@ -518,42 +518,49 @@ static void TestSourcePreparationBorrowAndFlushRetry() {
 }
 
 static void TestRegistrationExpiryAndExactNotification() {
-	RuntimeFixture fixture;
-	std::size_t notifications = 0;
-	sgre::scene::MotionPlayerCommands commands(fixture.Manager, [&](const auto& selected, auto) {
-		Require(selected.Project == fixture.Project && selected.Timeline == &fixture.Resource->Objects[0].Timelines[0], "installation callback names the actual selector result");
-		++notifications;
-	});
-	commands.SetCharacter("character");
-	commands.Play("main");
-	commands.Play("main");
-	commands.Play("main", sgre::scene::MotionPlayFlags::AsCan);
-	commands.Play("main", sgre::scene::MotionPlayFlags::Force);
-	commands.Play("missing", sgre::scene::MotionPlayFlags::Force);
-	Require(notifications == 2 && commands.CachedTimeline() != nullptr && !commands.SelectedProject(), "only real successful preparation notifies, including identical-pointer Force and excluding failed/unchanged/as-can lookup");
-	auto task = fixture.Attach();
-	task.SetCharacter("character");
-	task.SetVisible(true);
-	task.Play("main");
-	fixture.Second().Update();
-	fixture.Second().Draw(0);
-	const std::weak_ptr<const sgre::resource::MotionResource> backing = fixture.Resource;
-	fixture.Resource.reset();
-	Require(fixture.Manager.Unregister(fixture.Project), "actual final unregistration must release its model/texture owner");
-	Require(backing.expired() && !task.Player().ResourcesLive(), "containing runtime/cache/task must not secretly pin original resource backing");
-	FrameOutput output;
-	RequireFailure([&] {
-		fixture.Runtime->Context().Flush(output.Globals, output.Scratch, [](const auto&) {
+	std::weak_ptr<const sgre::resource::MotionResource> backing;
+	{
+		RuntimeFixture fixture;
+		std::size_t notifications = 0;
+		sgre::scene::MotionPlayerCommands commands(fixture.Manager, [&](const auto& selected, auto) {
+			Require(selected.Project == fixture.Project && selected.Timeline == &fixture.Resource->Objects[0].Timelines[0], "installation callback names the actual selector result");
+			++notifications;
 		});
-	},
-	    "expired");
-	fixture.Runtime->Context().Clear();
-	RequireFailure([&] {
+		commands.SetCharacter("character");
+		commands.Play("main");
+		commands.Play("main");
+		commands.Play("main", sgre::scene::MotionPlayFlags::AsCan);
+		commands.Play("main", sgre::scene::MotionPlayFlags::Force);
+		commands.Play("missing", sgre::scene::MotionPlayFlags::Force);
+		Require(notifications == 2 && commands.CachedTimeline() != nullptr && !commands.SelectedProject(), "only real successful preparation notifies, including identical-pointer Force and excluding failed/unchanged/as-can lookup");
+		auto task = fixture.Attach();
+		task.SetCharacter("character");
+		task.SetVisible(true);
+		task.Play("main");
 		fixture.Second().Update();
-	},
-	    "live selected resource");
-	fixture.Tasks.Clear();
-	Require(fixture.Runtime->PlayerCount() == 0 && fixture.Runtime->Identifiers().LiveCount() == 0, "expired raw metadata remains untouched while actual selected IDs and task borrows retire");
+		fixture.Second().Draw(0);
+		backing = fixture.Resource;
+		fixture.Resource.reset();
+		Require(fixture.Manager.Unregister(fixture.Project), "actual final unregistration must release its model/texture owner");
+		Require(!backing.expired() && !task.Player().ResourcesLive(), "native current atoms retain immutable CPU metadata while active selected resources become unavailable");
+		Require(!fixture.Manager.Contains(fixture.Project) && fixture.Manager.Count() == 0 && fixture.Cache.Count() == 0 && fixture.Uploads == fixture.Releases, "retained CPU metadata must not retain a manager registration or texture owner");
+		FrameOutput output;
+		RequireFailure([&] {
+			fixture.Runtime->Context().Flush(output.Globals, output.Scratch, [](const auto&) {
+			});
+		},
+		    "expired");
+		fixture.Runtime->Context().Clear();
+		RequireFailure([&] {
+			fixture.Second().Update();
+		},
+		    "live selected resource");
+		fixture.Tasks.Clear();
+		Require(fixture.Runtime->PlayerCount() == 0 && fixture.Runtime->Identifiers().LiveCount() == 0, "unregistered selected metadata remains untouched while actual selected IDs and task borrows retire");
+		Require(!backing.expired(), "the independent current command owner still retains its immutable CPU metadata after task retirement");
+	}
+
+	Require(backing.expired(), "immutable CPU metadata expires after the actual task, current commands and runtime owners retire");
 }
 
 static void TestClearLegacySelectedOwner() {

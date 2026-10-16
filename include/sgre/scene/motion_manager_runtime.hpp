@@ -94,8 +94,12 @@ namespace sgre::scene {
 		// Clone shares immutable prepared frames while the destination owns independent actual registration borrows.
 		[[nodiscard]] MotionRuntimeSelection ClonePreparation(const MotionPreparationLease& source);
 		[[nodiscard]] bool IsClosed() const noexcept;
+		// Legacy snapshot consumers retain the strict union of all simultaneously borrowed preparations.
 		[[nodiscard]] bool ResourceBorrowsLive() const;
+		// Generic scenes validate their own complete source snapshot, including order and model identities.
+		[[nodiscard]] bool PreparationResourcesLive(const MotionPreparationLease& owner) const;
 		[[nodiscard]] bool RegistrationOrderMatches(const PreparedMotionSourceRegistry& sources) const;
+		// Explicit legacy sprite callback; generic selected scenes use their own exact source/alias owner.
 		[[nodiscard]] std::optional<RegisteredMotionSource> FindTexture(const ResolvedMotionIcon& binding) const;
 		[[nodiscard]] std::size_t PlayerCount() const noexcept;
 		// Live players may remain, but their actual context must be idle/empty and preparation finished.

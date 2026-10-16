@@ -1121,8 +1121,303 @@ static void TestClearedTaskOutlivesFinalResourceUnregister() {
 	}
 }
 
+static void TestFreshSceneSelectionAfterClearedSnapshotRetires() {
+	Fixture fixture;
+	auto old = fixture.Attach();
+	old.SetVisible(true);
+	old.Play("main");
+	old.Progress(0);
+	Require(old.GenericPlayer()->Scene() && fixture.Runtime->Identifiers().LiveCount() == 3, "preparation scope requires a genuine completed selected root and child");
+	const auto old_identity = fixture.Asset->Identity;
+	const auto old_project = fixture.Project;
+	std::weak_ptr<const sgre::scene::LoadedMotionAsset> old_loaded = fixture.Asset;
+	std::weak_ptr<const sgre::resource::PsbDocument> old_document = fixture.Asset->Document;
+	std::weak_ptr<const std::vector<std::uint8_t>> old_pixels = fixture.Asset->Backing;
+	std::weak_ptr<const sgre::resource::MotionResource> old_metadata = fixture.Asset->Model;
+	old.Clear();
+	Require(fixture.Manager.Unregister(old_project) && fixture.Cache.Count() == 0 && fixture.Releases == 1, "old selected source must actually unregister before the new scene is prepared");
+	fixture.Asset.reset();
+	fixture.Catalog.Prune();
+	Require(old_loaded.expired() && old_document.expired() && old_pixels.expired() && !old_metadata.expired() && old.Commands().SelectedLayersCleared() && !old.GenericPlayer()->Scene() && !fixture.Runtime->ResourceBorrowsLive(), "old cleared owner keeps only actual cached metadata and its observably stale strict snapshot");
+
+	fixture.Asset = fixture.Catalog.Prepare(Document(), std::make_shared<const std::vector<std::uint8_t>>(144, 255));
+	fixture.Project = fixture.Manager.Register(fixture.Asset->Identity, fixture.Asset->Model, *fixture.Asset->Backing);
+	Require(fixture.Project != old_project && fixture.Asset->Identity != old_identity && fixture.Uploads == 2 && fixture.Manager.Count() == 1, "new resource must have its own actual catalog identity and registered texture owner");
+	const auto selection = fixture.Manager.ResolveTimeline("character", "main");
+	Require(selection.has_value() && selection->Project == fixture.Project, "fresh selection must resolve through the current actual manager");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Runtime->Prepare(*selection));
+	},
+	    "actual live selection and registered backing outside reentry");
+
+	auto fresh = fixture.Attach();
+	fresh.SetVisible(true);
+	fresh.Play("main");
+	fresh.Progress(0);
+	Require(fresh.GenericPlayer()->Scene() && fresh.GenericPlayer()->ResourcesLive() && fixture.Runtime->Identifiers().LiveCount() == 3 && fixture.Runtime->PlayerCount() == 2 && !fixture.Runtime->ResourceBorrowsLive(), "new actual scene uses its own current snapshot while the cleared old snapshot remains honestly stale");
+	const auto* fresh_scene = fresh.GenericPlayer()->Scene();
+	const auto serial = fresh.Commands().SelectionSerial();
+	old.Progress(1);
+	Require(!old.GenericPlayer()->Scene() && old.GenericPlayer()->ResourcesLive() && old.Commands().SelectedLayersCleared(), "new scene preparation must not resurrect or invalidate the old cleared containing player");
+	fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0x76543210);
+	Require(fixture.Runtime->SceneContext().Size() == 1 && fixture.Runtime->SceneContext().IsBorrowing(*fresh_scene), "only the genuine new selected scene may enqueue a draw occurrence");
+	RequireFailure([&] {
+		fresh.Progress(1);
+	},
+	    "queued row borrows");
+	const std::array<sgre::resource::MotionPoint, 1> sizes{{{4, 4}}};
+	{
+		const auto frame = fixture.Runtime->SceneContext().Prepare(Globals(sizes));
+		Require(frame.Queue.size() == 2 && frame.Nodes.size() == 3, "fresh current resource must prepare its real root and child geometry after old source retirement");
+	}
+	fixture.Runtime->SceneContext().Clear();
+
+	old.RequestRetire();
+	fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Update();
+	Require(!old.IsLive() && old_metadata.expired() && fixture.Runtime->ResourceBorrowsLive() && fresh.GenericPlayer()->Scene() == fresh_scene && fresh.Commands().SelectionSerial() == serial, "source-first true task retirement releases old metadata and strict union borrow without disturbing fresh selection");
+	{
+		const auto strict = fixture.Runtime->Prepare(*selection);
+		Require(strict.Owner.UsesRuntime(*fixture.Runtime) && strict.Owner.Owns(fixture.Manager, *selection->Timeline, &strict.Timeline), "legacy full preparation remains usable after all of its actual union snapshots are live");
+	}
+
+	auto invalid = *selection;
+	invalid.Identity = old_identity;
+	RequireFailure([&] {
+		static_cast<void>(fixture.Runtime->PrepareScene(invalid));
+	},
+	    "actual live selection and registered backing outside reentry");
+	invalid = *selection;
+	invalid.Timeline = nullptr;
+	RequireFailure([&] {
+		static_cast<void>(fixture.Runtime->PrepareScene(invalid));
+	},
+	    "actual live selection and registered backing outside reentry");
+	sgre::resource::MotionObject foreign_character;
+	invalid = *selection;
+	invalid.Character = &foreign_character;
+	RequireFailure([&] {
+		static_cast<void>(fixture.Runtime->PrepareScene(invalid));
+	},
+	    "selection is outside its actual immutable registration");
+	sgre::resource::MotionTimeline foreign_timeline;
+	invalid = *selection;
+	invalid.Timeline = &foreign_timeline;
+	RequireFailure([&] {
+		static_cast<void>(fixture.Runtime->PrepareScene(invalid));
+	},
+	    "selection is outside its actual immutable registration");
+
+	const auto tick = fresh.Commands().ClockState().TickCount;
+	const auto uids = fixture.Runtime->Identifiers().LiveCount();
+	Require(fixture.Manager.Unregister(fixture.Project) && fixture.Cache.Count() == 0 && fixture.Releases == 2, "active new snapshot negative must actually remove its own selected texture registration");
+	RequireFailure([&] {
+		fresh.Progress(1);
+	},
+	    "motion scene phase");
+	RequireFailure([&] {
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+	},
+	    "motion scene phase");
+	Require(!fresh.GenericPlayer()->ResourcesLive() && fresh.GenericPlayer()->Scene() == fresh_scene && fresh.Commands().ClockState().TickCount == tick && fixture.Runtime->Identifiers().LiveCount() == uids && fixture.Runtime->SceneContext().Size() == 0, "active selected dependency loss must still fail before clock, UID, geometry or publication mutation");
+	fixture.Tasks.Clear();
+	Require(fixture.Runtime->PlayerCount() == 0 && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Uploads == fixture.Releases, "new scene and old cleared snapshot retire all real task, UID and texture owners");
+	fixture.Runtime->Close();
+	fixture.Runtime.reset();
+}
+
+static void TestScenePreparationKeepsEveryCurrentSnapshotMember() {
+	Fixture fixture;
+	fixture.Runtime->Close();
+	fixture.Runtime.reset();
+	const auto other = fixture.Catalog.Prepare(Document(), std::make_shared<const std::vector<std::uint8_t>>(144, 255));
+	const auto other_project = fixture.Manager.Register(other->Identity, other->Model, *other->Backing);
+	auto services = fixture.Services();
+	services.ReadSourceAliases = [&](auto project) {
+		if (project == other_project) {
+			return std::span<const sgre::scene::MotionSourceAlias>(other->Aliases);
+		}
+		Require(project == fixture.Project, "snapshot aliases require an exact current registered owner");
+
+		return std::span<const sgre::scene::MotionSourceAlias>(fixture.Asset->Aliases);
+	};
+	services.ReadRegisteredAsset = [&](auto project) -> const sgre::scene::LoadedMotionAsset& {
+		if (project == other_project) {
+			return *other;
+		}
+		Require(project == fixture.Project, "snapshot asset requires an exact current registered owner");
+
+		return *fixture.Asset;
+	};
+	fixture.Runtime = std::make_unique<sgre::scene::MotionManagerRuntime>(fixture.Manager, fixture.Clock, fixture.Seed, std::move(services), 32);
+	auto task = fixture.Attach();
+	task.SetVisible(true);
+	task.Play("main");
+	task.Progress(0);
+	const auto* scene = task.GenericPlayer()->Scene();
+	const auto tick = task.Commands().ClockState().TickCount;
+	const auto serial = task.Commands().SelectionSerial();
+	const auto uids = fixture.Runtime->Identifiers().LiveCount();
+	Require(scene && task.Commands().SelectedProject()->Project == fixture.Project && task.GenericPlayer()->ResourcesLive() && fixture.Manager.Count() == 2 && uids == 3, "current snapshot negative requires its selected resource and another real registered snapshot member");
+	Require(fixture.Manager.Unregister(other_project) && fixture.Manager.Contains(fixture.Project) && fixture.Cache.Count() == 1, "snapshot negative must remove only the other member while selected resource and its sampled texture stay registered");
+	Require(!task.GenericPlayer()->ResourcesLive() && !fixture.Runtime->ResourceBorrowsLive(), "own complete preparation snapshot must reject loss of an unselected member rather than reducing readiness to selected project alone");
+	RequireFailure([&] {
+		task.Progress(1);
+	},
+	    "motion scene phase");
+	RequireFailure([&] {
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+	},
+	    "motion scene phase");
+	RequireFailure([&] {
+		static_cast<void>(sgre::scene::MotionPlayerTask::AttachClone(*fixture.Runtime, fixture.Tasks, task, false, [](const auto&) {
+		}));
+	},
+	    "motion");
+	Require(task.GenericPlayer()->Scene() == scene && task.Commands().ClockState().TickCount == tick && task.Commands().SelectionSerial() == serial && fixture.Runtime->Identifiers().LiveCount() == uids && fixture.Runtime->PlayerCount() == 1 && fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Count() == 1 && fixture.Runtime->SceneContext().Size() == 0, "lost snapshot member must block phase and clone before clock, geometry, UID, task or publication mutation");
+	fixture.Tasks.Clear();
+	fixture.Runtime->Close();
+	fixture.Runtime.reset();
+	Require(fixture.Manager.Unregister(fixture.Project) && fixture.Cache.Count() == 0 && fixture.Uploads == 2 && fixture.Releases == 2, "complete snapshot rejection must preserve balanced actual retirement");
+}
+
+struct SceneCloneEndpointCleanup {
+	sgre::scene::MotionManagerRuntime& Runtime;
+	sgre::scene::MotionLayerTasks& Tasks;
+
+	~SceneCloneEndpointCleanup() noexcept {
+		try {
+			if (!Runtime.IsClosed()) {
+				Runtime.SceneContext().Clear();
+				Tasks.Clear();
+				Runtime.Close();
+			}
+		} catch (...) {
+			std::terminate();
+		}
+	}
+};
+
+static void TestActualSceneCloneWithUnrelatedClearedSnapshots() {
+	for (const bool cross_manager : {false, true}) {
+		Fixture fixture;
+		sgre::scene::MotionResourceManager destination(fixture.Cache);
+		sgre::core::FrameClock destination_clock(0);
+		sgre::scene::MotionLayerTasks destination_tasks(8);
+		auto destination_project = destination.Register(fixture.Asset->Identity, fixture.Asset->Model, *fixture.Asset->Backing);
+		sgre::scene::MotionManagerRuntimeServices services;
+		services.SceneAssets = &fixture.Catalog;
+		services.ReadSourceAliases = [&](auto project) {
+			Require(project == destination_project, "destination clone aliases require its actual current registration");
+
+			return std::span<const sgre::scene::MotionSourceAlias>(fixture.Asset->Aliases);
+		};
+		services.ReadRegisteredAsset = [&](auto project) -> const sgre::scene::LoadedMotionAsset& {
+			Require(project == destination_project, "destination clone asset requires its actual current registration");
+
+			return *fixture.Asset;
+		};
+		sgre::scene::MotionManagerRuntime destination_runtime(destination, destination_clock, fixture.Seed, std::move(services), 32);
+		SceneCloneEndpointCleanup endpoint_cleanup{destination_runtime, destination_tasks};
+		auto old_source = fixture.Attach();
+		auto old_destination = sgre::scene::MotionPlayerTask::Attach(destination_runtime, destination_tasks, false, "character", [](const auto&) {
+		});
+		old_source.SetVisible(true);
+		old_destination.SetVisible(true);
+		old_source.Play("main");
+		old_destination.Play("main");
+		old_source.Progress(0);
+		old_destination.Progress(0);
+		const std::weak_ptr<const sgre::scene::LoadedMotionAsset> old_loaded = fixture.Asset;
+		const std::weak_ptr<const sgre::resource::MotionResource> old_model = fixture.Asset->Model;
+		old_source.Clear();
+		old_destination.Clear();
+		Require(fixture.Manager.Unregister(fixture.Project) && destination.Unregister(destination_project) && fixture.Cache.Count() == 0, "clone scope setup must genuinely retire both old source registrations");
+		fixture.Asset.reset();
+		fixture.Catalog.Prune();
+		Require(old_loaded.expired() && !old_model.expired() && !fixture.Runtime->ResourceBorrowsLive() && !destination_runtime.ResourceBorrowsLive(), "source and destination each retain their own cleared historical snapshot without a loaded asset or live registration");
+
+		fixture.Asset = fixture.Catalog.Prepare(Document(), std::make_shared<const std::vector<std::uint8_t>>(144, 255));
+		fixture.Project = fixture.Manager.Register(fixture.Asset->Identity, fixture.Asset->Model, *fixture.Asset->Backing);
+		destination_project = destination.Register(fixture.Asset->Identity, fixture.Asset->Model, *fixture.Asset->Backing);
+		auto source = fixture.Attach();
+		source.SetVisible(true);
+		source.Play("main");
+		source.Progress(1);
+		auto& clone_runtime = cross_manager ? destination_runtime : *fixture.Runtime;
+		auto& clone_tasks = cross_manager ? destination_tasks : fixture.Tasks;
+		const auto random = source.Random().State();
+		const auto tick = source.Commands().ClockState().TickCount;
+		const auto* source_scene = source.GenericPlayer()->Scene();
+		auto clone = sgre::scene::MotionPlayerTask::AttachClone(clone_runtime, clone_tasks, source, false, [](const auto&) {
+		});
+		const auto* clone_scene = clone.GenericPlayer()->Scene();
+		Require(source_scene && clone_scene && source_scene != clone_scene && source_scene->PacketRows().size() == 3 && clone_scene->PacketRows().size() == 3 && source.Random().State() == random && clone.Random().State() == random && clone.Commands().ClockState().TickCount == tick && source.GenericPlayer()->ResourcesLive() && clone.GenericPlayer()->ResourcesLive() && !fixture.Runtime->ResourceBorrowsLive() && !destination_runtime.ResourceBorrowsLive(), "genuine clone uses its exact live scene snapshot despite unrelated cleared unions, retaining copied state without a source RNG draw");
+		const auto source_packets = source_scene->Packets().Nodes();
+		const auto clone_packets = clone_scene->Packets().Nodes();
+		Require(source_packets.size() == clone_packets.size(), "clone must preserve completed packet layout before its first update");
+		for (std::size_t index = 0; index != source_packets.size(); ++index) {
+			const auto* a = source_packets[index].Command.Geometry;
+			const auto* b = clone_packets[index].Command.Geometry;
+			Require((a == nullptr) == (b == nullptr), "clone must preserve presence of completed actual geometry");
+			if (!a) {
+				continue;
+			}
+			Require(a != b && a->Positions.size() == b->Positions.size(), "clone geometry storage must be destination-owned before any continuation");
+			for (std::size_t point = 0; point != a->Positions.size(); ++point) {
+				Require(std::bit_cast<std::uint32_t>(a->Positions[point].X) == std::bit_cast<std::uint32_t>(b->Positions[point].X) && std::bit_cast<std::uint32_t>(a->Positions[point].Y) == std::bit_cast<std::uint32_t>(b->Positions[point].Y), "clone must preserve exact completed positions without replaying progress");
+			}
+		}
+		const std::array<sgre::resource::MotionPoint, 1> sizes{{{4, 4}}};
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		if (cross_manager) {
+			destination_tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		}
+		{
+			const auto frame = fixture.Runtime->SceneContext().Prepare(Globals(sizes));
+			Require(frame.Queue.size() == (cross_manager ? 2u : 4u), "source and newly cloned scene must publish completed actual geometry before clone update");
+		}
+		fixture.Runtime->SceneContext().Clear();
+		if (cross_manager) {
+			const auto frame = destination_runtime.SceneContext().Prepare(Globals(sizes));
+			Require(frame.Queue.size() == 2, "destination manager must prepare its own clone occurrence before update");
+			destination_runtime.SceneContext().Clear();
+		}
+
+		source.RequestRetire();
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Update();
+		Require(!source.IsLive() && clone.IsLive() && clone.GenericPlayer()->Scene() == clone_scene, "source task must actually retire before clone continuation");
+		if (cross_manager) {
+			fixture.Tasks.Clear();
+			fixture.Runtime->Close();
+			fixture.Runtime.reset();
+			Require(fixture.Manager.Unregister(fixture.Project) && destination.Contains(destination_project), "cross-manager source-first retirement must remove only the actual source registration");
+		}
+		const auto before = clone.Commands().ClockState().TickCount;
+		clone.Progress(1);
+		Require(clone.Commands().ClockState().TickCount == before + 1 && clone.GenericPlayer()->ResourcesLive() && clone.GenericPlayer()->Scene() == clone_scene, "clone must continue its independent actual clock and selected tree after source-first retirement");
+		clone_tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		{
+			const auto frame = clone_runtime.SceneContext().Prepare(Globals(sizes));
+			Require(frame.Queue.size() == 2, "continued clone must produce its actual current packet rows");
+		}
+		clone_runtime.SceneContext().Clear();
+		if (!cross_manager) {
+			fixture.Tasks.Clear();
+			fixture.Runtime->Close();
+			fixture.Runtime.reset();
+			Require(fixture.Manager.Unregister(fixture.Project), "same-manager clone source texture retires only after the actual clone");
+		}
+		destination_tasks.Clear();
+		destination_runtime.Close();
+		Require(destination.Unregister(destination_project) && fixture.Cache.Count() == 0 && fixture.Uploads == 2 && fixture.Releases == 2 && old_model.expired(), "both clone paths must balance real metadata, registrations and texture owners");
+	}
+}
+
 int main() {
 	try {
+		TestFreshSceneSelectionAfterClearedSnapshotRetires();
+		TestScenePreparationKeepsEveryCurrentSnapshotMember();
+		TestActualSceneCloneWithUnrelatedClearedSnapshots();
 		TestClearedTaskOutlivesFinalResourceUnregister();
 		TestActualConstructorDefaultNormalization();
 		TestActualPlainVelocityPhase();
