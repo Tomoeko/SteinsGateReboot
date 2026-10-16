@@ -306,6 +306,7 @@ add_library(sgre_resource
 	src/script/native_format.cpp
 	src/script/driver_logs.cpp
 	src/script/debug_scene_entry.cpp
+	src/script/original_scene_seek.cpp
 	src/script/driver_phases.cpp
 	src/script/native_float.cpp
 	src/script/native_math.cpp
@@ -624,6 +625,7 @@ if(SGRE_BUILD_TESTS)
 		launch_configuration
 		display_path
 		original_debug_scene_entry
+		original_scene_seek
 		scenario_search
 		resource_cache
 		resource_receiving_observation
@@ -632,6 +634,7 @@ if(SGRE_BUILD_TESTS)
 		squirrel_instanceof
 		squirrel_operand_stack
 		squirrel_native_stack
+		squirrel_native_caller
 		squirrel_native_temporary
 		squirrel_scratch_writer
 		squirrel_class_temporary
@@ -1498,6 +1501,25 @@ if(SGRE_BUILD_TESTS)
 			add_test(NAME ${test_name} COMMAND ${test_name}_tests)
 		endif()
 	endforeach()
+
+	# Original bytecode is a local optional fixture; no script contents are distributed.
+	set(SGRE_SEEK_ENVPLAYER "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/original-direct-gameplay-entry-stage/envplayer.nut")
+	set(SGRE_SEEK_UTIL "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/original-debug-scene-entry-util-stage/util.nut")
+	set(SGRE_SEEK_INIT "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/original-stateful-scene-seek-owner-stage/inputs/init.nut")
+	if(EXISTS "${SGRE_SEEK_ENVPLAYER}" AND EXISTS "${SGRE_SEEK_UTIL}" AND EXISTS "${SGRE_SEEK_INIT}")
+		add_test(NAME original_scene_seek_original COMMAND original_scene_seek_tests "${SGRE_SEEK_ENVPLAYER}" "${SGRE_SEEK_UTIL}" "${SGRE_SEEK_INIT}")
+		set_tests_properties(original_scene_seek_original PROPERTIES TIMEOUT 15)
+	endif()
+
+	add_executable(original_scene_seek_movie_tests tests/original_scene_seek_movie_tests.cpp)
+	target_link_libraries(original_scene_seek_movie_tests PRIVATE sgre_resource)
+	set_target_properties(original_scene_seek_movie_tests PROPERTIES CXX_EXTENSIONS OFF)
+	set(SGRE_SEEK_MOVIE_INPUTS "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/original-stateful-scene-seek-movie-control-stage/inputs")
+	set(SGRE_SEEK_EXCEPTION "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/original-movie-button-exception-read-display-stage/exception.nut")
+	if(EXISTS "${SGRE_SEEK_UTIL}" AND EXISTS "${SGRE_SEEK_MOVIE_INPUTS}/override.nut" AND EXISTS "${SGRE_SEEK_MOVIE_INPUTS}/exdialog.nut" AND EXISTS "${SGRE_SEEK_MOVIE_INPUTS}/motionpanel.nut" AND EXISTS "${SGRE_SEEK_MOVIE_INPUTS}/confirmdialog.nut" AND EXISTS "${SGRE_SEEK_EXCEPTION}")
+		add_test(NAME original_scene_seek_movie COMMAND original_scene_seek_movie_tests "${SGRE_SEEK_UTIL}" "${SGRE_SEEK_MOVIE_INPUTS}/override.nut" "${SGRE_SEEK_MOVIE_INPUTS}/exdialog.nut" "${SGRE_SEEK_MOVIE_INPUTS}/motionpanel.nut" "${SGRE_SEEK_MOVIE_INPUTS}/confirmdialog.nut" "${SGRE_SEEK_EXCEPTION}")
+		set_tests_properties(original_scene_seek_movie PROPERTIES TIMEOUT 15)
+	endif()
 
 	# Native comparison artifacts remain private and optional.
 	if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Files/research/runtime/text-stroke-native-stage/native-curve-vectors.bin")

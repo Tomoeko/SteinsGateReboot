@@ -8773,6 +8773,30 @@ namespace sgre::script {
 		return state.Frames.empty() && state.InvocationDepth == 0 ? SquirrelContextState::Idle : SquirrelContextState::Running;
 	}
 
+	bool SquirrelVm::NativeCallerMatches(std::string_view source, std::string_view function, std::size_t next_instruction, std::size_t max_frames) const {
+		const auto& owner = *m_Implementation;
+		if (owner.m_Closed || !owner.m_Running || owner.m_Closing || owner.m_Collecting || owner.m_DrainingReleases || owner.m_RetiringHostRoots || source.empty() || source.size() > kSquirrelObservationTextBytes || function.size() > kSquirrelObservationTextBytes || max_frames == 0 || max_frames > kSquirrelObservationFrames) {
+			throw std::runtime_error("Squirrel native caller matching requires its live native callback and bounded metadata query");
+		}
+		// Reuse the physical native-frame admission without borrowing any operand or retaining a VM value.
+		static_cast<void>(owner.NativeStack());
+		const auto& context = owner.Active();
+		if (context.Frames.size() > max_frames) {
+			return false;
+		}
+		for (const auto& frame : context.Frames) {
+			if (frame.Instruction != next_instruction) {
+				continue;
+			}
+			const auto& prototype = owner.Function(frame);
+			if (LiteralText(prototype.SourceName) == source && LiteralText(prototype.Name) == function) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
 	SquirrelContextObservation SquirrelVm::ObserveContext(SquirrelContextHandle context, std::size_t max_frames, std::size_t max_registers) const {
 		const auto& owner = *m_Implementation;
 		if (owner.m_Closed || owner.m_Running || owner.m_Closing || owner.m_Collecting || owner.m_DrainingReleases || owner.m_RetiringHostRoots || max_frames == 0 || max_frames > kSquirrelObservationFrames || max_registers > kSquirrelObservationRegisters) {

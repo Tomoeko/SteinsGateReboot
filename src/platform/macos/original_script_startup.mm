@@ -37,7 +37,6 @@
 #include "sgre/script/capture_bindings.hpp"
 #include "sgre/script/captured_bindings.hpp"
 #include "sgre/script/console_bindings.hpp"
-#include "sgre/script/debug_scene_entry.hpp"
 #include "sgre/script/driver_phases.hpp"
 #include "sgre/script/emote_player_bindings.hpp"
 #include "sgre/script/fill_rectangle_bindings.hpp"
@@ -55,6 +54,7 @@
 #include "sgre/script/motion_resource_owner.hpp"
 #include "sgre/script/native_math.hpp"
 #include "sgre/script/native_texture_bindings.hpp"
+#include "sgre/script/original_scene_seek.hpp"
 #include "sgre/script/packed_color_bindings.hpp"
 #include "sgre/script/prepared_driver_close.hpp"
 #include "sgre/script/random_bindings.hpp"
@@ -130,7 +130,7 @@ namespace sgre::platform {
 		MacApplicationPump& Platform;
 		bool DebugStartInGame = false;
 		bool Headless = true;
-		std::optional<script::ScriptDebugSceneEntry> SceneJump;
+		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
 	};
 
 	static std::unique_ptr<script::SquirrelVm> CreateOriginalStartupVm() {
@@ -321,6 +321,12 @@ namespace sgre::platform {
 
 				return !error && std::filesystem::exists(status) && !std::filesystem::is_directory(status);
 			});
+			if (m_Owners.DebugStartInGame) {
+				if (!m_Owners.SceneSeek) {
+					throw std::runtime_error("stateful gameplay seek requires an actual validated scenario snapshot");
+				}
+				m_SceneSeek = std::make_unique<script::OriginalSceneSeek>(m_Vm, *m_Owners.SceneSeek);
+			}
 			m_Inputs.ConfigureFrameOwners(m_Owners.Looper, m_Controller.Parallel(), [this](const auto&, const auto& mappings) {
 				auto actual_frame = m_Owners.Platform.ReadHubFrame(mappings);
 				if (!m_Owners.Headless) {
@@ -578,16 +584,33 @@ namespace sgre::platform {
 			if (m_Prepared) {
 				PreparedScene().Update([this] {
 					m_Phases.OnProcess();
-					PrepareDebugSceneEntry();
+					InstallSceneSeekHooks();
 				});
 			} else {
 				m_Controller.Update([this] {
 					m_Phases.OnProcess();
-					PrepareDebugSceneEntry();
+					InstallSceneSeekHooks();
 				});
+			}
+			if (m_SceneSeek && !m_Vm.IsClosed()) {
+				m_SceneSeek->Poll();
+				ReportSceneSeek();
+				const auto& seek = m_SceneSeek->Observation();
+				if (seek.Phase == script::OriginalSceneSeekPhase::Failed || seek.Phase == script::OriginalSceneSeekPhase::Cancelled) {
+					throw std::runtime_error("original stateful seek ended before releasing presentation: " + seek.Reason);
+				}
 			}
 			CompletePrivateReturnUpdate();
 			++m_UpdateCount;
+		}
+
+		[[nodiscard]] bool SeekHoldsPresentation() const noexcept {
+			if (!m_SceneSeek) {
+				return false;
+			}
+			const auto phase = m_SceneSeek->Observation().Phase;
+
+			return phase != script::OriginalSceneSeekPhase::Arrived && phase != script::OriginalSceneSeekPhase::Blocked;
 		}
 
 		void Draw(std::uint32_t argument) {
@@ -648,6 +671,10 @@ namespace sgre::platform {
 		void Close() {
 			if (m_Closed) {
 				return;
+			}
+			if (m_SceneSeek) {
+				m_SceneSeek->Cancel();
+				m_SceneSeek.reset();
 			}
 			std::cerr << "actualMovieDraw total=" << m_MovieDraws << '\n';
 			std::cerr << "actualPictureDraw total=" << m_PictureDraws << '\n';
@@ -794,20 +821,25 @@ namespace sgre::platform {
 		}
 
 	private:
-		void PrepareDebugSceneEntry() {
-			if (!m_Owners.DebugStartInGame || m_DebugSceneEntryInstalled || !m_Vm.HasSlot(m_Vm.RootTable(), std::string("Application"))) {
+		void InstallSceneSeekHooks() {
+			if (m_SceneSeek && !m_Vm.IsClosed()) {
+				m_SceneSeek->InstallAvailableHooks();
+			}
+		}
+
+		void ReportSceneSeek() {
+			const auto& state = m_SceneSeek->Observation();
+			if (m_ReportedSeekPhase && *m_ReportedSeekPhase == state.Phase && m_ReportedMovieRequests == state.MovieRequests && m_ReportedMovieConfirmations == state.MovieConfirmations) {
 				return;
 			}
-
-			// Original main performs its own scene restore/goToLine; the launch request supplies no VM instruction offset.
-			const auto entry = m_Owners.SceneJump.value_or(script::ScriptDebugSceneEntry{"reSG00_01.ks", 135});
-			script::InstallOriginalDebugSceneEntry(m_Vm, entry);
-			m_DebugSceneEntryInstalled = true;
-			if (m_Owners.SceneJump) {
-				std::cerr << "original scene jump installed: storage=" << std::quoted(entry.Storage) << " line=" << entry.TargetLine << '\n';
-			} else {
-				std::cerr << "original debug scene entry installed: first post-movie gameplay snapshot\n";
+			m_ReportedSeekPhase = state.Phase;
+			m_ReportedMovieRequests = state.MovieRequests;
+			m_ReportedMovieConfirmations = state.MovieConfirmations;
+			if (m_SeekReportRows == 256) {
+				return;
 			}
+			++m_SeekReportRows;
+			std::cerr << "originalStatefulSeek phase=" << static_cast<std::uint32_t>(state.Phase) << " storage=" << std::quoted(state.Storage) << " line=" << state.SourceLine << " point=" << state.Point << " snapshots=" << state.Snapshots << " movieRequests=" << state.MovieRequests << " movieConfirmations=" << state.MovieConfirmations << " reason=" << std::quoted(state.Reason) << " source=" << std::quoted(state.Source) << " function=" << std::quoted(state.Function) << " scriptLine=" << state.ScriptLine << '\n';
 		}
 
 		void ReportError(std::string_view error) {
@@ -1137,6 +1169,11 @@ namespace sgre::platform {
 		script::ScriptRandomBindings m_Random;
 		input::KeyMappings m_KeyMappings;
 		script::ScriptInputBindings m_Inputs;
+		std::unique_ptr<script::OriginalSceneSeek> m_SceneSeek;
+		std::optional<script::OriginalSceneSeekPhase> m_ReportedSeekPhase;
+		std::size_t m_ReportedMovieRequests = 0;
+		std::size_t m_ReportedMovieConfirmations = 0;
+		std::size_t m_SeekReportRows = 0;
 		script::ScriptSystemBindings m_System;
 		script::ScriptSoundBindings m_Sound;
 		script::ScriptApplicationFinishBindings m_Finish;
@@ -1284,7 +1321,6 @@ namespace sgre::platform {
 		bool m_AsynchronousMode = false;
 		std::exception_ptr m_CloseFailure;
 		bool m_Closed = false;
-		bool m_DebugSceneEntryInstalled = false;
 	};
 
 } // namespace sgre::platform
@@ -1303,7 +1339,7 @@ namespace sgre::platform {
 		std::uint64_t MaximumMilliseconds = 20000;
 		bool DebugStartInGame = false;
 		bool Headless = true;
-		std::optional<script::ScriptDebugSceneEntry> SceneJump;
+		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
 		render::SpritePresentationDescription Presentation;
 		std::filesystem::path ConfigurationWorkspace;
 		std::optional<app::LaunchConfiguration> Configuration;
@@ -1394,7 +1430,7 @@ namespace sgre::platform {
 
 					                             return m_Output->Description().Channels;
 				                             },
-				    m_Platform, m_Run.DebugStartInGame, m_Run.Headless, m_Run.SceneJump};
+				    m_Platform, m_Run.DebugStartInGame, m_Run.Headless, m_Run.SceneSeek};
 				m_Driver = std::make_unique<OriginalScriptStartup>(std::move(owners), m_Run.Installation, m_Run.ArchiveSeed);
 				m_Driver->ConfigureApplicationClose(m_Events);
 				InstallFinishCloseReceiver();
@@ -1465,7 +1501,10 @@ namespace sgre::platform {
 
 		void Run() {
 			if (!m_Run.Headless) {
-				m_Surface.ShowWindow();
+				if (!m_Driver->SeekHoldsPresentation()) {
+					m_Surface.ShowWindow();
+					m_WindowShown = true;
+				}
 				AdvanceHardwareAudio();
 				m_HardwareAudio->Start();
 			}
@@ -1479,6 +1518,11 @@ namespace sgre::platform {
 					}
 					active = m_Display->RunIteration();
 					++m_Iterations;
+					if (active && !m_Run.Headless && !m_WindowShown && m_SeekPresentationDrawReady && m_Driver->LastNativeError().empty()) {
+						// Present only after the released boundary has completed its genuine root Draw/submit iteration.
+						m_Surface.ShowWindow();
+						m_WindowShown = true;
+					}
 					if (m_Run.Headless) {
 						CapturePrivateCommand();
 					}
@@ -1798,6 +1842,9 @@ namespace sgre::platform {
 				const auto phase_begin = std::chrono::steady_clock::now();
 				m_Driver->Draw(argument);
 				++m_RootDraws;
+				if (!m_Driver->SeekHoldsPresentation()) {
+					m_SeekPresentationDrawReady = true;
+				}
 				ReportRootPhaseStall("Draw", phase_begin);
 			};
 			callbacks.CanRelease = [this] {
@@ -1938,7 +1985,7 @@ namespace sgre::platform {
 			auto remaining = m_HardwareAudio->FramesToTarget();
 			while (remaining != 0) {
 				const auto frames = std::min<std::size_t>(remaining, m_Run.Offline.MaximumFrames);
-				m_LastAudioRender = m_MovieDelivery->RenderAndSubmit(static_cast<std::uint32_t>(frames));
+				m_LastAudioRender = m_MovieDelivery->RenderAndSubmit(static_cast<std::uint32_t>(frames), m_Driver->SeekHoldsPresentation());
 				m_AudioStarvedRenders += m_LastAudioRender.Status == audio::OfflineSoundRenderStatus::Starved ? 1u : 0u;
 				m_AudioPrefillingRenders += m_LastAudioRender.Status == audio::OfflineSoundRenderStatus::Prefilling ? 1u : 0u;
 				remaining -= frames;
@@ -2101,6 +2148,8 @@ namespace sgre::platform {
 		std::size_t m_Iterations = 0;
 		std::size_t m_RootUpdates = 0;
 		std::size_t m_RootDraws = 0;
+		bool m_WindowShown = false;
+		bool m_SeekPresentationDrawReady = false;
 		std::size_t m_RootRetirements = 0;
 		bool m_PresentationBound = false;
 		bool m_RetiringHooks = false;
@@ -2244,17 +2293,22 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		run.SaveDirectory = std::filesystem::weakly_canonical(std::filesystem::absolute(*options.SaveDirectory));
 		RequireStartupSaveOverride(run.SaveDirectory, run.Installation, store.ConfigurationPath().parent_path());
 	}
-	if (options.Jump) {
+	run.DebugStartInGame = options.Jump.has_value() || options.DebugStartInGame.value_or(loaded.Configuration.DebugStartInGame);
+	if (run.DebugStartInGame) {
 		sgre::scenario::ScenarioSearchCatalog scenarios({run.Installation, run.ArchiveSeed});
-		const auto target = scenarios.ValidateJump(options.Jump->Storage, options.Jump->TargetLine);
-		run.SceneJump = sgre::script::ScriptDebugSceneEntry{target.Storage, target.SourceLine};
-		std::cerr << "original scene jump validated: storage=" << std::quoted(target.Storage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << '\n';
+		const auto target = scenarios.ValidateJump(options.Jump ? options.Jump->Storage : "reSG00_01.ks", options.Jump ? options.Jump->TargetLine : 135);
+		sgre::script::OriginalSceneSeekTarget seek;
+		seek.Storage = target.CanonicalStorage;
+		seek.RequestedLine = target.SourceLine;
+		seek.SnapshotLine = target.SnapshotLine;
+		seek.Point = target.Point;
+		run.SceneSeek = std::move(seek);
+		std::cerr << "original stateful seek validated: storage=" << std::quoted(target.CanonicalStorage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << " point=" << target.Point << '\n';
 	}
 	loaded.Configuration = sgre::app::ApplyLaunchPreferences(std::move(loaded.Configuration), options);
 	if (options.Fullscreen || options.WindowCentered) {
 		store.Save(loaded.Configuration);
 	}
-	run.DebugStartInGame = options.Jump.has_value() || options.DebugStartInGame.value_or(loaded.Configuration.DebugStartInGame);
 	run.Presentation.VisibleWindow = !run.Headless;
 	run.Presentation.WindowWidthPoints = loaded.Configuration.WindowWidth;
 	run.Presentation.WindowHeightPoints = loaded.Configuration.WindowHeight;
@@ -2265,8 +2319,8 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 	validate_only = options.ValidateOnly;
 	if (validate_only) {
 		std::cout << "launch config valid: " << store.ConfigurationPath() << "; width=" << run.Target.Width << "; height=" << run.Target.Height << "; audio_rate=" << run.Offline.SamplesPerSecond << "; audio_channels=" << static_cast<std::uint32_t>(run.Offline.Channels) << "; debug_start_in_game=" << run.DebugStartInGame << '\n';
-		if (run.SceneJump) {
-			std::cout << "launch scene jump: storage=" << std::quoted(run.SceneJump->Storage) << " line=" << run.SceneJump->TargetLine << '\n';
+		if (run.SceneSeek) {
+			std::cout << "launch stateful seek: storage=" << std::quoted(run.SceneSeek->Storage) << " line=" << run.SceneSeek->RequestedLine << " snapshot_line=" << run.SceneSeek->SnapshotLine << " point=" << run.SceneSeek->Point << '\n';
 		}
 	}
 
@@ -2360,7 +2414,7 @@ int main(int argc, char** argv) {
 				}
 				const auto options = sgre::app::ParseLaunchArguments(arguments);
 				if (options.Help) {
-					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump selects an original scenario source line for this run and implies --skip-startup.\n";
+					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump follows original gameplay to a validated source line for this run; authentic choices may require input.\n";
 
 					return 0;
 				}

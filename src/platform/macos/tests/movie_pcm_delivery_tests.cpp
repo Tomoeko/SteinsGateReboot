@@ -282,6 +282,78 @@ static void TestUnboundHeadlessClockRemainsProducerBased() {
 	movies.Close();
 }
 
+static void PrepareActualSoundTone(Fixture& fixture) {
+	std::array<std::uint8_t, 4096 * 4> encoded{};
+	for (std::size_t index = 0; index < encoded.size(); index += 2) {
+		encoded[index + 1] = 0x20;
+	}
+
+	sgre::audio::BufferedSoundSourceData data;
+	data.Description.Format.Channels = 2;
+	data.Description.Format.SamplesPerSecond = 48000;
+	data.Description.Format.AverageBytesPerSecond = 48000 * 4;
+	data.Description.Format.BlockAlignment = 4;
+	data.Description.Format.BitsPerSample = 16;
+	data.Description.EncodedData.Size = encoded.size();
+	data.Submission.EncodedBytes = static_cast<std::uint32_t>(encoded.size());
+	data.EncodedBytes = encoded;
+	const sgre::audio::SoundVoiceAddress address;
+	fixture.Sources.Prepare(address, data);
+	fixture.Sources.ApplyOutputMix(address, sgre::audio::EvaluateSoundMix({}, 2, 2, false));
+	fixture.Sources.Commit();
+	Require(fixture.Sources.Inspect(address).Samples.BufferFrames == 4096, "actual Sound source must own decoded samples before its temporary input retires");
+}
+
+static void TestScopedPostmixSilencePreservesActualDelivery() {
+	Fixture fixture;
+	PrepareActualSoundTone(fixture);
+	auto voice = fixture.Voice(8);
+	voice->SetVolume(.5f);
+	const auto rendered = fixture.Delivery->RenderAndSubmit(16, true);
+	Require(rendered.MasterFrames == 16 && rendered.SourceCount == 1 && rendered.Sources[0].ConsumedFrames > 0, "silent submission must render and report the actual Sound source");
+	Require(fixture.Sound.RenderedFrames() == 16 && fixture.Movies.RenderedFrames() == 16 && fixture.Producer.SubmittedFrames() == 16, "postmix silence must preserve both actual mixer extents and the genuine output submission");
+	Require(voice->Snapshot(fixture.Now()).CompletedFrames == 0 && !voice->Snapshot(fixture.Now()).Progress.Position100ns, "silent offline render cannot fabricate Movie delivery before the callback");
+	const auto silent = fixture.Read(16);
+	Require(std::all_of(silent.begin(), silent.end(), [](float value) {
+		return value == 0;
+	}),
+	    "explicit scoped silence must reach the production software callback as zero PCM");
+	Require(fixture.Callback.SilentFrames.load() == 0, "submitted zero PCM is delivered input, not callback starvation");
+	Require(fixture.Delivery->Poll() > 0 && voice->Snapshot(fixture.Now()).CompletedFrames == 16 && voice->Snapshot(fixture.Now()).Progress.Position100ns.has_value(), "silenced samples must drive genuine block delivery and Movie clock receipts");
+	const auto resumed = fixture.Delivery->RenderAndSubmit(16);
+	Require(resumed.MasterFrameBefore == 16 && resumed.MasterFrameAfter == 32 && fixture.Movies.RenderedFrames() == 32 && fixture.Producer.SubmittedFrames() == 32, "one-argument ABI must resume the next contiguous actual mixer interval");
+	const auto audible = fixture.Read(16);
+	Require(std::all_of(audible.begin(), audible.end(), [](float value) {
+		return std::isfinite(value) && value > 0;
+	}),
+	    "per-call silence must not latch mute or suppress the real Sound/Movie source mix");
+	static_cast<void>(fixture.Delivery->Poll());
+	Require(voice->Snapshot(fixture.Now()).CompletedFrames == 32 && voice->Snapshot(fixture.Now()).OutputDrained && fixture.Delivery->PendingBlockEvents() == 0, "ordinary resume must retire every real Movie block event without replay");
+	voice->Close();
+}
+
+static void TestScopedSilenceRetainsFirstSubmitFailure() {
+	Fixture fixture(8);
+	auto voice = fixture.Voice(2);
+	static_cast<void>(fixture.Delivery->RenderAndSubmit(8, true));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Delivery->RenderAndSubmit(8, true));
+	},
+	    "actual PCM output ring rejected");
+	Require(fixture.Sound.RenderedFrames() == 16 && fixture.Movies.RenderedFrames() == 16 && fixture.Producer.SubmittedFrames() == 8, "silenced ring failure must preserve actual source progress and only the successful output interval");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Delivery->RenderAndSubmit(1, false));
+	},
+	    "actual PCM output ring rejected");
+	RequireFailure([&] {
+		fixture.Delivery->Close();
+	},
+	    "actual PCM output ring rejected");
+	Require(fixture.Delivery->IsClosed(), "silent submission failure must remain observable after genuine sink retirement");
+	Require(fixture.Sound.RenderedFrames() == 16 && fixture.Movies.RenderedFrames() == 16, "failure and cleanup must not retry a silenced source interval");
+	voice->Close();
+}
+
 int main() {
 	try {
 		TestActualPrefixPartialEndAndSilence();
@@ -289,7 +361,9 @@ int main() {
 		TestReciprocalBypassAndRealQuiescenceGuards();
 		TestPartialProgressFailureIsNeverRetried();
 		TestUnboundHeadlessClockRemainsProducerBased();
-		std::cout << "actual Movie/Sound manual mixers plus production software callback delivery:5 groups passed; no explicit hardware-output owner construction/start\n";
+		TestScopedPostmixSilencePreservesActualDelivery();
+		TestScopedSilenceRetainsFirstSubmitFailure();
+		std::cout << "actual Movie/Sound manual mixers plus production software callback delivery:7 groups passed; no explicit hardware-output owner construction/start\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

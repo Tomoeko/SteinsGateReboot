@@ -34,7 +34,7 @@ Later launches reuse `Files/config.json`:
 Files/build/game-release/sgre-game
 ```
 
-Use `--skip-startup` to enter gameplay directly, `--normal-start` for ordinary startup, `--jump SCENE.ks:LINE` for an original scenario restore point, or `--headless` for hidden, silent debugging. Startup arguments apply only to that launch.
+Use `--skip-startup` to enter gameplay directly, `--normal-start` for ordinary startup, `--jump SCENE.ks:LINE` for a validated scenario line, or `--headless` for hidden, silent debugging. Startup arguments apply only to that launch.
 
 The default window is centered and resizable, with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default.
 
@@ -47,7 +47,7 @@ Files/build/recovery/sgre-inspect search "phone" --language en --limit 20
 Files/build/recovery/sgre-inspect --gui
 ```
 
-The macOS inspector browses scenario text, translations and archive entries. A jump uses the original snapshot restore; earlier route side effects may still be required.
+The macOS inspector browses scenario text, translations and archive entries. Jumps execute earlier scenario commands to preserve game state and pause when an authentic choice needs input.
 
 ## Checks
 

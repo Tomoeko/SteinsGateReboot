@@ -740,7 +740,7 @@ namespace sgre::media {
 			SubmittedMaster += submission.Frames();
 			SubmissionSequence = submission.Sequence();
 		}
-		audio::OfflineSoundRenderResult RenderAndSubmit(std::uint32_t frames) {
+		audio::OfflineSoundRenderResult RenderAndSubmit(std::uint32_t frames, bool silent) {
 			RequireOwner();
 			if (frames == 0 || frames > MaximumFrames) {
 				throw std::runtime_error("Movie delivery render requires a nonempty actual bounded master chunk");
@@ -770,6 +770,10 @@ namespace sgre::media {
 						throw std::runtime_error("Movie/Sound actual mixed sample exceeds the finite output domain");
 					}
 				}
+				if (silent) {
+					std::fill(mixed.begin(), mixed.end(), 0.0f);
+				}
+
 				const auto submission = Submit(mixed);
 				CommitEvents(submission);
 				Operating = false;
@@ -859,7 +863,10 @@ namespace sgre::media {
 		}
 	}
 	audio::OfflineSoundRenderResult MoviePcmDelivery::RenderAndSubmit(std::uint32_t master_frames) {
-		return m_Implementation->RenderAndSubmit(master_frames);
+		return RenderAndSubmit(master_frames, false);
+	}
+	audio::OfflineSoundRenderResult MoviePcmDelivery::RenderAndSubmit(std::uint32_t master_frames, bool silent) {
+		return m_Implementation->RenderAndSubmit(master_frames, silent);
 	}
 	std::size_t MoviePcmDelivery::Poll() {
 		return m_Implementation->Poll();

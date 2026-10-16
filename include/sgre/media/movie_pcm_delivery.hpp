@@ -31,6 +31,8 @@ namespace sgre::media {
 		MoviePcmDelivery(const MoviePcmDelivery&) = delete;
 		MoviePcmDelivery& operator=(const MoviePcmDelivery&) = delete;
 		[[nodiscard]] audio::OfflineSoundRenderResult RenderAndSubmit(std::uint32_t master_frames);
+		// Presentation-only silence: render/validate both mixers and deliver clocks/receipts normally.
+		[[nodiscard]] audio::OfflineSoundRenderResult RenderAndSubmit(std::uint32_t master_frames, bool silent);
 		// Bounded owner-side drain; no decoding, allocation or source calls enter the device callback.
 		[[nodiscard]] std::size_t Poll();
 		[[nodiscard]] std::size_t PendingBlockEvents() const;

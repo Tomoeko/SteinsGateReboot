@@ -381,6 +381,8 @@ namespace sgre::script {
 		[[nodiscard]] SquirrelContextHandle CreateContext();
 		[[nodiscard]] SquirrelContextHandle CreateContextFrom(SquirrelContextHandle creator);
 		[[nodiscard]] SquirrelContextState ContextState(SquirrelContextHandle context) const;
+		// Native-callback-only exact caller metadata; bounded current frames, no copies, calls or retention.
+		[[nodiscard]] bool NativeCallerMatches(std::string_view source, std::string_view function, std::size_t next_instruction, std::size_t max_frames = kSquirrelObservationFrames) const;
 		// Serialized endpoint inspection performs no call, context selection, resume, or VM retention.
 		[[nodiscard]] SquirrelContextObservation ObserveContext(SquirrelContextHandle context, std::size_t max_frames = kSquirrelObservationFrames, std::size_t max_registers = 8) const;
 		[[nodiscard]] SquirrelRunResult InvokeInContext(SquirrelContextHandle context, const SquirrelValue& callable, std::span<const SquirrelValue> arguments, std::uint64_t instruction_budget = 1000000, bool raise_error = true);
