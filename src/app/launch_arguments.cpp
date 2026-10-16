@@ -83,7 +83,23 @@ namespace sgre::app {
 				return resolution;
 			}
 		}
-		throw std::runtime_error("--resolution requires 576p, 720p, 1080p, 1440p or 4k (or their exact WIDTHxHEIGHT dimensions)");
+		if (normalized == "2160p") {
+			return kDisplayResolutions.back();
+		}
+		std::uint32_t extent = 0;
+		const auto parsed = std::from_chars(normalized.data(), normalized.data() + normalized.size(), extent);
+		if (parsed.ec == std::errc{} && parsed.ptr == normalized.data() + normalized.size()) {
+			for (const auto& resolution : kDisplayResolutions) {
+				if (extent == resolution.Width || extent == resolution.Height) {
+					return resolution;
+				}
+			}
+		}
+		throw std::runtime_error("display size requires 576, 720, 1080, 1440, 2160 or 4k; preset widths, p suffixes and exact WIDTHxHEIGHT dimensions are also accepted");
+	}
+
+	static bool IsDisplaySizeArgument(std::string_view value) {
+		return !value.empty() && ((value.front() >= '0' && value.front() <= '9') || value == "4k" || value == "4K");
 	}
 
 	LaunchArguments ParseLaunchArguments(std::span<const std::string_view> arguments) {
@@ -110,10 +126,13 @@ namespace sgre::app {
 			} else if (option == "--fullscreen" || option == "--windowed") {
 				RequireUnique(result.Fullscreen.has_value(), "window mode");
 				result.Fullscreen = option == "--fullscreen";
+				if (option == "--windowed" && index + 1 < arguments.size() && IsDisplaySizeArgument(arguments[index + 1])) {
+					result.WindowSize = ParseDisplayResolution(arguments[++index]);
+				}
 			} else if (option == "--center-window" || option == "--no-center-window") {
 				RequireUnique(result.WindowCentered.has_value(), "window placement");
 				result.WindowCentered = option == "--center-window";
-			} else if (option == "--resolution") {
+			} else if (option == "--resolution" || option == "--res") {
 				RequireUnique(result.Resolution.has_value(), "display resolution");
 				result.Resolution = ParseDisplayResolution(OptionValue(arguments, index));
 			} else if (option == "--headless") {
@@ -166,6 +185,10 @@ namespace sgre::app {
 			configuration.Height = arguments.Resolution->Height;
 			configuration.WindowWidth = arguments.Resolution->Width;
 			configuration.WindowHeight = arguments.Resolution->Height;
+		}
+		if (arguments.WindowSize) {
+			configuration.WindowWidth = arguments.WindowSize->Width;
+			configuration.WindowHeight = arguments.WindowSize->Height;
 		}
 		return configuration;
 	}

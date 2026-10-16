@@ -1444,6 +1444,7 @@ namespace sgre::platform {
 		render::SpritePresentationDescription Presentation;
 		std::filesystem::path ConfigurationWorkspace;
 		std::optional<app::LaunchConfiguration> Configuration;
+		bool RememberWindowChanges = true;
 	};
 
 	class HiddenOriginalApplication {
@@ -1753,7 +1754,7 @@ namespace sgre::platform {
 
 	private:
 		void RememberWindowPreferences() {
-			if (!m_Run.Configuration || m_Run.ConfigurationWorkspace.empty()) {
+			if (!m_Run.RememberWindowChanges || !m_Run.Configuration || m_Run.ConfigurationWorkspace.empty()) {
 				return;
 			}
 			const auto geometry = m_Surface.Geometry();
@@ -2361,8 +2362,7 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 	if (!loaded.RecoveryDiagnostic.empty()) {
 		std::cerr << "launch config repaired: " << loaded.RecoveryDiagnostic << '\n';
 	}
-	loaded.Configuration = sgre::app::ApplyLaunchPreferences(std::move(loaded.Configuration), options);
-	const auto& configuration = loaded.Configuration;
+	const auto configuration = sgre::app::ApplyLaunchPreferences(loaded.Configuration, options);
 	sgre::platform::OriginalStartupRun run;
 	run.Installation = configuration.Installation;
 	run.ArchiveSeed = std::move(loaded.ArchiveSeed);
@@ -2430,16 +2430,14 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		}
 		std::cerr << (run.SceneEntry ? "original direct entry validated: storage=" : "original stateful seek validated: storage=") << std::quoted(target.CanonicalStorage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << " point=" << target.Point << '\n';
 	}
-	if (!options.Headless && !options.ValidateOnly && (options.Fullscreen || options.WindowCentered || options.Resolution)) {
-		store.Save(loaded.Configuration);
-	}
 	run.Presentation.VisibleWindow = !run.Headless;
-	run.Presentation.WindowWidthPoints = loaded.Configuration.WindowWidth;
-	run.Presentation.WindowHeightPoints = loaded.Configuration.WindowHeight;
-	run.Presentation.WindowCentered = loaded.Configuration.WindowCentered;
-	run.Presentation.Fullscreen = !run.Headless && loaded.Configuration.Fullscreen;
+	run.Presentation.WindowWidthPoints = configuration.WindowWidth;
+	run.Presentation.WindowHeightPoints = configuration.WindowHeight;
+	run.Presentation.WindowCentered = configuration.WindowCentered;
+	run.Presentation.Fullscreen = !run.Headless && configuration.Fullscreen;
 	run.ConfigurationWorkspace = workspace;
 	run.Configuration = loaded.Configuration;
+	run.RememberWindowChanges = !options.Fullscreen && !options.WindowCentered && !options.Resolution && !options.WindowSize;
 	validate_only = options.ValidateOnly;
 	if (validate_only) {
 		std::cout << "launch config valid: " << store.ConfigurationPath() << "; width=" << run.Target.Width << "; height=" << run.Target.Height << "; audio_rate=" << run.Offline.SamplesPerSecond << "; audio_channels=" << static_cast<std::uint32_t>(run.Offline.Channels) << "; debug_start_in_game=" << run.DebugStartInGame << '\n';
@@ -2541,7 +2539,7 @@ int main(int argc, char** argv) {
 				}
 				const auto options = sgre::app::ParseLaunchArguments(arguments);
 				if (options.Help) {
-					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--resolution 576p|720p|1080p|1440p|4k] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a complete recorded original checkpoint for this run.\n";
+					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--res 576|720|1080|1440|2160|4k] [--fullscreen|--windowed [SIZE]] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a complete recorded original checkpoint for this run.\n";
 
 					return 0;
 				}

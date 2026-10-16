@@ -40,7 +40,7 @@ Jumps restore the most recently recorded complete state, including the phone and
 
 Windowed mode is the default, centered and resizable with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default.
 
-Use `--resolution 1440p` or `--resolution 4k` to remember 2560×1440 or 3840×2160 rendering and matching requested window dimensions. `--windowed` selects windowed mode.
+Use `--res 720|1080|1440|2160|4k` (`--resolution` also works) for rendering and matching window dimensions. `--windowed [SIZE]` selects windowed mode with an optional separate window size, for example `--windowed 720 --res 1440`. These overrides do not change `config.json`.
 
 ## Find a scene
 

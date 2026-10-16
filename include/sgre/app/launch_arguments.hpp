@@ -26,6 +26,7 @@ namespace sgre::app {
 		std::optional<bool> Fullscreen;
 		std::optional<bool> WindowCentered;
 		std::optional<DisplayResolution> Resolution;
+		std::optional<DisplayResolution> WindowSize;
 		std::optional<std::filesystem::path> SaveDirectory;
 		std::optional<std::uint64_t> MaximumMilliseconds;
 		std::optional<std::size_t> MaximumIterations;
@@ -37,6 +38,6 @@ namespace sgre::app {
 
 	// Excludes argv[0]. Parsing performs no filesystem I/O, config write, activation, or service creation.
 	[[nodiscard]] LaunchArguments ParseLaunchArguments(std::span<const std::string_view> arguments);
-	// Display preferences change together. Startup, headless, saves and observation limits remain per-run host inputs.
+	// Applies temporary launch choices to a copy; callers retain the independent persisted defaults.
 	[[nodiscard]] LaunchConfiguration ApplyLaunchPreferences(LaunchConfiguration configuration, const LaunchArguments& arguments);
 } // namespace sgre::app

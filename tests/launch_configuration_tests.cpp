@@ -574,10 +574,28 @@ static void ResolutionPreferenceTests(const Fixture& fixture) {
 		const auto parsed = sgre::app::ParseLaunchConfiguration(sgre::app::SerializeLaunchConfiguration(applied));
 		Require(parsed.Width == resolution.Width && parsed.Height == resolution.Height && parsed.WindowWidth == resolution.Width && parsed.WindowHeight == resolution.Height, "remembered resolution must round-trip with its matching requested window size");
 	}
+	for (const auto& resolution : sgre::app::kDisplayResolutions) {
+		for (const auto& alias : {std::to_string(resolution.Width), std::to_string(resolution.Height)}) {
+			const auto selected = LaunchArguments({"--res", alias});
+			const auto windowed = LaunchArguments({"--windowed", alias});
+			Require(selected.Resolution && selected.Resolution->Width == resolution.Width && windowed.WindowSize && windowed.WindowSize->Height == resolution.Height && windowed.Fullscreen == false, "numeric width/height aliases must retain one unambiguous aspect-correct preset");
+		}
+	}
+	const auto separate = sgre::app::ApplyLaunchPreferences(base, LaunchArguments({"--windowed", "1280", "--res", "1440"}));
+	Require(separate.Width == 2560 && separate.Height == 1440 && separate.WindowWidth == 1280 && separate.WindowHeight == 720 && !separate.Fullscreen, "separate window and render overrides must compose without depending on option order");
+	const auto reversed = sgre::app::ApplyLaunchPreferences(base, LaunchArguments({"--res", "1440", "--windowed", "720"}));
+	Require(separate.Width == reversed.Width && separate.WindowWidth == reversed.WindowWidth && base.Width == fixture.Configuration().Width, "per-launch display overrides must preserve the independent source defaults");
+	Require(LaunchArguments({"--res", "2160p"}).Resolution->Width == 3840 && LaunchArguments({"--res", "4K"}).Resolution->Height == 2160, "UHD aliases changed");
+	Reject([] {
+		static_cast<void>(LaunchArguments({"--res", "1080", "--resolution", "1440"}));
+	});
+	Reject([] {
+		static_cast<void>(LaunchArguments({"--windowed", "999"}));
+	});
 	const auto ultra = LaunchArguments({"--resolution", "4K", "--windowed"});
 	const auto applied = sgre::app::ApplyLaunchPreferences(base, ultra);
 	Require(applied.Width == 3840 && applied.Height == 2160 && !applied.Fullscreen, "4K alias and explicit windowed selection must retain UHD dimensions");
-	for (const auto value : {"1440", "2560x1080", "0x0", "3840x2160junk", "8k"}) {
+	for (const auto value : {"999", "2560x1080", "0x0", "3840x2160junk", "8k"}) {
 		Reject([&] {
 			static_cast<void>(LaunchArguments({"--resolution", value}));
 		});
