@@ -292,7 +292,7 @@ namespace sgre::scene {
 	void MotionLocalFrames::RestoreJoin(std::uint32_t layer, const MotionJoinedLayer& saved) {
 		RequireSelectedOwner();
 		RequireCurrentParameters();
-		if (!m_Selected || m_Traversing || layer >= m_Layers.size() || saved.Kind != m_Prepared.Layers[layer].Type || (saved.Kind != 0 && saved.Kind != 2 && saved.Kind != 3 && saved.Kind != 12) || m_Prepared.Layers[layer].MeshTransform != 0) {
+		if (!m_Selected || m_Traversing || layer >= m_Layers.size() || saved.Kind != m_Prepared.Layers[layer].Type || (saved.Kind != 0 && saved.Kind != 2 && saved.Kind != 3 && saved.Kind != 7 && saved.Kind != 12) || m_Prepared.Layers[layer].MeshTransform != 0) {
 			throw std::runtime_error("motion JOIN numeric restore requires the exact supported selected current slot");
 		}
 		auto& selected = m_Layers[layer];

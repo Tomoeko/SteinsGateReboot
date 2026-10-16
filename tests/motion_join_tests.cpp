@@ -688,8 +688,62 @@ static void TestCopiedSelectedChildJoin() {
 	Require(!clone.IsLive() && !child.IsLive() && fixture.Runtime->Identifiers().LiveCount() == 0, "copied JOIN retirement must release both selected trees and every actual child identifier");
 }
 
+static void TestClipGroupJoin(bool outgoing_hidden, bool incoming_hidden, bool join_target, bool changed_path, bool outgoing_eligible) {
+	auto document = Document(outgoing_hidden, incoming_hidden, false, join_target, false);
+	auto& motions = NestedField(NestedField(NestedField(document->Root, "object"), "character"), "motion");
+	for (auto& [name, timeline] : std::get<sgre::resource::PsbObject>(motions.Data)) {
+		auto& clip = std::get<sgre::resource::PsbArray>(NestedField(timeline, "layer").Data)[1];
+		NestedField(clip, "type") = Atom(std::int64_t{7});
+		if (name == "show") {
+			NestedField(clip, "joinTarget") = Atom(outgoing_eligible);
+		} else if (changed_path) {
+			NestedField(clip, "label") = Atom(std::string("new-clip"));
+		}
+	}
+	Fixture fixture(false, false, false, true, false, false, false, document);
+	auto task = fixture.Attach();
+	task.SetLeft(7);
+	task.SetVisible(true);
+	task.Play("show");
+	task.Progress(0);
+	task.Progress(2);
+	const auto* scene = task.GenericPlayer()->Scene();
+	const auto outgoing = scene->FindLayer("wipe");
+	Require(outgoing && scene->LayerType(*outgoing) == 7, "clip JOIN requires an actual kind7 selected node");
+	task.Play("hide", sgre::scene::MotionPlayFlags::Join);
+	task.Progress(0);
+	const auto incoming = scene->FindLayer("wipe");
+	Require(incoming && scene->LayerType(*incoming) == 7, "clip JOIN must retain the genuine incoming node kind");
+	const bool transfers = !outgoing_hidden && !incoming_hidden && join_target && !changed_path && outgoing_eligible;
+	const auto expected = incoming_hidden ? 7.0f : transfers ? 11.0f
+	                                                         : 107.0f;
+	Require(scene->LayerCoordinate(*incoming)[0] == expected, "clip JOIN must apply path, kind, eligibility and visible numeric snapshot rules");
+	for (const auto* row : scene->PacketRows()) {
+		Require(row->Node().Raw->Type != 7, "structural JOIN clip groups must not invent sprite rows");
+	}
+	if (transfers) {
+		task.Progress(2);
+		Require(scene->LayerCoordinate(*incoming)[0] == 17, "clip JOIN must tween the captured current slot toward the incoming following slot");
+		task.Progress(2);
+		Require(scene->LayerCoordinate(*incoming)[0] == 23, "clip JOIN must decode the genuine next physical frame");
+		task.SetTickCount(0);
+		task.Progress(0);
+		Require(scene->LayerCoordinate(*incoming)[0] == 107, "clip JOIN override must expire on a real seek");
+	}
+	Reject([&] {
+		static_cast<void>(scene->LayerCoordinate(*outgoing));
+	},
+	    "retired actual root");
+}
+
 int main() {
 	try {
+		TestClipGroupJoin(false, false, true, false, true);
+		TestClipGroupJoin(true, false, true, false, true);
+		TestClipGroupJoin(false, true, true, false, true);
+		TestClipGroupJoin(false, false, false, false, true);
+		TestClipGroupJoin(false, false, true, true, true);
+		TestClipGroupJoin(false, false, true, false, false);
 		TestCopiedSelectedChildJoin();
 		TestNestedPlayerJoin(false);
 		TestNestedPlayerJoin(true);

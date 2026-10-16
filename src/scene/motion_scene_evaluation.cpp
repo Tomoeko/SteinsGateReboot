@@ -1179,7 +1179,7 @@ namespace sgre::scene {
 				if (!node.JoinTarget || node.Prepared->Type == 1) {
 					continue;
 				}
-				if ((node.Prepared->Type != 0 && node.Prepared->Type != 2 && node.Prepared->Type != 3 && node.Prepared->Type != 12) || node.Prepared->MeshTransform != 0) {
+				if ((node.Prepared->Type != 0 && node.Prepared->Type != 2 && node.Prepared->Type != 3 && node.Prepared->Type != 7 && node.Prepared->Type != 12) || node.Prepared->MeshTransform != 0) {
 					throw std::runtime_error("motion JOIN requires the actual mesh/other-kind snapshot transfer owner");
 				}
 				if (node.Prepared->Type == 3) {
