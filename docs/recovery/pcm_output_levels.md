@@ -1,0 +1,7 @@
+# macOS output levels
+
+The user authorizes improved audio mixing independently of native fidelity. The audible game opts into a first-party ×2 output gain (+6.02 dB) after the complete Sound/Movie mix. Recovered source, resource, group, archive and master controls remain unchanged. Other PCM clients default to unity; headless runs never construct the hardware owner.
+
+`PcmOutputLeveler` applies one linked gain to all channels in each frame. Sample peaks are bounded to0.98 with immediate protection and a100 ms exponential release. The callback allocates nothing, adds no buffering or frame latency, preserves delivery counters/clocks and reports nonfinite input through the existing failure boundary with zero output. This is sample-peak protection, not a measured true-peak or LUFS normalizer.
+
+Two ASan/UBSan suites pass gain/phase/stereo vectors, transients, callback chunk continuity, failure before mutation, actual ring delivery, starvation and callback failure handling without creating an AudioUnit/device. Silent actual-game software probes compare the original mix and policy on identical PCM:71 one-second gameplay/menu windows have peak0.306800→0.613601 and maximum RMS0.0485666→0.0971331;23 startup windows include11 with movie audio, movie peak0.244811 and combined output peak0.244811→0.489622. The samples do not reach the limiter ceiling; synthetic overload fixtures cover that path. These are software measurements on the supplied resources, not Windows/DAC or subjective listening comparisons. Native cross-platform audio acceptance remains open.

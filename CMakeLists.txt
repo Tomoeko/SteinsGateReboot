@@ -18,6 +18,7 @@ add_library(sgre_resource
 	src/app/launch_configuration_json.cpp
 	src/app/launch_archive_seed.cpp
 	src/audio/pcm_output_ring.cpp
+	src/audio/pcm_output_leveler.cpp
 	src/audio/pcm_output_delivery.cpp
 	src/audio/pcm_output_submission.cpp
 	src/audio/sound_configuration_loads.cpp
@@ -830,6 +831,7 @@ if(SGRE_BUILD_TESTS)
 		input_device
 		input_key_mapping
 		pcm_output_ring
+		pcm_output_leveler
 		pcm_output_delivery
 		pcm_output_submission
 		application_finish_event

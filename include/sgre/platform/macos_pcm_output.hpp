@@ -20,6 +20,8 @@ namespace sgre::platform {
 		std::uint32_t MaximumCallbackFrames = 4096;
 		std::size_t CapacityFrames = 8192;
 		std::size_t TargetBufferedFrames = 4096;
+		// Unity preserves raw PCM. Games may opt into the separate authored level/peak policy.
+		float OutputGain = 1;
 		// Existing callers remain unchanged until a real owner explicitly drains callback receipts.
 		MacPcmDeliveryMode DeliveryMode = MacPcmDeliveryMode::None;
 		std::size_t DeliveryCapacity = 256;

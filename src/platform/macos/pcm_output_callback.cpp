@@ -49,6 +49,12 @@ namespace sgre::platform {
 			return finish(FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::DeliveryQueue));
 		}
 		const auto read = state.Ring.Read(samples);
+		if (state.Leveler && !state.Leveler->Process(samples)) {
+			std::fill(samples.begin(), samples.end(), 0.0f);
+			*flags |= kAudioUnitRenderAction_OutputIsSilence;
+			state.Rendering.clear(std::memory_order_release);
+			return finish(FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::InvalidSamples));
+		}
 		OSStatus status = noErr;
 		const auto requested = state.RequestedFrames.load(std::memory_order_relaxed);
 		const auto copied = state.CopiedFrames.load(std::memory_order_relaxed);

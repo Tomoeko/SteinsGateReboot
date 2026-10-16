@@ -47,6 +47,9 @@ namespace sgre::platform {
 	public:
 		explicit Implementation(MacPcmOutputDescription description) : Description(ValidatePcmOutputDescription(description)), Callback(PcmDeviceRingDescription(Description), Description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents, Description.DeliveryCapacity) {
 			try {
+				if (Description.OutputGain != 1) {
+					Callback.Leveler.emplace(Description.SamplesPerSecond, Description.Channels, Description.OutputGain);
+				}
 				if (Description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents) {
 					ContinuousFrequency = HostPerformanceCounter().Frequency();
 				}

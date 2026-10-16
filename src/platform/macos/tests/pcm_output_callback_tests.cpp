@@ -6,6 +6,7 @@
 #include <array>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 
 static void Require(bool condition, const char* message) {
@@ -108,11 +109,30 @@ static void TestDefaultTargetRepeatedMaximumPulls() {
 	Require(state.CopiedFrames.load() == consumed_frames && state.RequestedFrames.load() == consumed_frames && state.SilentFrames.load() == 0 && state.ActiveCallbacks.load() == 0, "producer/callback accounting remains exact after repeated wrapped maximum pulls");
 }
 
+static void TestAuthoredMasteringAtFinalCallback() {
+	sgre::platform::PcmDeviceCallbackState state(CallbackDescription());
+	state.Leveler.emplace(48000, 2, 2);
+	state.Enabled.store(true);
+	Require(state.Ring.Write(std::array<float, 4>{0.125f, -0.25f, 2, -1}) == sgre::audio::PcmOutputRingStatus::Ready, "already mixed source/movie data enters the same software ring");
+	std::array<float, 6> samples{};
+	auto output = Output(samples);
+	AudioUnitRenderActionFlags flags = 0;
+	Require(sgre::platform::RenderPcmDeviceOutput(&state, &flags, nullptr, 0, 3, &output) == noErr, "authored output policy must run through the production callback without creating a device");
+	Require(samples[0] == 0.25f && samples[1] == -0.5f && samples[2] == 0.98f && samples[3] == -0.49f && samples[4] == 0 && samples[5] == 0, "callback must level the final mix once, link stereo peaks and retain missing-frame silence");
+	Require(state.CopiedFrames.load() == 2 && state.SilentFrames.load() == 1, "leveling must preserve actual frame accounting and delivery clocks");
+	Require(state.Ring.Write(std::array<float, 2>{std::numeric_limits<float>::quiet_NaN(), 1}) == sgre::audio::PcmOutputRingStatus::Ready, "invalid sample fixture enters the real producer ring");
+	Require(sgre::platform::RenderPcmDeviceOutput(&state, &flags, nullptr, 0, 3, &output) != noErr && state.Failure.load() == sgre::platform::PcmDeviceCallbackFailure::InvalidSamples && std::all_of(samples.begin(), samples.end(), [](float sample) {
+		return sample == 0;
+	}),
+	    "callback must silence invalid samples and report failure without throwing across the OS boundary");
+}
+
 int main() {
 	try {
 		TestDefaultTargetRepeatedMaximumPulls();
 		TestActualCallbackPcmAndStarvation();
 		TestInvalidAndConcurrentCallback();
+		TestAuthoredMasteringAtFinalCallback();
 		std::cout << "production AudioUnit callback CPU contract passed; no AudioUnit/device was created or started\n";
 		return 0;
 	} catch (const std::exception& error) {

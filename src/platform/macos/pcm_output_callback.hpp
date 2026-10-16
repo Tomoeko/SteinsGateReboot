@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sgre/audio/pcm_output_delivery.hpp"
+#include "sgre/audio/pcm_output_leveler.hpp"
 #include "sgre/audio/pcm_output_ring.hpp"
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -17,7 +18,8 @@ namespace sgre::platform {
 		ConcurrentCallback,
 		RingTransfer,
 		CounterOverflow,
-		DeliveryQueue
+		DeliveryQueue,
+		InvalidSamples
 	};
 
 	// Unit disposal and callback quiescence precede state destruction. The callback owns no shared_ptr.
@@ -29,6 +31,7 @@ namespace sgre::platform {
 		}
 		audio::PcmOutputRing Ring;
 		std::optional<audio::PcmOutputDeliveryQueue> Deliveries;
+		std::optional<audio::PcmOutputLeveler> Leveler;
 		std::uint64_t DeliverySequence = 0;
 		std::atomic<bool> Enabled = false;
 		std::atomic_flag Rendering = ATOMIC_FLAG_INIT;

@@ -1513,6 +1513,8 @@ namespace sgre::platform {
 					output_description.SamplesPerSecond = m_Run.Offline.SamplesPerSecond;
 					output_description.Channels = m_Run.Offline.Channels;
 					output_description.DeliveryMode = MacPcmDeliveryMode::CallbackEvents;
+					// User-authorized macOS level adjustment after the complete Sound+Movie mix.
+					output_description.OutputGain = 2;
 					m_HardwareAudio = std::make_unique<MacPcmOutput>(output_description);
 					m_MovieDelivery = std::make_unique<media::MoviePcmDelivery>(*m_MovieAudio, *m_Output, *m_HardwareAudio);
 				}
