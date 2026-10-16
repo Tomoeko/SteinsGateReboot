@@ -169,6 +169,10 @@ namespace sgre::scene {
 		return *m_Implementation->Require(project).Resource;
 	}
 
+	std::shared_ptr<const resource::MotionResource> MotionProjectRegistry::RetainMetadata(MotionProjectId project) const {
+		return m_Implementation->Require(project).Resource;
+	}
+
 	MotionProjectIdentity MotionProjectRegistry::Identity(MotionProjectId project) const {
 		return m_Implementation->Require(project).Identity;
 	}

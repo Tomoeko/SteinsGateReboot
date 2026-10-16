@@ -37,6 +37,9 @@ namespace sgre::scene {
 		EmoteVelvetyFrameOwner(const MotionRootScene& actual_root, const MotionPlayerCommands& actual_commands, const MotionScenePlayer& actual_plain, EmoteVelvetyFrameDefinition definition, float actual_view_height);
 		[[nodiscard]] EmoteVelvetyInputFrame Prepare(float elapsed_ticks, const EmoteVelvetyGlobalControls& actual_controls);
 		[[nodiscard]] const resource::MotionMeshMatrix& PhysicsToWorld() const;
+		// Skip resets native history readiness, while the cached anchor and completed conversion remain valid.
+		void RequireCanSkip() const;
+		void Skip();
 		void RequireCanAssignHistory(const EmoteVelvetyFrameOwner& source) const;
 		void AssignHistory(const EmoteVelvetyFrameOwner& source);
 		// Native50FD90 retains physical numeric cells. Capture their value before the actual portable tree retires.
@@ -58,7 +61,9 @@ namespace sgre::scene {
 		float m_DepthScale = 0;
 		const std::thread::id m_Thread = std::this_thread::get_id();
 		bool m_Lookup = false;
+		// Captured numeric-anchor provenance survives Clear and the independent native B9 reset.
 		bool m_HasReference = false;
+		bool m_HistoryInitialized = false;
 		bool m_First = true;
 		bool m_Prepared = false;
 		bool m_Cleared = false;

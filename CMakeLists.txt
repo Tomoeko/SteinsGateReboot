@@ -944,6 +944,7 @@ if(SGRE_BUILD_TESTS)
 		emote_selector_controls
 		emote_selector_scheduler
 		emote_easing
+		emote_skip_transition
 		emote_variable_controls
 		emote_timeline_tracks
 		emote_soft_pendulum

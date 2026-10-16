@@ -63,7 +63,9 @@ namespace sgre::scene {
 		}
 
 		void RequirePhase() const {
-			if (!Runtime.ResourceBorrowsLive() || (Current ? Commands.CachedTimeline() != Current->Timeline : Commands.CachedTimeline() != nullptr)) {
+			// Clear retains the timeline and parameter cells after its selected resource is unregistered.
+			// Only a live selected tree needs those source registrations during the root-only phase.
+			if (Runtime.IsClosed() || (Current && !Current->Cleared && !Runtime.ResourceBorrowsLive()) || (Current ? Commands.CachedTimeline() != Current->Timeline : Commands.CachedTimeline() != nullptr)) {
 				throw std::runtime_error("motion scene phase requires its actual installed live selection and registered resources");
 			}
 		}
@@ -309,6 +311,7 @@ namespace sgre::scene {
 				state.Current->Nodes.reset();
 				state.Current->Cleared = true;
 			}
+			state.Commands.m_SelectedLayersCleared = true;
 		});
 	}
 
@@ -358,7 +361,7 @@ namespace sgre::scene {
 
 	bool MotionScenePlayer::ResourcesLive() const {
 		const auto& state = *m_Implementation;
-		return state.Runtime.ResourceBorrowsLive() && (state.Current || state.Commands.CachedTimeline() == nullptr);
+		return !state.Runtime.IsClosed() && (!state.Current || state.Current->Cleared || state.Runtime.ResourceBorrowsLive()) && (state.Current || state.Commands.CachedTimeline() == nullptr);
 	}
 
 	const MotionSceneEvaluation* MotionScenePlayer::Scene() const noexcept {

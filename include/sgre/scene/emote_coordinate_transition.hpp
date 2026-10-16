@@ -18,6 +18,7 @@ namespace sgre::scene {
 		void Set(const std::array<float, 2>& coordinate, float duration = 0, float easing = 0);
 		// Native export/import copies pixel-valued controls while retaining the destination coordinate policy.
 		void AssignState(const EmoteCoordinateTransition& source) noexcept;
+		void FinishTransitions() noexcept;
 		[[nodiscard]] bool Changing() const noexcept;
 		[[nodiscard]] std::array<float, 2> Current() const;
 		// The property phase consumes pixel units; script getters consume Current instead.

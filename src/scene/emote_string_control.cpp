@@ -13,6 +13,7 @@
 #include <map>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 #include <utility>
 #include <variant>
 
@@ -397,6 +398,7 @@ namespace sgre::scene {
 		std::vector<std::string> BoundSpeedVariables;
 		EmoteVelvetyPostureReader Posture;
 		std::map<std::uint32_t, std::unique_ptr<StringControlInstance>> Instances;
+		const std::thread::id OwnerThread = std::this_thread::get_id();
 		std::exception_ptr Failure;
 		resource::MotionPoint PixelOrigin;
 		resource::MotionPoint PhysicalOrigin;
@@ -416,6 +418,26 @@ namespace sgre::scene {
 	EmoteStringControl::~EmoteStringControl() noexcept = default;
 	void EmoteStringControl::Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent) {
 		m_Implementation->Update(elapsed_ticks, actual_frame, actual_parent);
+	}
+	void EmoteStringControl::RequireCanSkip() const {
+		const auto& state = *m_Implementation;
+		if (state.OwnerThread != std::this_thread::get_id()) {
+			throw std::runtime_error("Emote String skip requires its actual serialized owner thread");
+		}
+		if (state.Failure) {
+			std::rethrow_exception(state.Failure);
+		}
+		if (!state.Subscribed || state.Closing || state.Operating || !state.Valid) {
+			throw std::runtime_error("Emote String skip requires its live idle actual UID owner");
+		}
+		// Pending collider joins are not consumed by the native flag-only operation.
+	}
+	void EmoteStringControl::Skip() {
+		RequireCanSkip();
+		for (auto& [occurrence, instance] : m_Implementation->Instances) {
+			static_cast<void>(occurrence);
+			instance->Reset = true;
+		}
 	}
 	void EmoteStringControl::RequireReady() const {
 		m_Implementation->RequireReady();

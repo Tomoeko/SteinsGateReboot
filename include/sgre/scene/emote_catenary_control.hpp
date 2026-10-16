@@ -22,6 +22,9 @@ namespace sgre::scene {
 		// Native assignment copies mutable values while retaining this owner's resources and bindings.
 		void RequireCanAssignState(const EmoteCatenaryControl& source) const;
 		void AssignState(const EmoteCatenaryControl& source);
+		// Native Common skip marks retained occurrences without advancing or rebuilding them.
+		void RequireCanSkip() const;
+		void Skip();
 		void RequireReady() const;
 		// Native2f22c0 runs after actual plain Progress/global/collider phases, never a second Motion update.
 		void Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent = nullptr);

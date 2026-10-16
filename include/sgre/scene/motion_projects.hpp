@@ -50,6 +50,8 @@ namespace sgre::scene {
 		[[nodiscard]] MotionProjectIdentity Identity(MotionProjectId project) const;
 		// Borrow the exact immutable registration without adding a document/PSB retain.
 		[[nodiscard]] const resource::MotionResource& Resource(MotionProjectId project) const;
+		// Retains immutable CPU metadata only; registration counts and source textures are unchanged.
+		[[nodiscard]] std::shared_ptr<const resource::MotionResource> RetainMetadata(MotionProjectId project) const;
 		// Name order is the native case-sensitive object-map order. Missing projects produce no names.
 		[[nodiscard]] std::size_t WriteCharacterNames(MotionProjectId project, std::span<std::string_view> output) const;
 		// Character and name views borrow this live registration and expire after removal/rename.

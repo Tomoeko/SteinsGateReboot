@@ -1,5 +1,11 @@
 #include "sgre/scene/emote_velvety_frame.hpp"
 
+#include "sgre/scene/emote_bloom_control.hpp"
+#include "sgre/scene/emote_catenary_control.hpp"
+#include "sgre/scene/emote_jelly_control.hpp"
+#include "sgre/scene/emote_string_control.hpp"
+#include "sgre/scene/emote_synchronize_control.hpp"
+
 #include "native_clear_frame_vectors.hpp"
 
 #include "sgre/scene/motion_bezier_lattice.hpp"
@@ -392,6 +398,217 @@ static void TestColdClearAndColdNextUpdateGate() {
 	Require(actual.Plain->CanMutate(), "unsupported cold history does not invent samples or block actual plain destruction");
 }
 
+static bool SameSkipLattice(const sgre::resource::MotionBezierLattice& left, const sgre::resource::MotionBezierLattice& right) {
+	if (left.EncodedDegree != right.EncodedDegree || left.Controls.size() != right.Controls.size()) {
+		return false;
+	}
+	for (std::size_t index = 0; index != left.Controls.size(); ++index) {
+		if (std::bit_cast<std::uint32_t>(left.Controls[index].X) != std::bit_cast<std::uint32_t>(right.Controls[index].X) || std::bit_cast<std::uint32_t>(left.Controls[index].Y) != std::bit_cast<std::uint32_t>(right.Controls[index].Y)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+static std::vector<sgre::resource::MotionPoint> SkipCompletedPositions(const sgre::scene::MotionScenePlayer& plain) {
+	Require(plain.Scene() != nullptr, "Skip fixture requires its genuine completed scene");
+	std::vector<sgre::resource::MotionPoint> result;
+	for (const auto& packet : plain.Scene()->Packets().Nodes()) {
+		if (packet.Command.Geometry) {
+			result.insert(result.end(), packet.Command.Geometry->Positions.begin(), packet.Command.Geometry->Positions.end());
+		}
+	}
+	return result;
+}
+
+static void RequireSkipPositions(const std::vector<sgre::resource::MotionPoint>& actual, const std::vector<sgre::resource::MotionPoint>& expected) {
+	Require(actual.size() == expected.size(), "Skip must retain the completed geometry extent");
+	for (std::size_t index = 0; index != actual.size(); ++index) {
+		Require(std::bit_cast<std::uint32_t>(actual[index].X) == std::bit_cast<std::uint32_t>(expected[index].X) && std::bit_cast<std::uint32_t>(actual[index].Y) == std::bit_cast<std::uint32_t>(expected[index].Y), "Skip must not recalculate or overwrite completed packet positions");
+	}
+}
+
+static std::shared_ptr<sgre::resource::PsbDocument> SkipControlDocument() {
+	auto document = Document();
+	auto& timeline = MutableField(MutableField(MutableField(MutableField(document->Root, "object"), "character"), "motion"), "main");
+	auto target = Layer(true);
+	MutableField(target, "children") = Atom(sgre::resource::PsbArray{});
+	MutableField(target, "meshSyncChildMask") = Atom(std::int64_t{0});
+	auto source = target;
+	MutableField(source, "uid") = Atom(std::string("skip-source-uid"));
+	MutableField(source, "label") = Atom(std::string("skip-source"));
+	MutableField(timeline, "layer") = Atom(sgre::resource::PsbArray{std::move(target), std::move(source)});
+	return document;
+}
+
+template <typename Control, typename Definition>
+static void CheckActualControlSkipReset(const Definition& definition, std::string_view family) {
+	Fixture fixture(SkipControlDocument());
+	PlainFixture actual(fixture);
+	Require(actual.Commands.LayerUids().Matches("mesh-uid").size() == 1 && actual.Commands.LayerUids().Matches("skip-source-uid").size() == 1, "Skip controls require independent actual source and target UID cells");
+	const auto target = actual.Commands.LayerUids().Matches("mesh-uid").front().Layer;
+	const auto source = actual.Commands.LayerUids().Matches("skip-source-uid").front().Layer;
+	Control skipped(actual.Commands, definition);
+	Control continuous(actual.Commands, definition);
+	Require(skipped.InstanceCount() == 1 && continuous.InstanceCount() == 1, std::string(family) + " requires genuine independently owned UID occurrences");
+	sgre::scene::EmoteVelvetyFrameDefinition frame_definition;
+	frame_definition.ReferenceSpeedLimit = 0;
+	sgre::scene::EmoteVelvetyFrameOwner frame(actual.Root, actual.Commands, *actual.Plain, frame_definition, 720);
+	sgre::scene::EmoteVelvetyGlobalControls globals;
+	globals.Flags = 0;
+	// Actual root scale changes make prediction history observable, including Synchronize's correction path.
+	for (const float scale : {1.0f, 1.125f, 1.375f, 1.25f}) {
+		actual.Root.SetZoom(scale, scale);
+		actual.Plain->Progress(0);
+		const auto input = frame.Prepare(1, globals);
+		skipped.Update(1, input);
+		continuous.Update(1, input);
+		Require(skipped.LastUpdatedCount() == 1 && continuous.LastUpdatedCount() == 1, std::string(family) + " warm history must run the actual active physical callback");
+	}
+	const auto instance_count = skipped.InstanceCount();
+	const auto subscriptions = actual.Commands.LayerUids().SubscriptionCount();
+	const auto before_tick = actual.Commands.ClockState().TickCount;
+	const auto before_lattice = target.CurrentMesh();
+	const auto before_positions = SkipCompletedPositions(*actual.Plain);
+	const auto before_posture = skipped.PartPosture();
+	const auto before_updated = skipped.LastUpdatedCount();
+	const auto before_writes = skipped.LastMeshWriteCount();
+	// Native Common Skip resets the frame reference before marking each occurrence.
+	frame.Skip();
+	skipped.RequireCanSkip();
+	skipped.Skip();
+	skipped.Skip();
+	Require(skipped.InstanceCount() == instance_count && actual.Commands.LayerUids().SubscriptionCount() == subscriptions && actual.Commands.ClockState().TickCount == before_tick, std::string(family) + " Skip must retain UID ownership and not advance plain time");
+	Require(SameSkipLattice(target.CurrentMesh(), before_lattice), std::string(family) + " Skip must not write a pending mesh");
+	RequireSkipPositions(SkipCompletedPositions(*actual.Plain), before_positions);
+	Require(skipped.LastUpdatedCount() == before_updated && skipped.LastMeshWriteCount() == before_writes && skipped.PartPosture().Rotation == before_posture.Rotation && skipped.PartPosture().Scale == before_posture.Scale, std::string(family) + " Skip marks reset without preparing a pose or changing completed counters");
+
+	Control fresh(actual.Commands, definition);
+	actual.Root.SetZoom(1.5f, 1.5f);
+	actual.Plain->Progress(0);
+	auto source_lattice = sgre::scene::IdentityMotionBezierLattice(0x33);
+	for (std::size_t index = 0; index != source_lattice.Controls.size(); ++index) {
+		source_lattice.Controls[index].X += static_cast<float>(index + 1) * .003125f;
+	}
+	static_cast<void>(source.SetMesh(1, &source_lattice, true));
+	const auto input = frame.Prepare(1, globals);
+	// Native526df0 compares with the previous pending override; give each peer the identical real publication input.
+	Require(target.SetMesh(1, &source_lattice, false), "continuous comparison requires its actual nonidentity pending mesh input");
+	continuous.Update(1, input);
+	const auto continued_lattice = target.CurrentMesh();
+	Require(target.SetMesh(1, &source_lattice, false), "reset comparison requires the same actual pending mesh input");
+	skipped.Update(1, input);
+	const auto reset_lattice = target.CurrentMesh();
+	Require(target.SetMesh(1, &source_lattice, false), "fresh comparison requires the same actual pending mesh input");
+	fresh.Update(1, input);
+	const auto fresh_lattice = target.CurrentMesh();
+	Require(reset_lattice.EncodedDegree != 0 && SameSkipLattice(reset_lattice, fresh_lattice), std::string(family) + " reset flag must reinitialize the actual solver/prediction like a fresh occurrence at this same pose");
+	Require(!SameSkipLattice(continued_lattice, fresh_lattice), std::string(family) + " test history must distinguish ordinary continuation from the reset state");
+	Require(skipped.LastUpdatedCount() == 1 && fresh.LastUpdatedCount() == 1, std::string(family) + " reset must be consumed only by the next real positive update");
+	fresh.Close();
+	skipped.Close();
+	continuous.Close();
+	Require(actual.Commands.LayerUids().SubscriptionCount() == 0 && fixture.Manager.ReferenceCount(fixture.Project) == 1, std::string(family) + " actual controls must unsubscribe before selected resource retirement");
+}
+
+static void TestSkipFiveActualOccurrenceResetFlags() {
+	sgre::scene::EmoteBloomControlDefinition bloom;
+	bloom.Uid = "mesh-uid";
+	bloom.PredictionDegree = 3;
+	bloom.Physics.SizeHorizontal = 2;
+	bloom.Physics.SizeVertical = 4;
+	bloom.Physics.Mass = .4f;
+	bloom.Physics.Elastic = 2.5f;
+	bloom.Physics.Friction = .25f;
+	bloom.Physics.RotateWeight = .4f;
+	bloom.Physics.Tresses = {{.2f, .2f}};
+	bloom.Physics.Fixes = {{.25f, .25f}};
+	bloom.Physics.CorrectFix = true;
+	CheckActualControlSkipReset<sgre::scene::EmoteBloomControl>(bloom, "Bloom");
+
+	sgre::scene::EmoteStringControlDefinition string;
+	string.Physics.Uid = "mesh-uid";
+	string.Physics.SizeHorizontal = 2;
+	string.Physics.SizeVertical = 4;
+	string.Physics.Mass = 1;
+	string.Physics.Gravity = 1;
+	string.Physics.SplitLeft = .5f;
+	string.Physics.SplitRight = .5f;
+	string.Physics.ParticlesPerMeter = 1;
+	string.Physics.Tresses = {{.5f, 0, .5f, 1}};
+	string.Output.Fixes = {{.25f, .25f}};
+	string.Output.CorrectFix = true;
+	string.PredictionDegree = 3;
+	CheckActualControlSkipReset<sgre::scene::EmoteStringControl>(string, "String");
+
+	sgre::scene::EmoteCatenaryControlDefinition catenary;
+	catenary.Uid = "mesh-uid";
+	catenary.Physics.Uid = catenary.Uid;
+	catenary.Physics.SizeHorizontal = 2;
+	catenary.Physics.SizeVertical = 3;
+	catenary.Physics.Mass = .8f;
+	catenary.Physics.Gravity = 2.5f;
+	catenary.Physics.Length = 3;
+	catenary.Physics.ParticleCount = 3;
+	catenary.Physics.RestPoints = {{.2f, .15f}, {.5f, .5f}, {.8f, .65f}};
+	catenary.Physics.DeformIterations = 3;
+	catenary.Physics.Fixes = {{{.2f, .15f}, {.8f, .65f}}};
+	catenary.Physics.CoordinateScale = {1, 1, 1};
+	catenary.PredictionDegree = 3;
+	CheckActualControlSkipReset<sgre::scene::EmoteCatenaryControl>(catenary, "Catenary");
+
+	sgre::scene::EmoteJellyControlDefinition jelly;
+	jelly.Physics.Uid = "mesh-uid";
+	jelly.Physics.SizeHorizontal = 2;
+	jelly.Physics.SizeVertical = 3;
+	jelly.Physics.Gravity = 1;
+	jelly.Physics.Sensitivity = 1;
+	jelly.Physics.ParticleCount = 3;
+	jelly.Physics.ElasticHorizontal = 2;
+	jelly.Physics.ElasticVertical = 2;
+	jelly.Physics.Tresses = {{{.5f, .5f}, .25f, {0, 0, 1}}};
+	jelly.Physics.Fixes = {{.25f, .25f}};
+	jelly.Physics.CorrectFix = true;
+	jelly.PredictionDegree = 3;
+	CheckActualControlSkipReset<sgre::scene::EmoteJellyControl>(jelly, "Jelly");
+
+	sgre::scene::EmoteSynchronizeDefinition synchronize;
+	synchronize.Uid = "mesh-uid";
+	synchronize.SourceUid = "skip-source-uid";
+	synchronize.Width = 2;
+	synchronize.Height = 3;
+	synchronize.Fixes = {{.25f, .25f}};
+	synchronize.CorrectFix = true;
+	synchronize.PredictionDegree = 3;
+	CheckActualControlSkipReset<sgre::scene::EmoteSynchronizeControl>(synchronize, "Synchronize");
+}
+
+static void TestSkipReferenceHistoryAndWarmClearProvenance() {
+	Fixture fixture(ReferenceDocument({2, 0}));
+	PlainFixture actual(fixture);
+	sgre::scene::EmoteVelvetyFrameOwner frame(actual.Root, actual.Commands, *actual.Plain, {}, 100);
+	sgre::scene::EmoteVelvetyGlobalControls controls;
+	static_cast<void>(frame.Prepare(1, controls));
+	actual.Commands.SetTickCount(4);
+	actual.Plain->Progress(0);
+	const auto before = frame.Prepare(.5f, controls);
+	const auto inverse = frame.PhysicsToWorld();
+	const auto before_matrix = Matrices(before, inverse);
+	Require(!before.ResetRotationReference && before.WorldToPhysics.TranslationX != 0, "Skip history fixture must begin with consumed first-frame and a real speed-limit displacement deficit");
+	const auto tick = actual.Commands.ClockState().TickCount;
+	frame.Skip();
+	frame.Skip();
+	Require(Matrices(before, frame.PhysicsToWorld()) == before_matrix && actual.Commands.ClockState().TickCount == tick && actual.Plain->Scene() != nullptr, "history Skip must preserve the completed inverse, scene and plain time");
+	frame.ClearPlain(*actual.Plain);
+	Require(actual.Plain->Scene() == nullptr && fixture.Manager.ReferenceCount(fixture.Project) == 1, "warm Skip then Clear must retain actual numeric-anchor provenance without keeping the tree");
+	const auto next = frame.Prepare(1, controls);
+	Require(next.ResetRotationReference && next.WorldToPhysics.TranslationX == 0 && next.WorldToPhysics.TranslationY == 0, "Skip must reinitialize both reference histories at the retained raw anchor on the next actual Prepare");
+	Require(!frame.Prepare(1, controls).ResetRotationReference, "rotation first-frame reset must be consumed once by real Prepare");
+	frame.Skip();
+	frame.ClearPlain(*actual.Plain);
+	Require(frame.Prepare(0, controls).ResetRotationReference, "repeated post-clear Skip preserves warm provenance and remains a real history reset");
+}
+
 int main() {
 	try {
 		TestActualCommonMetadataPresenceAndDefaults();
@@ -399,6 +616,8 @@ int main() {
 		TestWarmClearOriginalFrames();
 		TestWarmChildClearAndExactOwnerAdmission();
 		TestColdClearAndColdNextUpdateGate();
+		TestSkipReferenceHistoryAndWarmClearProvenance();
+		TestSkipFiveActualOccurrenceResetFlags();
 		std::cout << "Actual Velvety frame: Common metadata, real plain root/scene map, unit/rotation flags, reference history and bounded-speed deficit passed\n";
 		return 0;
 	} catch (const std::exception& error) {

@@ -53,6 +53,7 @@ namespace sgre::script {
 		GetBustScale = 26,
 		SetBlink = 29,
 		GetBlink = 30,
+		Skip = 31,
 		Pass = 32,
 		SetVisible = 33,
 		GetVisible = 34,
@@ -252,6 +253,13 @@ namespace sgre::script {
 			const auto input = [&](std::int32_t index) {
 				return Vm.NativeAllocatedStackValue(index);
 			};
+			if (method == EmoteNativeMethod::Skip) {
+				if (!record->Detached) {
+					record->Task->Player().Skip();
+				}
+
+				return SquirrelNativeResult::NoValues();
+			}
 			if (method == EmoteNativeMethod::Pass) {
 				if (!record->Detached) {
 					record->Task->Player().Pass();
@@ -532,7 +540,7 @@ namespace sgre::script {
 			owner->Construct(arguments, weak);
 			return SquirrelNativeResult::NoValues();
 		}));
-		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 48> methods{{{"pass", EmoteNativeMethod::Pass}, {"getAnimating", EmoteNativeMethod::GetAnimating}, {"assignState", EmoteNativeMethod::AssignState}, {"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
+		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 49> methods{{{"skip", EmoteNativeMethod::Skip}, {"pass", EmoteNativeMethod::Pass}, {"getAnimating", EmoteNativeMethod::GetAnimating}, {"assignState", EmoteNativeMethod::AssignState}, {"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
 		    {"setBlinkEnabled", EmoteNativeMethod::SetBlink}, {"getBlinkEnabled", EmoteNativeMethod::GetBlink},
 		    {"setVisible", EmoteNativeMethod::SetVisible}, {"getVisible", EmoteNativeMethod::GetVisible},
 		    {"playTimeline", EmoteNativeMethod::Play}, {"stopTimeline", EmoteNativeMethod::Stop}, {"getTimelinePlaying", EmoteNativeMethod::Playing},
@@ -555,7 +563,7 @@ namespace sgre::script {
 				if (bytes.size() != descriptor.size() || !std::equal(bytes.begin(), bytes.end(), descriptor.begin())) {
 					throw std::runtime_error("Emote captured route does not match its actual native method");
 				}
-				if (method != EmoteNativeMethod::Pass && method != EmoteNativeMethod::GetAnimating && method != EmoteNativeMethod::AssignState && method != EmoteNativeMethod::StartWind && method != EmoteNativeMethod::StopWind && method != EmoteNativeMethod::SetMeshDivision && method != EmoteNativeMethod::GetMeshDivision && method != EmoteNativeMethod::SetBustScale && method != EmoteNativeMethod::GetBustScale && method != EmoteNativeMethod::SetHairScale && method != EmoteNativeMethod::GetHairScale && method != EmoteNativeMethod::SetPartsScale && method != EmoteNativeMethod::GetPartsScale && method != EmoteNativeMethod::GetLeft && method != EmoteNativeMethod::GetTop && method != EmoteNativeMethod::GetScale && method != EmoteNativeMethod::GetRotation && method != EmoteNativeMethod::GetColor && method != EmoteNativeMethod::Pause && method != EmoteNativeMethod::Clear && method != EmoteNativeMethod::GetVariable && method != EmoteNativeMethod::GetBlend && method != EmoteNativeMethod::SetVisible && method != EmoteNativeMethod::GetVisible && method != EmoteNativeMethod::SetBlink && method != EmoteNativeMethod::GetBlink) {
+				if (method != EmoteNativeMethod::Skip && method != EmoteNativeMethod::Pass && method != EmoteNativeMethod::GetAnimating && method != EmoteNativeMethod::AssignState && method != EmoteNativeMethod::StartWind && method != EmoteNativeMethod::StopWind && method != EmoteNativeMethod::SetMeshDivision && method != EmoteNativeMethod::GetMeshDivision && method != EmoteNativeMethod::SetBustScale && method != EmoteNativeMethod::GetBustScale && method != EmoteNativeMethod::SetHairScale && method != EmoteNativeMethod::GetHairScale && method != EmoteNativeMethod::SetPartsScale && method != EmoteNativeMethod::GetPartsScale && method != EmoteNativeMethod::GetLeft && method != EmoteNativeMethod::GetTop && method != EmoteNativeMethod::GetScale && method != EmoteNativeMethod::GetRotation && method != EmoteNativeMethod::GetColor && method != EmoteNativeMethod::Pause && method != EmoteNativeMethod::Clear && method != EmoteNativeMethod::GetVariable && method != EmoteNativeMethod::GetBlend && method != EmoteNativeMethod::SetVisible && method != EmoteNativeMethod::GetVisible && method != EmoteNativeMethod::SetBlink && method != EmoteNativeMethod::GetBlink) {
 					// Native04dc10 pops its code descriptor before calling raw-VM methods.
 					active.SetNativeStackSize(active.NativeStackSize() - 1);
 					arguments = arguments.first(arguments.size() - 1);

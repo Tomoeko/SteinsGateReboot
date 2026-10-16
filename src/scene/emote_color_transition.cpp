@@ -36,6 +36,12 @@ namespace sgre::scene {
 		}
 	}
 
+	void EmoteColorTransition::FinishTransitions() noexcept {
+		for (auto& component : m_Components) {
+			component.FinishTransitions();
+		}
+	}
+
 	std::uint32_t EmoteColorTransition::Advance(float elapsed_ticks) {
 		if (!std::isfinite(elapsed_ticks) || elapsed_ticks < 0) {
 			throw std::runtime_error("Emote color transition requires finite nonnegative elapsed ticks");

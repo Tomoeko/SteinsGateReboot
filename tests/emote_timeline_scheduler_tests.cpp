@@ -535,8 +535,38 @@ static void TestPassActualDispatchReentryFailsTheScheduler() {
 	    "idle valid");
 }
 
+static void TestSkipActiveErasureOrderFlagsAndLoopCache() {
+	for (const auto flags : {0u, 2u, 4u, 6u}) {
+		ActualMotionFixture actual;
+		auto controls = actual.Controls();
+		const auto document = Document({Labeled("finite", Definition({Track("instant", {Key(0, 1), Key(2, 3), Hidden(4)})}))});
+		sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+		});
+		scheduler.Play("finite", flags);
+		scheduler.Skip();
+		Require(!scheduler.IsPlaying() && scheduler.State("finite")->Position == 4 && scheduler.State("finite")->Flags == flags, "Skip retires every finite active occurrence including flag4 without rewriting retained flags");
+	}
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("A", Definition({Track("instant", {Key(0, 1), Key(2, 3), Hidden(4)})})), Labeled("B", Definition({Track("instant", {Key(0, 11), Key(2, 13), Hidden(4)})})), Labeled("loop", Definition({Track("instant", {Key(0, 21), Key(2, 23), Hidden(6)})}, 0, 6, 6))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	scheduler.Play("A");
+	scheduler.Play("B", 1);
+	scheduler.Play("loop", 3);
+	scheduler.SetBlendRatio("loop", .25f, 8);
+	const auto tick = actual.Parent.ClockState().TickCount;
+	scheduler.Skip();
+	Require(scheduler.ActiveCount() == 1 && scheduler.IsPlaying("loop") && controls->Read("instant") == 13, "erasing the first finite occurrence must still process the shifted next owner in native active order");
+	Require(scheduler.State("loop")->Position == 0 && scheduler.BlendRatio("loop") == 1 && !scheduler.Animating() && actual.Parent.ClockState().TickCount == tick, "loop Skip finishes only its blend control while retaining cached ratio, position and actual plain clock");
+	scheduler.Update(0);
+	Require(scheduler.BlendRatio("loop") == 1, "ordinary zero-time scheduler admission stays unchanged");
+	scheduler.Update(1);
+	Require(scheduler.BlendRatio("loop") == .25f && scheduler.State("loop")->Position == 1 && scheduler.State("loop")->Flags == 3, "the genuine next difference phase publishes finished blend Current without restarting it");
+}
 int main() {
 	try {
+		TestSkipActiveErasureOrderFlagsAndLoopCache();
 		TestPassFiniteActiveOrderAndLoopExclusion();
 		TestPassDifferenceFadeAndAlreadyPassedState();
 		TestPassRetainedPlainFlagFourAndCoverageInvalidation();

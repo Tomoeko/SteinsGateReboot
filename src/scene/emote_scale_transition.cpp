@@ -11,6 +11,10 @@ namespace sgre::scene {
 		// Native2D7350 retains signed and zero targets; no percentage/unit conversion or clamp.
 		m_Component.Set(scale, duration, easing);
 	}
+	void EmoteScaleTransition::FinishTransitions() noexcept {
+		m_Component.FinishTransitions();
+	}
+
 	bool EmoteScaleTransition::Changing() const noexcept {
 		return m_Component.Changing();
 	}

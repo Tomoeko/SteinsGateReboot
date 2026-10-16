@@ -18,6 +18,8 @@ The Movie/Sound delivery owner renders both actual producers into one bounded bl
 
 Five quiet targets pass after rebuilding the public core, shared macOS clock, audio and media archives. Separate strict callback fixtures and the exact normal host compile pass; hardware output is never opened by those checks. The actual offline AVAudioEngine graph supplies seven measured callback quanta and 3,865 frames, retaining 3,840 completed source frames and excluding underrun silence. This establishes the admitted source-node timing relation, not device/DAC synchronization. Actual device startup, route changes, shutdown, performance and audible/native comparisons remain open. Live counter fields are separate observations, not one coherent cross-field sample.
 
+The actual encrypted prologue resource also passes a quiet source-node receiving probe. An independently decoded 144,648-frame PCM prefix matches every delivered numeric sample through the real Movie registry, Sound mix, submission owner and AVAudioSourceNode callback; 785 underrun frames remain excluded. A second lane runs the actual video/audio workers through 96,000 master frames, retaining three owning video samples and stopping/joining the workers cleanly. All 503 input identities and the ten-object compiler/link closure pass an independent review. This covers a bounded offline prefix; full-file completion, hardware output, native PCM and opening/subtitle synchronization remain open.
+
 Primary Apple references:
 
 - [Core Audio common tasks](https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/CoreAudioOverview/ARoadmaptoCommonTasks/ARoadmaptoCommonTasks.html): output-unit PCM conversion/channel mapping and default-vs-system output.

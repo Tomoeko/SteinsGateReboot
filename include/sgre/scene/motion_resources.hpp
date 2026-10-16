@@ -45,6 +45,8 @@ namespace sgre::scene {
 		[[nodiscard]] MotionProjectIdentity Identity(MotionProjectId project) const;
 		// The actual registered model expires on final unregister; this adds no retain.
 		[[nodiscard]] const resource::MotionResource& Resource(MotionProjectId project) const;
+		// Retains immutable CPU metadata only; registration counts and source textures are unchanged.
+		[[nodiscard]] std::shared_ptr<const resource::MotionResource> RetainMetadata(MotionProjectId project) const;
 		[[nodiscard]] std::uint32_t ReferenceCount(MotionProjectId project) const;
 		[[nodiscard]] std::size_t WriteRegistrationOrder(std::span<MotionProjectId> output) const;
 		[[nodiscard]] std::size_t WriteSourceNames(MotionProjectId project, std::span<std::string_view> output) const;

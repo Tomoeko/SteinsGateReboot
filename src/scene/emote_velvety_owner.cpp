@@ -324,6 +324,65 @@ namespace sgre::scene {
 	void EmoteVelvetyOwner::Update(float elapsed_ticks, const EmoteVelvetyGlobalControls& actual_controls) {
 		m_Implementation->Update(elapsed_ticks, actual_controls);
 	}
+	void EmoteVelvetyOwner::RequireCanSkip() const {
+		const auto& state = *m_Implementation;
+		state.RequireIdle();
+		if (!state.Enabled) {
+			return;
+		}
+		state.Frame->RequireCanSkip();
+		state.Collisions->RequireCanSkip();
+		for (const auto& control : state.Blooms) {
+			control->RequireCanSkip();
+		}
+		for (const auto& control : state.Strings) {
+			control->RequireCanSkip();
+		}
+		for (const auto& control : state.Catenaries) {
+			control->RequireCanSkip();
+		}
+		for (const auto& control : state.Jellies) {
+			control->RequireCanSkip();
+		}
+		for (const auto& control : state.Synchronize) {
+			control->RequireCanSkip();
+		}
+	}
+
+	void EmoteVelvetyOwner::Skip() {
+		RequireCanSkip();
+		auto& state = *m_Implementation;
+		if (!state.Enabled) {
+			return;
+		}
+		state.Operating = true;
+		try {
+			state.Frame->Skip();
+			state.Collisions->Skip();
+			for (auto& control : state.Blooms) {
+				control->Skip();
+			}
+			for (auto& control : state.Strings) {
+				control->Skip();
+			}
+			for (auto& control : state.Catenaries) {
+				control->Skip();
+			}
+			for (auto& control : state.Jellies) {
+				control->Skip();
+			}
+			for (auto& control : state.Synchronize) {
+				control->Skip();
+			}
+			// Common+298 Stretch, PartsTree caches and emitted particles are not reset by2f50e0.
+			state.Operating = false;
+		} catch (...) {
+			state.Operating = false;
+			state.Valid = false;
+			throw;
+		}
+	}
+
 	void EmoteVelvetyOwner::ClearPlain(MotionScenePlayer& actual_plain) {
 		auto& state = *m_Implementation;
 		state.RequireIdle();

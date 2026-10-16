@@ -87,6 +87,7 @@ namespace sgre::scene {
 		const resource::MotionTimeline* Raw = nullptr;
 		MotionAttributeBlendPolicy Policy = MotionAttributeBlendPolicy::Unchanged;
 		std::shared_ptr<const PreparedMotionTimeline> Timeline;
+		std::vector<std::shared_ptr<const resource::MotionResource>> Metadata;
 		std::unique_ptr<PreparedMotionSourceRegistry> Sources;
 		std::vector<MotionProjectId> RegistrationOrder;
 		MotionPreparationProjectBorrows* Borrowed = nullptr;
@@ -360,6 +361,10 @@ namespace sgre::scene {
 		m_Implementation->Projection = coefficient;
 	}
 
+	bool MotionManagerRuntime::IsClosed() const noexcept {
+		return m_Implementation->Closed;
+	}
+
 	bool MotionManagerRuntime::ResourceBorrowsLive() const {
 		return !m_Implementation->Closed && std::all_of(m_Implementation->BorrowedProjects.LiveEntries().begin(), m_Implementation->BorrowedProjects.LiveEntries().end(), [&](const auto& entry) {
 			return entry.Count == 0 || Manager().Contains(entry.Project);
@@ -429,10 +434,13 @@ namespace sgre::scene {
 			preparation->Timeline = std::make_shared<const PreparedMotionTimeline>(PrepareMotionTimeline(*selection.Timeline, resource, policy));
 			std::vector<MotionSourceRegistration> sources;
 			sources.reserve(order.size());
+			preparation->Metadata.reserve(order.size());
 			for (const auto project : order) {
 				MotionSourceRegistration registration;
 				registration.Project = state.Manager.Identity(project);
-				registration.Sources = state.Manager.Resource(project).Sources;
+				auto metadata = state.Manager.RetainMetadata(project);
+				registration.Sources = metadata->Sources;
+				preparation->Metadata.push_back(std::move(metadata));
 				registration.Aliases = state.Services.ReadSourceAliases(project);
 				sources.push_back(registration);
 			}
@@ -507,10 +515,13 @@ namespace sgre::scene {
 			prepared->RegistrationOrder = order;
 			std::vector<MotionSourceRegistration> registrations;
 			registrations.reserve(order.size());
+			prepared->Metadata.reserve(order.size());
 			for (const auto registered : order) {
 				MotionSourceRegistration registration;
 				registration.Project = state.Manager.Identity(registered);
-				registration.Sources = state.Manager.Resource(registered).Sources;
+				auto metadata = state.Manager.RetainMetadata(registered);
+				registration.Sources = metadata->Sources;
+				prepared->Metadata.push_back(std::move(metadata));
 				registration.Aliases = state.Services.ReadSourceAliases(registered);
 				registrations.push_back(registration);
 			}

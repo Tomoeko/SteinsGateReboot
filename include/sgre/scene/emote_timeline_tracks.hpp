@@ -50,6 +50,8 @@ namespace sgre::scene {
 		void AssignState(const EmoteTimelineTracks& source, std::uint32_t flags);
 		// Native Pass reissues future visible keys with their stored time as duration, retaining cursors.
 		void Pass();
+		// Native Skip uses ordinary inclusive dispatch at LastTime, then retires finite playback.
+		void FinishAtLastTime();
 		void AdvanceDifference(float elapsed_ticks);
 		[[nodiscard]] float ApplyDifference(std::string_view name, float base, float blend) const;
 		// Native2bf9b0 crosses every reached key; false excludes a key exactly at the supplied boundary.
@@ -60,6 +62,7 @@ namespace sgre::scene {
 
 	private:
 		void RequireOperation(float position) const;
+		void CrossPreparedTo(float position, bool inclusive);
 		void Dispatch(std::size_t track, std::size_t key, float position);
 		[[nodiscard]] bool Skipped(std::size_t track) const noexcept;
 		EmoteVariableControls& m_Controls;

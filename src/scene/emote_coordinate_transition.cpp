@@ -41,6 +41,12 @@ namespace sgre::scene {
 		m_Components = source.m_Components;
 	}
 
+	void EmoteCoordinateTransition::FinishTransitions() noexcept {
+		for (auto& component : m_Components) {
+			component.FinishTransitions();
+		}
+	}
+
 	bool EmoteCoordinateTransition::Changing() const noexcept {
 		return m_Components[0].Changing() || m_Components[1].Changing();
 	}

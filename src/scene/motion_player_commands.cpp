@@ -18,6 +18,14 @@ namespace sgre::scene {
 		return m_TimelineVariables.get();
 	}
 
+	const std::shared_ptr<const resource::MotionResource>& MotionPlayerCommands::CachedResource() const noexcept {
+		return m_CachedResource;
+	}
+
+	bool MotionPlayerCommands::SelectedLayersCleared() const noexcept {
+		return m_SelectedLayersCleared;
+	}
+
 	static bool HasMotionPlayFlag(MotionPlayFlags flags, MotionPlayFlags option) noexcept {
 		return (static_cast<std::uint32_t>(flags) & static_cast<std::uint32_t>(option)) != 0;
 	}
@@ -86,6 +94,8 @@ namespace sgre::scene {
 		m_SelectedProject = selection;
 		m_PreferredProject = source.m_PreferredProject;
 		m_CachedTimeline = source.m_CachedTimeline;
+		m_CachedResource = source.m_CachedResource;
+		m_SelectedLayersCleared = source.m_SelectedLayersCleared;
 		m_SelectionSerial = source.m_SelectionSerial;
 		m_MeshDivisionRatio = source.m_MeshDivisionRatio;
 		m_TimelineVariables = std::move(variables);
@@ -175,6 +185,7 @@ namespace sgre::scene {
 		if (m_SelectionSerial == std::numeric_limits<std::uint64_t>::max()) {
 			throw std::runtime_error("motion successful preparation owner serial is exhausted");
 		}
+		auto metadata = m_Manager.RetainMetadata(selection->Project);
 		// Validate/copy the new native50e750 records before replacing the actual current owner.
 		auto variables = std::make_unique<MotionTimelineVariables>(*this, *selection, m_SelectionSerial + 1);
 		const auto continuation = HasMotionPlayFlag(flags, MotionPlayFlags::Chain) ? MotionTimelineContinuation::Chain : MotionTimelineContinuation::Reset;
@@ -183,6 +194,8 @@ namespace sgre::scene {
 		m_SelectedProject = selection;
 		m_PreferredProject = selection->Identity;
 		m_CachedTimeline = selection->Timeline;
+		m_CachedResource = std::move(metadata);
+		m_SelectedLayersCleared = false;
 		m_TimelineVariables = std::move(variables);
 		m_Names.CurrentMotion = motion;
 		if (!stealth) {

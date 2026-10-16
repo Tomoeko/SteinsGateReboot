@@ -307,6 +307,24 @@ namespace sgre::scene {
 	    : m_Implementation(std::make_unique<Implementation>(actual_primary, std::move(definition), actual_variables, actual_collisions)) {
 	}
 	EmoteJellyControl::~EmoteJellyControl() noexcept = default;
+	void EmoteJellyControl::RequireCanSkip() const {
+		const auto& state = *m_Implementation;
+		state.RequireThread();
+		if (state.Failure) {
+			std::rethrow_exception(state.Failure);
+		}
+		if (!state.Subscribed || state.Closing || state.Operating || !state.Valid) {
+			throw std::runtime_error("Emote Jelly skip requires its live idle actual UID owner");
+		}
+		// Pending collider joins are not consumed by the native flag-only operation.
+	}
+	void EmoteJellyControl::Skip() {
+		RequireCanSkip();
+		for (auto& [occurrence, instance] : m_Implementation->Instances) {
+			static_cast<void>(occurrence);
+			instance->Reset = true;
+		}
+	}
 	void EmoteJellyControl::RequireReady() const {
 		m_Implementation->RequireReady();
 	}

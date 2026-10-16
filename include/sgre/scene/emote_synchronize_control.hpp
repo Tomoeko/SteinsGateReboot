@@ -67,6 +67,9 @@ namespace sgre::scene {
 		// Native assignment copies mutable values while retaining this owner's resources and bindings.
 		void RequireCanAssignState(const EmoteSynchronizeControl& source) const;
 		void AssignState(const EmoteSynchronizeControl& source);
+		// Native Common skip marks retained occurrences without advancing or rebuilding them.
+		void RequireCanSkip() const;
+		void Skip();
 		void RequireReady() const;
 		// Native2f3260 consumes source's actual current mesh and writes only pending target controls.
 		void Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent = nullptr);

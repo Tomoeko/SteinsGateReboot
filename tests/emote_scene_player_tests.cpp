@@ -550,8 +550,70 @@ static void TestPassSceneDifferenceFadeAndRepeatedCall() {
 	owner.Close();
 }
 
+static void TestSkipSceneFinishesCurrentAndQueuedAngleWithoutPublication() {
+	Fixture fixture(AnimationQueryDocument(true));
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	owner.SetCoordinate({8, -4}, 8);
+	owner.SetScale(2, 8);
+	owner.SetRotation(1, 8);
+	owner.SetColor(0xffffffffu, 8);
+	owner.SetVariable("free", 16, 8);
+	owner.Progress(1);
+	const auto published_coordinate = owner.Root().Overrides().Coordinate;
+	const auto published_scale = owner.Root().Overrides().ZoomX;
+	const auto published_angle = owner.Root().AngleDegrees();
+	const auto published_color = owner.Color();
+	const auto published_free = owner.ReadVariable("free");
+	const auto tick = owner.Commands().ClockState().TickCount;
+	Require(owner.Variables().TransitionValue("free").value_or(16) != 16 && owner.Animating(), "Scene Skip must begin with an actual unfinished named scalar and property controllers");
+	owner.SetRotation(5, 4);
+	owner.Skip();
+	Require(owner.Coordinate() == std::array<float, 2>{8, -4} && owner.Scale() == 2 && owner.Variables().TransitionValue("free") == 16 && !owner.Animating(), "Skip finishes actual Current values and clears their changing flags without advancing time");
+	Require(owner.Root().Overrides().Coordinate == published_coordinate && owner.Root().Overrides().ZoomX == published_scale && owner.Root().AngleDegrees() == published_angle && owner.Color() == published_color && owner.ReadVariable("free") == published_free && owner.Commands().ClockState().TickCount == tick, "Skip cannot substitute a containing publication/update for native transition completion");
+	owner.Progress(0);
+	Require(owner.Root().Overrides().Coordinate == std::array<float, 3>{8, -4, 0} && owner.Root().Overrides().ZoomX == 2 && owner.Color() == 0xffffffffu && owner.Commands().ParameterValues().Read("free") == 16, "the actual subsequent zero phase publishes finished named and property Current values");
+	Require(owner.Root().AngleDegrees() > 180 && owner.Root().AngleDegrees() < 360 && owner.Commands().ClockState().TickCount == tick, "queued angular Skip consumes the last setter-normalized target5 until normal publication rather than completing the earlier active target1");
+	owner.Close();
+}
+
+static void TestSkipSceneFiniteRemovalAndLoopBlendCache() {
+	auto document = AnimationQueryDocument(false);
+	auto& metadata = MutableField(document->Root, "metadata");
+	auto& timelines = std::get<sgre::resource::PsbArray>(MutableField(metadata, "timelineControl").Data);
+	auto& loop_tracks = std::get<sgre::resource::PsbArray>(MutableField(timelines[1], "variableList").Data);
+	Set(loop_tracks.front(), "label", Atom(std::string("loop-probe")));
+	std::get<sgre::resource::PsbArray>(MutableField(metadata, "immediateControl").Data).push_back(Atom(sgre::resource::PsbObject{{"label", Atom(std::string("loop-probe"))}, {"enabled", Atom(true)}}));
+	Fixture fixture(document);
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	owner.PlayTimeline("phase");
+	owner.PlayTimeline("steady", 3);
+	owner.SetTimelineBlendRatio("steady", .25f, 8, 0);
+	owner.Progress(1);
+	const auto ratio = owner.TimelineBlendRatio("steady");
+	const auto tick = owner.Commands().ClockState().TickCount;
+	Require(ratio != .25f && owner.TimelinePlaying("phase") && owner.TimelinePlaying("steady"), "Skip fixture requires a finite active label alongside a genuine changing loop blend");
+	owner.Skip();
+	Require(!owner.TimelinePlaying("phase") && owner.TimelinePlaying("steady") && owner.TimelineBlendRatio("steady") == ratio && !owner.Animating(), "Skip erases finite playback, preserves loop membership and finishes blend Current without changing cached ratio");
+	Require(owner.ReadVariable("probe") == 9 && owner.Commands().ParameterValues().Read("probe") == 7 && owner.Commands().ClockState().TickCount == tick, "finite Skip crosses remaining keys inclusively but does not publish stored values or advance the selected plain clock");
+	owner.Progress(1);
+	Require(owner.TimelinePlaying("steady") && owner.TimelineBlendRatio("steady") == .25f && owner.Commands().ParameterValues().Read("probe") == 9 && owner.Commands().ClockState().TickCount == tick + 1, "only a subsequent genuine positive scheduler/variable phase publishes finished loop blend and finite stored value");
+	owner.Close();
+}
+
 int main() {
 	try {
+		TestSkipSceneFinishesCurrentAndQueuedAngleWithoutPublication();
+		TestSkipSceneFiniteRemovalAndLoopBlendCache();
 		TestPassSceneKeepsActualClocksAndPropertyControllers();
 		TestPassSceneDifferenceFadeAndRepeatedCall();
 		TestAnimatingFiniteTimelineLoopAndBlendOwners();

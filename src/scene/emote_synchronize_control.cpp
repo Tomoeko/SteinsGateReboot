@@ -606,6 +606,16 @@ namespace sgre::scene {
 	    : m_Implementation(std::make_unique<Implementation>(actual_primary, std::move(definition))) {
 	}
 	EmoteSynchronizeControl::~EmoteSynchronizeControl() noexcept = default;
+	void EmoteSynchronizeControl::RequireCanSkip() const {
+		m_Implementation->RequireReady();
+	}
+	void EmoteSynchronizeControl::Skip() {
+		RequireCanSkip();
+		for (auto& [occurrence, instance] : m_Implementation->Instances) {
+			static_cast<void>(occurrence);
+			instance->Reset = true;
+		}
+	}
 	void EmoteSynchronizeControl::RequireReady() const {
 		m_Implementation->RequireReady();
 	}

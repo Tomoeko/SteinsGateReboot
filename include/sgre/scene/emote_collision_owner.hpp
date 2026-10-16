@@ -44,6 +44,9 @@ namespace sgre::scene {
 		[[nodiscard]] std::shared_ptr<EmoteCollisionGroup> Acquire(std::string_view uid);
 		// Called after actual plain Progress and completed pending UID joins, before any physical family dispatch.
 		void Prepare(const EmoteVelvetyInputFrame& actual_frame);
+		// Mark existing groups for their next actual collider pose; no reset is executed here.
+		void RequireCanSkip() const;
+		void Skip();
 		void Close();
 		[[nodiscard]] bool UsesCommands(const MotionPlayerCommands& actual_primary) const noexcept;
 		[[nodiscard]] std::uint64_t PreparedFrameSerial() const;

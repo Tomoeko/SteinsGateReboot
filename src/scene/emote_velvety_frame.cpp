@@ -137,6 +137,7 @@ namespace sgre::scene {
 				const auto selected_reference = scene->FindLayer(m_Definition.ReferenceLayer);
 				if (!m_Reference || !selected_reference || !SameActualReference(*m_Reference, *selected_reference)) {
 					m_HasReference = false;
+					m_HistoryInitialized = false;
 				}
 				m_Reference = selected_reference;
 				m_Scene = scene;
@@ -156,10 +157,11 @@ namespace sgre::scene {
 		if (actual_controls.Mirror) {
 			current.X = -current.X;
 		}
-		if (!m_HasReference) {
+		if (!m_HistoryInitialized) {
 			m_PrecedingReference = current;
 			m_AccumulatedReference = current;
 			m_HasReference = true;
+			m_HistoryInitialized = true;
 		} else {
 			resource::MotionPoint delta{current.X - m_PrecedingReference.X, current.Y - m_PrecedingReference.Y};
 			m_PrecedingReference = current;
@@ -197,6 +199,21 @@ namespace sgre::scene {
 		m_Prepared = true;
 		m_Valid = true;
 		return result;
+	}
+
+	void EmoteVelvetyFrameOwner::RequireCanSkip() const {
+		if (m_Thread != std::this_thread::get_id() || !m_Valid || !m_Plain.CanMutate() || !m_Plain.ResourcesLive()) {
+			throw std::runtime_error("Emote Velvety skip requires its actual live idle frame owner");
+		}
+	}
+
+	void EmoteVelvetyFrameOwner::Skip() {
+		RequireCanSkip();
+		// Common+B9 is history readiness, not the cached numeric-anchor lifetime used by Clear.
+		m_HistoryInitialized = false;
+		m_PrecedingReference = {};
+		m_AccumulatedReference = {};
+		m_First = true;
 	}
 
 	void EmoteVelvetyFrameOwner::ClearPlain(MotionScenePlayer& actual_plain) {
@@ -248,7 +265,7 @@ namespace sgre::scene {
 		m_PrecedingReference = source.m_PrecedingReference;
 		m_AccumulatedReference = source.m_AccumulatedReference;
 		m_First = source.m_First;
-		// Native2e1fd0 retains the destination conversion computed before these history writes.
+		// Native2e1fd0 retains the destination conversion and B9 readiness computed before these history writes.
 	}
 
 } // namespace sgre::scene

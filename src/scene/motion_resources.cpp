@@ -277,6 +277,12 @@ namespace sgre::scene {
 		return m_Implementation->Projects->Resource(project);
 	}
 
+	std::shared_ptr<const resource::MotionResource> MotionResourceManager::RetainMetadata(MotionProjectId project) const {
+		static_cast<void>(Resource(project));
+
+		return m_Implementation->Projects->RetainMetadata(project);
+	}
+
 	std::size_t MotionResourceManager::WriteRegistrationOrder(std::span<MotionProjectId> output) const {
 		return m_Implementation->Closed ? 0 : m_Implementation->Projects->WriteRegistrationOrder(output);
 	}

@@ -5,6 +5,8 @@ namespace sgre::scene {
 	class EmoteTimelineTransition {
 	public:
 		void Set(float target, float duration = 0, float easing = 0);
+		// Native2d7500 finishes only a changing control, retaining its timing/start/target words.
+		void FinishTransitions() noexcept;
 		[[nodiscard]] float Advance(float elapsed_ticks);
 		[[nodiscard]] float Current() const noexcept;
 		[[nodiscard]] bool Changing() const noexcept;

@@ -13,6 +13,7 @@ namespace sgre::scene {
 	public:
 		EmoteColorTransition();
 		void Set(std::uint32_t color, float duration = 0, float easing = 0);
+		void FinishTransitions() noexcept;
 		// Publication remains the containing plain owner's separate property phase.
 		[[nodiscard]] std::uint32_t Advance(float elapsed_ticks);
 

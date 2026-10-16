@@ -562,7 +562,9 @@ namespace sgre::scene {
 	void MotionTimelineParameters::RequireSelection() const {
 		const auto& commands = m_Values.Commands();
 		const auto& selection = commands.SelectedProject();
-		if (!selection || commands.SelectionSerial() != m_SelectionSerial || commands.CachedTimeline() != &m_Timeline || selection->Timeline != &m_Timeline || !commands.Manager().Contains(selection->Project)) {
+		// Native50fd90 retains these exact cells after selected nodes retire; the command owner retains their metadata.
+		const bool cleared_current = commands.SelectedLayersCleared() && commands.CachedResource() && m_Values.m_Selected == nullptr && m_Values.m_CurrentParameters == this;
+		if (!selection || commands.SelectionSerial() != m_SelectionSerial || commands.CachedTimeline() != &m_Timeline || selection->Timeline != &m_Timeline || (!cleared_current && !commands.Manager().Contains(selection->Project))) {
 			throw std::runtime_error("motion parameter records require their exact live command-selected registered timeline");
 		}
 	}

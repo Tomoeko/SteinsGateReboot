@@ -1700,8 +1700,98 @@ static void TestPassQueuedGuardAndRetainedCompletedCommonFrame() {
 	Require(!task.Player().TimelinePlaying("phase") && task.Player().ReadVariable("probe") == 9 && task.Player().Commands().ParameterValues().Read("probe") == 7, "successful native Pass remains a deferred control operation even with real Common enabled");
 }
 
+static void TestSkipTypedVoidExtrasPausedCurrentAndDetachedReceiver() {
+	std::size_t conversions = 0;
+	Fixture fixture(false);
+	const auto instance = fixture.New();
+	const auto receiver_root = fixture.Vm.Retain(instance);
+	const auto task = fixture.Bindings->Task(instance);
+	const auto argument_class = fixture.Vm.CreateClass();
+	fixture.Vm.NewSlot(argument_class, "_tostring", fixture.Vm.CreateNativeClosure("Skip-extra-conversion-tripwire", [&](auto&, auto) {
+		++conversions;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("unexpected conversion"));
+	}));
+	const auto argument = fixture.Vm.CreateInstance(argument_class);
+	const auto argument_root = fixture.Vm.Retain(argument);
+	static_cast<void>(fixture.Call(instance, "setCoord", {8.0f, -4.0f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "setScale", {2.0f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "setRot", {.5f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "setColor", {std::bit_cast<std::int32_t>(0x10203040u), 8.0f}));
+	static_cast<void>(fixture.Call(instance, "pause", {true}));
+	const auto tick = task.Player().Commands().ClockState().TickCount;
+	const auto entropy = fixture.EntropyReads;
+	Require(task.Player().Coordinate()[0] == 0 && task.Player().Scale() == 1 && std::get<bool>(fixture.Call(instance, "getAnimating")), "Skip must begin with genuine pending property transitions on a paused actual task");
+	const auto result = fixture.Call(instance, "skip", {argument, std::numeric_limits<float>::quiet_NaN(), false});
+	Require(std::holds_alternative<std::monostate>(result) && conversions == 0, "typed no-values Skip ignores all extras without conversion; Invoke exposes only the outcome class");
+	Require(task.Player().Coordinate() == std::array<float, 2>{8, -4} && task.Player().Scale() == 2 && !std::get<bool>(fixture.Call(instance, "getAnimating")), "Skip finishes retained coordinate, scale and angular Current without a time step");
+	Require(task.Player().Root().Overrides().Coordinate == std::array<float, 3>{0, 0, 0} && task.Player().Root().Overrides().ZoomX == 1 && PublishedRotation(fixture, instance) == 0 && PublishedColor(fixture, instance) == 0x808080ffu, "native root/color/angle getters retain the completed publication until the real property phase");
+	fixture.Second().Update();
+	Require(fixture.Second().State(task.Handle()).Status == sgre::scene::TaskStatus::Complete && task.Player().Commands().ClockState().TickCount == tick && fixture.EntropyReads == entropy, "Skip preserves actual pause status and does not advance clock or constructor streams");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(instance, "skip")) && task.Player().Scale() == 2, "repeated no-argument Skip leaves completed Current intact");
+	static_cast<void>(fixture.Call(instance, "pause", {false}));
+	task.Player().Progress(0);
+	Require(task.Player().Root().Overrides().Coordinate == std::array<float, 3>{8, -4, 0} && task.Player().Root().Overrides().ZoomX == 2 && PublishedColor(fixture, instance) == 0x10203040u && PublishedRotation(fixture, instance) == .5f, "only the genuine next dirty zero phase publishes finished property controls without restarting them");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	Require(!task.IsLive() && std::holds_alternative<std::monostate>(fixture.Call(instance, "skip", {argument, std::numeric_limits<float>::infinity()})) && conversions == 0, "detached Skip returns before borrowing retired task state or inspecting ignored extras");
+	fixture.Bindings->ReleaseInstance(instance);
+}
+
+static void TestSkipQueuedGuardAndWarmCommonClearProvenance() {
+	Fixture fixture;
+	const auto instance = fixture.New();
+	const auto receiver_root = fixture.Vm.Retain(instance);
+	const auto task = fixture.Bindings->Task(instance);
+	static_cast<void>(fixture.Call(instance, "setVisible", {true}));
+	static_cast<void>(fixture.Call(instance, "setCoord", {8.0f, -4.0f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "playTimeline", {std::string("phase")}));
+	task.Player().Progress(1);
+	Require(task.Player().PhysicalCounts().Updated == 6, "Skip Common preparation must complete the actual visible six-family physics phase");
+	const auto coordinate = task.Player().Coordinate();
+	const auto published_coordinate = task.Player().Root().Overrides().Coordinate;
+	const auto tick = task.Player().Commands().ClockState().TickCount;
+	const auto conversion = task.Player().PhysicsToWorld();
+	const auto entropy = fixture.EntropyReads;
+	fixture.Second().Draw(0);
+	const auto queued = fixture.Secondary->SceneContext().Size();
+	std::exception_ptr binding_failure;
+	std::exception_ptr scene_failure;
+	try {
+		static_cast<void>(fixture.Call(instance, "skip"));
+	} catch (...) {
+		binding_failure = std::current_exception();
+	}
+	try {
+		task.Player().Skip();
+	} catch (...) {
+		scene_failure = std::current_exception();
+	}
+	fixture.Primary->SceneContext().Clear();
+	fixture.Secondary->SceneContext().Clear();
+	fixture.Primary->Context().Clear();
+	fixture.Secondary->Context().Clear();
+	Require(queued != 0 && binding_failure && scene_failure, "both native and direct Skip must reject genuine queued draw owners before resetting any controller/history");
+	for (const auto& failure : {binding_failure, scene_failure}) {
+		RequireFailure([&] {
+			std::rethrow_exception(failure);
+		},
+		    "unqueued");
+	}
+	Require(task.Player().Coordinate() == coordinate && task.Player().TimelinePlaying("phase"), "failed queued Skip preserves unfinished Current and finite playback");
+	static_cast<void>(fixture.Call(instance, "skip"));
+	const auto retained = task.Player().PhysicsToWorld();
+	Require(task.Player().Coordinate() == std::array<float, 2>{8, -4} && !task.Player().TimelinePlaying("phase") && task.Player().Root().Overrides().Coordinate == published_coordinate, "unqueued Skip finishes Current and removes finite playback while retaining the prior completed root");
+	Require(task.Player().Commands().ClockState().TickCount == tick && task.Player().PhysicalCounts().Updated == 6 && fixture.EntropyReads == entropy, "Common Skip changes reset/history state without solver, plain, time or RNG work");
+	Require(retained.XX == conversion.XX && retained.XY == conversion.XY && retained.YX == conversion.YX && retained.YY == conversion.YY && retained.TranslationX == conversion.TranslationX && retained.TranslationY == conversion.TranslationY, "Common Skip retains the actual completed inverse matrix");
+	static_cast<void>(fixture.Call(instance, "clear"));
+	Require(task.Player().PlainPlayer().Scene() == nullptr && task.IsLive(), "warm Skip preserves raw-anchor provenance required by real Common Clear");
+	task.Player().Progress(1);
+	Require(task.Player().PhysicalCounts().Updated == 0 && task.Player().PhysicalCounts().MeshWrites == 0 && fixture.Layers.MotionResources(fixture.Leaf).ReferenceCount(fixture.Project) == 1, "the next genuine post-Clear phase preserves completed history and enclosing registration without inventing retired UID control instances");
+}
+
 int main(int argc, char** argv) {
 	try {
+		TestSkipTypedVoidExtrasPausedCurrentAndDetachedReceiver();
+		TestSkipQueuedGuardAndWarmCommonClearProvenance();
 		TestPassTypedVoidExtrasDetachedAndDeferredPublication();
 		TestPassQueuedGuardAndRetainedCompletedCommonFrame();
 		TestAnimatingTypedBooleanExtrasAndDetachedReceiver();

@@ -102,6 +102,10 @@ namespace sgre::scene {
 		void RequireCanAssignState(const EmoteVariableControls& source) const;
 		// Native2bc870 matches source controls to the first destination label, without publication.
 		void AssignState(const EmoteVariableControls& source);
+		// Native Skip finishes named controls before primary properties, then extension-map controls afterward.
+		// Neither phase samples graphs/blink, advances time, or republishes cached Motion values.
+		void FinishNamedTransitions();
+		void FinishExtensionTransitions();
 		void SetBlinkEnabled(bool enabled);
 		[[nodiscard]] bool BlinkEnabled() const;
 		[[nodiscard]] bool IsInstantVariable(std::string_view identifier) const;

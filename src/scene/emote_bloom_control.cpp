@@ -235,6 +235,16 @@ namespace sgre::scene {
 	EmoteBloomControl::EmoteBloomControl(const MotionPlayerCommands& actual_primary, EmoteBloomControlDefinition definition, EmoteVariableControls* actual_variables) : m_Implementation(std::make_unique<Implementation>(actual_primary, std::move(definition), actual_variables)) {
 	}
 	EmoteBloomControl::~EmoteBloomControl() noexcept = default;
+	void EmoteBloomControl::RequireCanSkip() const {
+		m_Implementation->RequireReady();
+	}
+	void EmoteBloomControl::Skip() {
+		RequireCanSkip();
+		for (auto& [occurrence, instance] : m_Implementation->Instances) {
+			static_cast<void>(occurrence);
+			instance->Reset = true;
+		}
+	}
 	void EmoteBloomControl::RequireReady() const {
 		m_Implementation->RequireReady();
 	}

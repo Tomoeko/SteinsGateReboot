@@ -91,6 +91,19 @@ namespace sgre::scene {
 		return m_Current;
 	}
 
+	void EmoteRotationTransition::FinishTransitions() {
+		// Native2d9060 consumes the last queued target without starting or normalizing that job.
+		if (m_Pending) {
+			m_Current = m_Pending->Target;
+			m_Active = false;
+			m_Pending.reset();
+		} else if (m_Active) {
+			const auto target = NormalizeEmoteRotation(m_Target);
+			m_Active = false;
+			m_Current = target;
+		}
+	}
+
 	float EmoteRotationTransition::Advance(float elapsed) {
 		if (!std::isfinite(elapsed) || elapsed < 0) {
 			throw std::runtime_error("Emote rotation requires finite nonnegative elapsed ticks");

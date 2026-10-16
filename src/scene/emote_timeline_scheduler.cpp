@@ -239,6 +239,42 @@ namespace sgre::scene {
 			}
 		}
 
+		void Skip() {
+			RequireMutation();
+			std::size_t work = 0;
+			for (const auto* entry : Active) {
+				if (entry->Tracks->Definition().LoopBegin >= 0) {
+					continue;
+				}
+				for (const auto& track : entry->Tracks->Definition().Tracks) {
+					if (track.Keys.size() > kMaximumSchedulerWork - work) {
+						throw std::runtime_error("Emote timeline skip exceeds bounded crossed-key work");
+					}
+					work += track.Keys.size();
+				}
+			}
+			Operating = true;
+			try {
+				for (auto iterator = Active.begin(); iterator != Active.end();) {
+					auto& entry = **iterator;
+					if (entry.Tracks->Definition().LoopBegin < 0) {
+						entry.Tracks->FinishAtLastTime();
+						TimelineVariablesDirty = true;
+						iterator = Active.erase(iterator);
+					} else {
+						// Native2d0fd0 finishes the control but retains the published blend cache and stop flag.
+						entry.Blend.FinishTransitions();
+						++iterator;
+					}
+				}
+				Operating = false;
+			} catch (...) {
+				Operating = false;
+				Valid = false;
+				throw;
+			}
+		}
+
 		void Stop(std::string_view label) {
 			RequireMutation();
 			TimelineVariablesDirty = true;
@@ -415,6 +451,9 @@ namespace sgre::scene {
 	}
 	void EmoteTimelineScheduler::Pass() {
 		m_Implementation->Pass();
+	}
+	void EmoteTimelineScheduler::Skip() {
+		m_Implementation->Skip();
 	}
 
 	void EmoteTimelineScheduler::Stop(std::string_view name) {

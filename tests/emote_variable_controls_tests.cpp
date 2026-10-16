@@ -883,8 +883,61 @@ static void TestAnimatingExcludesAutonomousBlink() {
 	Require(saw_blink_frame && fixture.EntropyReads == 1, "blink exclusion must be exercised during real changed eye output from its one owned random stream");
 }
 
+static void TestSkipNamedOrderExtensionsAndDeferredPublication() {
+	auto program = AssignmentEyeProgram(2);
+	program.Transitions = {"scalar"};
+	program.Extensions = {"extension"};
+	sgre::scene::EmoteGraphChannelDefinition eyebrow;
+	eyebrow.Name = "brow";
+	eyebrow.InitialFrame = 2;
+	eyebrow.Graph.Edges = {{0, 10}};
+	program.Eyebrows.push_back(eyebrow);
+	program.Mouths.push_back({"mouth", "talk", 3});
+	sgre::resource::EmoteSelectorDefinition selector;
+	selector.Label = "selection";
+	sgre::resource::EmoteSelectorOption option;
+	option.Variable = "scalar";
+	option.OffValue = -3;
+	option.OnValue = 7;
+	option.Ranges.push_back({1, 1});
+	selector.Options.push_back(option);
+	program.Selectors.Selectors.push_back(selector);
+	program.PrimarySelectorCount = 1;
+	VariableAssignmentFixture fixture(std::move(program));
+	fixture.Controls->SetBlinkEnabled(false);
+	fixture.Controls->Update(0);
+	Require(fixture.Controls->BindSpeedTransition("speed"), "Skip fixture must bind the actual late extension scalar path");
+	fixture.Controls->Set("eye", 6, 8);
+	fixture.Controls->Set("eye-left", 8, 8);
+	fixture.Controls->Set("eye-right", 9, 8);
+	fixture.Controls->Set("brow", 8, 8);
+	fixture.Controls->Set("talk", 7, 8);
+	fixture.Controls->Set("scalar", 99, 8);
+	fixture.Controls->Set("extension", 11, 8);
+	fixture.Controls->Set("speed", 7, 8);
+	fixture.Controls->Set("selection", 1, 8);
+	const auto phases = fixture.PropertyPhases;
+	const auto entropy = fixture.EntropyReads;
+	fixture.RejectMutable = true;
+	RequireFailure([&] {
+		fixture.Controls->FinishNamedTransitions();
+	},
+	    "queued");
+	fixture.RejectMutable = false;
+	Require(fixture.Controls->TransitionValue("eye") == 2 && fixture.Controls->TransitionValue("scalar") == -3, "rejected owner admission precedes every named completion");
+	fixture.Controls->FinishNamedTransitions();
+	Require(fixture.Controls->TransitionValue("eye") == 6 && fixture.Controls->TransitionValue("eye-left") == 8 && fixture.Controls->TransitionValue("eye-right") == 9 && fixture.Controls->TransitionValue("brow") == 8 && fixture.Controls->TransitionValue("talk") == 7, "named completion copies graph/mouth targets without sampling their normal curves");
+	Require(fixture.Controls->TransitionValue("scalar") == 7, "selector completion applies its actual last selection before the later named scalar finish");
+	Require(fixture.Controls->TransitionValue("extension") == 0 && fixture.Controls->TransitionValue("speed") == 1, "ordered extension controls remain separate from the named completion phase");
+	fixture.Controls->FinishExtensionTransitions();
+	Require(fixture.Controls->TransitionValue("extension") == 11 && fixture.Controls->TransitionValue("speed") == 7 && !fixture.Controls->Animating(), "the later actual extension map finishes both declared and late speed controls");
+	Require(fixture.Controls->Read("scalar") == -3 && fixture.Controls->Read("talk") == 0 && fixture.PropertyPhases == phases && fixture.EntropyReads == entropy, "Skip retains C8 values/property phase and random ownership until real publication");
+	fixture.Controls->Update(0);
+	Require(fixture.Controls->Read("scalar") == 7 && fixture.Controls->Read("talk") == 7 && fixture.Controls->Read("eye-left") == 8 && fixture.Commands.ParameterValues().Read("extension") == 11 && fixture.PropertyPhases == phases + 1, "existing dirty publication receives the completed actual controllers afterward");
+}
 int main() {
 	try {
+		TestSkipNamedOrderExtensionsAndDeferredPublication();
 		TestAnimatingScalarAndExactTimelineMask();
 		TestAnimatingSelectorQueueIsReadOnly();
 		TestAnimatingEyePrimaryNameMask();

@@ -15,6 +15,7 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -291,6 +292,7 @@ namespace sgre::scene {
 		}
 
 		const MotionPlayerCommands& Commands;
+		const std::thread::id Thread = std::this_thread::get_id();
 		const resource::PsbValue* Map = nullptr;
 		std::map<std::string, std::shared_ptr<EmoteCollisionGroup>, std::less<>> Groups;
 		std::uint64_t FrameSerial = 0;
@@ -338,6 +340,26 @@ namespace sgre::scene {
 		state.Groups.emplace(uid, group);
 		state.KeyBytes += uid.size();
 		return group;
+	}
+
+	void EmoteCollisionOwner::RequireCanSkip() const {
+		const auto& state = *m_Implementation;
+		state.RequireIdle();
+		if (state.Thread != std::this_thread::get_id()) {
+			throw std::runtime_error("Emote collision skip requires its actual serialized owner thread");
+		}
+		for (const auto& [uid, group] : state.Groups) {
+			static_cast<void>(uid);
+			group->m_Implementation->RequireReady();
+		}
+	}
+
+	void EmoteCollisionOwner::Skip() {
+		RequireCanSkip();
+		for (const auto& [uid, group] : m_Implementation->Groups) {
+			static_cast<void>(uid);
+			group->m_Implementation->Reset = true;
+		}
 	}
 
 	void EmoteCollisionOwner::Prepare(const EmoteVelvetyInputFrame& actual_frame) {

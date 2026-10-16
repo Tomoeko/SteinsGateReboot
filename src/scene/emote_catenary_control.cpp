@@ -239,6 +239,16 @@ namespace sgre::scene {
 	    : m_Implementation(std::make_unique<Implementation>(actual_primary, std::move(definition), actual_variables)) {
 	}
 	EmoteCatenaryControl::~EmoteCatenaryControl() noexcept = default;
+	void EmoteCatenaryControl::RequireCanSkip() const {
+		m_Implementation->RequireReady();
+	}
+	void EmoteCatenaryControl::Skip() {
+		RequireCanSkip();
+		for (auto& [occurrence, instance] : m_Implementation->Instances) {
+			static_cast<void>(occurrence);
+			instance->Reset = true;
+		}
+	}
 	void EmoteCatenaryControl::RequireReady() const {
 		m_Implementation->RequireReady();
 	}

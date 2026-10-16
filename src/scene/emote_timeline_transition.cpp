@@ -23,6 +23,13 @@ namespace sgre::scene {
 		m_Elapsed = 0;
 		m_Changing = true;
 	}
+	void EmoteTimelineTransition::FinishTransitions() noexcept {
+		if (m_Changing) {
+			m_Changing = false;
+			m_Current = m_Target;
+		}
+	}
+
 	float EmoteTimelineTransition::Advance(float elapsed) {
 		if (!std::isfinite(elapsed) || elapsed < 0) {
 			throw std::runtime_error("Emote timeline transition requires finite nonnegative elapsed ticks");

@@ -38,6 +38,9 @@ namespace sgre::scene {
 		EmoteVelvetyOwner& operator=(const EmoteVelvetyOwner&) = delete;
 		// Runs only after the containing plain Progress; it never evaluates Motion a second time.
 		void Update(float elapsed_ticks, const EmoteVelvetyGlobalControls& actual_controls);
+		// Native2f50e0 resets retained Common history/flags without a physical step.
+		void RequireCanSkip() const;
+		void Skip();
 		void RequireCanAssignState(const EmoteVelvetyOwner& source) const;
 		// The containing owner first completes its genuine zero-time layer calculation.
 		void AssignState(const EmoteVelvetyOwner& source, const EmoteVelvetyGlobalControls& actual_controls);

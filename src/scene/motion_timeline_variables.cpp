@@ -144,6 +144,11 @@ namespace sgre::scene {
 	}
 
 	void MotionTimelineVariables::RequireLive() const {
+		// Clear retains current decoded cells and easing metadata after the selected source registration retires.
+		if (m_Commands.SelectedLayersCleared() && m_Commands.TimelineVariables() == this && Uses(m_Commands, m_Timeline) && m_Commands.CachedTimeline() == &m_Timeline && m_Commands.CachedResource().get() == &m_Resource) {
+			return;
+		}
+
 		if (!Uses(m_Commands, m_Timeline) || m_Commands.CachedTimeline() != &m_Timeline || !m_Commands.Manager().Contains(m_Project) || &m_Commands.Manager().Resource(m_Project) != &m_Resource) {
 			throw std::runtime_error("motion timeline variables require their exact live current-player/resource owner");
 		}

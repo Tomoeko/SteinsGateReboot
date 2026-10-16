@@ -412,8 +412,32 @@ static void TestPassSeekAdmissionAndFailedActualDispatch() {
 	    "invalid after failed dispatch");
 }
 
+static void TestSkipFinishRetainsCrossingPolicyAndBackwardGuard() {
+	for (const auto flags : {0u, 2u, 4u, 6u}) {
+		ActualMotionFixture actual;
+		auto controls = actual.Controls();
+		const auto definition = Definition({Track("continuous", {Key(0, 1), Key(2, 3), Key(4, 7), Hidden(6)}), Track("instant", {Key(0, 2), Key(2, 4), Key(4, 8), Hidden(6)})}, -1, -1, 4);
+		sgre::scene::EmoteTimelineTracks tracks(*controls, definition, flags);
+		tracks.Seek(0, false);
+		tracks.FinishAtLastTime();
+		Require(tracks.Position() == 4 && tracks.Cursors()[0] == 2 && tracks.Cursors()[1] == ((flags & 4) != 0 ? 0u : 2u), "Skip LastTime dispatch must retain actual ordinary difference/instant cursor policy");
+		Require(controls->Read("instant") == ((flags & 4) != 0 ? 0 : 8), "Skip must not substitute Pass's instant dispatch for flag4 ordinary crossing");
+		controls->FinishNamedTransitions();
+		Require(controls->TransitionValue("continuous") == ((flags & 2) != 0 ? 0 : 7), "finite difference dispatch remains its own retained track transition, not a named control write");
+		RequireFailure([&] {
+			tracks.CrossTo(3);
+		},
+		    "forward position");
+		tracks.Seek(8, false);
+		const auto cursor = tracks.Cursors()[0];
+		const auto calls = actual.GuardCalls;
+		tracks.FinishAtLastTime();
+		Require(tracks.Position() == 4 && tracks.Cursors()[0] == cursor && actual.GuardCalls == calls, "native finishing rewrites a later position without rewinding cursors or redispatching keys");
+	}
+}
 int main() {
 	try {
+		TestSkipFinishRetainsCrossingPolicyAndBackwardGuard();
 		TestPassRawKeyDurationAndRetainedCursor();
 		TestPassPlainInstantPolicyAndMetadataOrder();
 		TestPassDifferenceOnceAndSubsequentInstantSuppression();

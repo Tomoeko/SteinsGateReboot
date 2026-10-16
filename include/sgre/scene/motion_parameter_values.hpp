@@ -114,7 +114,8 @@ namespace sgre::scene {
 
 	class MotionTimelineParameters {
 	public:
-		// Commands and their actual value ancestors outlive this registration; timeline access requires its live manager registration.
+		// Commands and actual value ancestors outlive these cells; a cleared current selection retains its immutable metadata.
+		// Active selected trees still require their live manager registration.
 		// Record IDs are owned so exact-pointer cleanup remains safe after raw metadata retirement.
 		MotionTimelineParameters(const MotionPlayerParameterValues& values, const resource::MotionTimeline& timeline);
 		// Native504cf0 rebuilds destination registrations while retaining copied current parameter positions/flags.

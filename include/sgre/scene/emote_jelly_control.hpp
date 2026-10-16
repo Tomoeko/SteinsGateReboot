@@ -23,6 +23,9 @@ namespace sgre::scene {
 		// Native assignment copies mutable values while retaining this owner's resources and bindings.
 		void RequireCanAssignState(const EmoteJellyControl& source) const;
 		void AssignState(const EmoteJellyControl& source);
+		// Native Common skip marks retained occurrences without advancing or rebuilding them.
+		void RequireCanSkip() const;
+		void Skip();
 		void RequireReady() const;
 		// Complete actual UID joins outside noexcept notifications, before the containing collider-pose phase.
 		void FinishLayerChanges();

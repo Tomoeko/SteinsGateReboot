@@ -1,7 +1,7 @@
 #include "sgre/scene/motion_player_task.hpp"
 
-#include "motion_timeline_variable_native_fixture.hpp"
 #include "motion_default_normalization_vectors.hpp"
+#include "motion_timeline_variable_native_fixture.hpp"
 #include "sgre/scene/motion_particle_player_state.hpp"
 #include "sgre/scene/motion_timeline_variables.hpp"
 
@@ -890,7 +890,8 @@ static void TestActualPlainVelocityPhase() {
 	sgre::scene::MotionPlayerCommands commands(fixture.Manager);
 	sgre::scene::MotionRootScene root;
 	sgre::scene::MotionPlayerRenderControls render;
-	sgre::scene::MotionScenePlayer player(*fixture.Runtime, commands, root, render, [](const auto&) {});
+	sgre::scene::MotionScenePlayer player(*fixture.Runtime, commands, root, render, [](const auto&) {
+	});
 	commands.SetCharacter("character");
 	commands.Play("main");
 	player.Rebuild(*commands.SelectedProject());
@@ -989,15 +990,140 @@ static void TestActualConstructorDefaultNormalization() {
 		particle.Root().SetCoordinate3({3, -4, 1});
 		particle.Root().SetZoom(2, 0.5f);
 		particle.Root().SetOpacity(128);
-		sgre::scene::MotionScenePlayer player(*fixture.Runtime, particle.Commands(), particle.Root(), particle.RenderControls(), [](const auto&) {});
+		sgre::scene::MotionScenePlayer player(*fixture.Runtime, particle.Commands(), particle.Root(), particle.RenderControls(), [](const auto&) {
+		});
 		player.Rebuild(*particle.Commands().SelectedProject());
 		player.Progress(0);
 		RequireNativeNormalization(*player.Scene(), "sprite", expected);
 	}
 }
 
+static void TestClearedTaskOutlivesFinalResourceUnregister() {
+	for (const bool timeline_scalar : {false, true}) {
+		Fixture fixture(true, false, false, timeline_scalar);
+		auto task = fixture.Attach();
+		task.SetVisible(true);
+		task.SetCoordinate3({7, 11, 13});
+		task.Play("main");
+		task.Progress(0);
+		const auto* timeline = task.Commands().CachedTimeline();
+		const auto* parameter_owner = task.Commands().ParameterValues().CurrentTimelineParameters(*timeline);
+		const auto* parameter_cells = parameter_owner->Entries().data();
+		const auto* variables = task.Commands().TimelineVariables();
+		const auto serial = task.Commands().SelectionSerial();
+		const auto events = fixture.Events.size();
+		const auto random = task.Random().State();
+		std::weak_ptr<const sgre::scene::LoadedMotionAsset> loaded = fixture.Asset;
+		std::weak_ptr<const sgre::resource::PsbDocument> document = fixture.Asset->Document;
+		std::weak_ptr<const std::vector<std::uint8_t>> pixels = fixture.Asset->Backing;
+		std::weak_ptr<const sgre::resource::MotionResource> metadata = fixture.Asset->Model;
+		Require(task.GenericPlayer()->Scene() && fixture.Runtime->Identifiers().LiveCount() == 3 && parameter_owner->Entries().size() == 1 && variables != nullptr, "unregister regression requires a real visible selected tree and current scalar/variable record owners");
+
+		task.Clear();
+		const auto next_uid = fixture.Runtime->Identifiers().NextIdentifier();
+		const auto retired_uids = fixture.Runtime->Identifiers().RetiredCount();
+		Require(task.Commands().SelectedLayersCleared() && !task.GenericPlayer()->Scene() && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->PlayerCount() == 1, "actual Clear must retire selected nodes while retaining its Active containing task");
+		Require(fixture.Manager.Unregister(fixture.Project) && fixture.Manager.Count() == 0 && fixture.Cache.Count() == 0 && fixture.Releases == 1, "final unregister must release real registration textures before the cleared task retires");
+		fixture.Asset.reset();
+		fixture.Catalog.Prune();
+		Require(loaded.expired() && document.expired() && pixels.expired() && !metadata.expired(), "cleared metadata lifetime must not pin loaded PSB document, pixel backing or GPU resource owners");
+		Require(!fixture.Runtime->ResourceBorrowsLive() && task.GenericPlayer()->ResourcesLive(), "a cleared exact cached selection must remain phase-live while its expired source-registration lease remains observably stale");
+
+		task.SetVariable("param", 6, 7);
+		auto& second = fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second);
+		second.Update();
+		Require(task.Commands().ClockState().TickCount == (timeline_scalar ? 6 : 1) && parameter_owner->Entries().front().Position == 6 && parameter_owner->Entries().front().ControlFlags == 0, "actual cleared task Update must sample real frame delta or retained whole-timeline scalar and acknowledge native parameter flags");
+		task.SetVariable("param", 2);
+		task.Progress(2);
+		Require(task.Commands().ClockState().TickCount == (timeline_scalar ? 2 : 3) && task.Root().Frame().Composed && task.Root().Frame().Hierarchy.Attributes.Coordinate == std::array<float, 3>{7, 11, 13}, "explicit cleared Progress must preserve parameter-driven reverse traversal and compose its real root after unregister");
+		second.Draw(0);
+		task.Clear();
+		Require(fixture.Runtime->Context().Size() == 0 && fixture.Runtime->SceneContext().Size() == 0 && !task.GenericPlayer()->Scene() && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->Identifiers().NextIdentifier() == next_uid && fixture.Runtime->Identifiers().RetiredCount() == retired_uids, "cleared Draw and repeated Clear must stay empty without allocating UIDs or republishing retired selected rows");
+		Require(task.Commands().CachedTimeline() == timeline && task.Commands().SelectionSerial() == serial && task.Commands().TimelineVariables() == variables && task.Commands().ParameterValues().CurrentTimelineParameters(*timeline) == parameter_owner && parameter_owner->Entries().data() == parameter_cells && task.Random().State() == random && fixture.Events.size() == events && second.State(task.Handle()).Status == sgre::scene::TaskStatus::Active, "unregister must not replace exact cached owners, consume RNG, manufacture events or retire the surviving Active task");
+		fixture.Tasks.Clear();
+		Require(!task.IsLive() && metadata.expired() && fixture.Runtime->CanClose(), "true task retirement must release retained immutable metadata and every parameter/UID owner");
+	}
+
+	{
+		Fixture fixture(false, false, false, false, 32, false, 0, VariableDocument(0, true));
+		auto task = fixture.Attach();
+		task.SetVisible(true);
+		task.Play("main");
+		task.Progress(0);
+		const auto* variables = task.Commands().TimelineVariables();
+		const auto* timeline = task.Commands().CachedTimeline();
+		Require(variables && variables->Count() == 1 && variables->State(0).Value == -.5f && fixture.Runtime->Identifiers().LiveCount() == 1, "retained variable regression requires an actual initialized serialized tween and selected descriptor target");
+		task.Clear();
+		Require(fixture.Manager.Unregister(fixture.Project), "retained variable regression must perform the actual final unregister");
+		fixture.Asset.reset();
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Update();
+		task.Progress(4);
+		const auto* parameter_owner = task.Commands().ParameterValues().CurrentTimelineParameters(*timeline);
+		Require(task.Commands().ClockState().TickCount == 5 && variables == task.Commands().TimelineVariables() && variables->State(0).Value == 1.5f && task.GetVariable("drive") == 1.5f && parameter_owner->Entries().front().Position == 1.5f && parameter_owner->Entries().front().ControlFlags == 0, "retained current variable cells must continue genuine cursor/application work after Clear and unregister with no selected target");
+		fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		Require(fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->SceneContext().Size() == 0 && fixture.Runtime->Context().Size() == 0, "retained variable application must not resurrect selected geometry or enqueue retired draw owners");
+		fixture.Tasks.Clear();
+	}
+
+	{
+		Fixture fixture;
+		auto task = fixture.Attach();
+		task.SetVisible(true);
+		task.Play("main");
+		task.Progress(0);
+		const auto* active_scene = task.GenericPlayer()->Scene();
+		const auto ticks = task.Commands().ClockState().TickCount;
+		Require(active_scene && fixture.Runtime->Identifiers().LiveCount() == 3 && !task.Commands().SelectedLayersCleared(), "negative unregister case requires a genuine active selected tree");
+		Require(fixture.Manager.Unregister(fixture.Project), "negative active case must remove the actual resource registration");
+		RequireFailure([&] {
+			static_cast<void>(task.Commands().TimelineVariables()->State(0));
+		},
+		    "exact live current-player/resource owner");
+		RequireFailure([&] {
+			fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Update();
+		},
+		    "motion scene phase");
+		RequireFailure([&] {
+			task.Progress(1);
+		},
+		    "motion scene phase");
+		RequireFailure([&] {
+			fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+		},
+		    "motion scene phase");
+		Require(!task.GenericPlayer()->ResourcesLive() && task.GenericPlayer()->Scene() == active_scene && task.Commands().ClockState().TickCount == ticks && fixture.Runtime->Identifiers().LiveCount() == 3 && fixture.Runtime->SceneContext().Size() == 0, "active-tree unregister must still reject all phases before clock, selected-owner or queued-publication mutation");
+		fixture.Tasks.Clear();
+	}
+
+	{
+		Fixture fixture;
+		auto runtime = std::move(fixture.Runtime);
+		sgre::scene::MotionPlayerCommands commands(fixture.Manager);
+		sgre::scene::MotionRootScene root;
+		sgre::scene::MotionPlayerRenderControls render;
+		sgre::scene::MotionScenePlayer player(*runtime, commands, root, render, [](const auto&) {
+		});
+		Require(runtime->CanClose() && player.ResourcesLive(), "closed-owner negative case must use an empty real runtime with no task or preparation lease");
+		runtime->Close();
+		RequireFailure([&] {
+			player.Update();
+		},
+		    "motion scene phase");
+		RequireFailure([&] {
+			player.Progress(0);
+		},
+		    "motion scene phase");
+		RequireFailure([&] {
+			player.Draw();
+		},
+		    "motion scene phase");
+		Require(runtime->IsClosed() && !player.ResourcesLive() && !root.Frame().Composed && commands.ClockState().TickCount == 0, "no-selection root-only phases must retain the actual runtime-closed gate before publication");
+	}
+}
+
 int main() {
 	try {
+		TestClearedTaskOutlivesFinalResourceUnregister();
 		TestActualConstructorDefaultNormalization();
 		TestActualPlainVelocityPhase();
 		TestActualTimelineVariableRecords();

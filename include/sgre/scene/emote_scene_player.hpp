@@ -67,6 +67,7 @@ namespace sgre::scene {
 		void SetBlinkEnabled(bool enabled);
 		void PlayTimeline(std::string_view name, std::uint32_t flags = 0);
 		void Pass();
+		void Skip();
 		void StopTimeline(std::string_view name = {});
 		void SetTimelineBlendRatio(std::string_view name, float ratio, float duration = 0, float easing = 0);
 		[[nodiscard]] float TimelineBlendRatio(std::string_view name) const;

@@ -88,11 +88,12 @@ namespace sgre::scene {
 		[[nodiscard]] float DepthProjection() const;
 		// Dynamic projection invalidation is not yet recovered; setup precedes concrete player construction.
 		void SetDepthProjection(float coefficient);
-		// Keep the returned lease through every selected/frame/source view; registrations and raw backing remain external.
+		// The lease owns immutable model metadata. Active source textures still require live registrations.
 		[[nodiscard]] MotionRuntimeSelection Prepare(const ResolvedMotionTimeline& selection);
 		[[nodiscard]] MotionRuntimeSelection PrepareScene(const ResolvedMotionTimeline& selection);
 		// Clone shares immutable prepared frames while the destination owns independent actual registration borrows.
 		[[nodiscard]] MotionRuntimeSelection ClonePreparation(const MotionPreparationLease& source);
+		[[nodiscard]] bool IsClosed() const noexcept;
 		[[nodiscard]] bool ResourceBorrowsLive() const;
 		[[nodiscard]] bool RegistrationOrderMatches(const PreparedMotionSourceRegistry& sources) const;
 		[[nodiscard]] std::optional<RegisteredMotionSource> FindTexture(const ResolvedMotionIcon& binding) const;

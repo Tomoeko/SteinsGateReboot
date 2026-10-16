@@ -106,8 +106,12 @@ namespace sgre::scene {
 		[[nodiscard]] const std::optional<ResolvedMotionTimeline>& SelectedProject() const noexcept;
 		[[nodiscard]] const std::optional<MotionProjectIdentity>& PreferredProject() const noexcept;
 		[[nodiscard]] const resource::MotionTimeline* CachedTimeline() const noexcept;
+		[[nodiscard]] const std::shared_ptr<const resource::MotionResource>& CachedResource() const noexcept;
+		[[nodiscard]] bool SelectedLayersCleared() const noexcept;
 
 	private:
+		friend class MotionScenePlayer;
+		friend class MotionSelectedSpritePlayer;
 		friend class MotionPlayerUpdate;
 		friend class MotionSceneEvaluation;
 		[[nodiscard]] std::string ReadName(std::string_view name) const;
@@ -119,7 +123,10 @@ namespace sgre::scene {
 		MotionTimelineClock m_Clock;
 		MotionPlayerParameterValues m_ParameterValues;
 		mutable MotionPlayerLayerUids m_LayerUids;
+		// Native retained timeline atoms outlive source unregistration and selected-tree Clear.
+		std::shared_ptr<const resource::MotionResource> m_CachedResource;
 		std::unique_ptr<MotionTimelineVariables> m_TimelineVariables;
+		bool m_SelectedLayersCleared = false;
 		std::uint64_t m_SelectionSerial = 0;
 		float m_MeshDivisionRatio = 1;
 		std::optional<ResolvedMotionTimeline> m_SelectedProject;

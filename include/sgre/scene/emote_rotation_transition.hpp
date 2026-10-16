@@ -7,6 +7,7 @@ namespace sgre::scene {
 	class EmoteRotationTransition {
 	public:
 		void Set(float radians, float duration = 0, float easing = 0);
+		void FinishTransitions();
 		[[nodiscard]] float Advance(float elapsed_ticks);
 		[[nodiscard]] bool Changing() const noexcept;
 		[[nodiscard]] float Current() const noexcept;

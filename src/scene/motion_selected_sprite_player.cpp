@@ -273,6 +273,7 @@ namespace sgre::scene {
 		}
 		m_ClearedTimeline = m_Commands.CachedTimeline();
 		m_LayersCleared = true;
+		m_Commands.m_SelectedLayersCleared = true;
 		m_Published = true;
 	}
 

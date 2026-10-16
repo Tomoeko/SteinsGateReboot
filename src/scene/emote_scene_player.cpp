@@ -13,6 +13,7 @@
 
 #include <cmath>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -76,18 +77,19 @@ namespace sgre::scene {
 		class State {
 		public:
 			State(MotionManagerRuntime& runtime, MotionProjectId project, std::function<std::uint32_t()> entropy, std::function<void(const MotionPlayerEvent&)> listener, EmoteWindRandom* wind_random)
-			    : Runtime(runtime), Asset(runtime.ReadRegisteredAsset(project)), Random(runtime.NextUnitFloat()), Commands(runtime.Manager(), [this](const auto& selected, auto) {
+			    : Runtime(runtime), Document(runtime.ReadRegisteredAsset(project).Document), Random(runtime.NextUnitFloat()), Commands(runtime.Manager(), [this](const auto& selected, auto) {
 				      Plain->Rebuild(selected);
 			      },
-			                                                                                                          [this] {
-				                                                                                                          Plain->CaptureJoin();
-			                                                                                                          }) {
-				if (!entropy || !listener || !runtime.SceneAssets().ContainsPrepared(Asset) || !runtime.Manager().Contains(project) || runtime.Manager().Identity(project) != Asset.Identity || &runtime.Manager().Resource(project) != Asset.Model.get()) {
+			                                                                                                                      [this] {
+				                                                                                                                      Plain->CaptureJoin();
+			                                                                                                                      }) {
+				const auto& asset = runtime.ReadRegisteredAsset(project);
+				if (!entropy || !listener || !Document || Document != asset.Document || !runtime.SceneAssets().ContainsPrepared(asset) || !runtime.Manager().Contains(project) || runtime.Manager().Identity(project) != asset.Identity || &runtime.Manager().Resource(project) != asset.Model.get()) {
 					throw std::runtime_error("containing Emote requires actual registered asset, shared manager and entropy/listener services");
 				}
-				const auto& metadata = EmoteOwnerField(Asset.Document->Root, "metadata");
+				const auto& metadata = EmoteOwnerField(Document->Root, "metadata");
 				const auto& base = EmoteOwnerField(metadata, "base");
-				auto program = ReadEmoteVariableProgram(*Asset.Document);
+				auto program = ReadEmoteVariableProgram(*Document);
 				if (!program.UnsupportedFamilies.empty()) {
 					throw std::runtime_error("containing Emote requires recovered " + program.UnsupportedFamilies.front());
 				}
@@ -127,10 +129,10 @@ namespace sgre::scene {
 				if (!Variables->MissingFamilies().empty()) {
 					throw std::runtime_error("containing Emote requires recovered " + Variables->MissingFamilies().front());
 				}
-				Timelines = std::make_unique<EmoteTimelineScheduler>(*Variables, *Asset.Document, [this] {
+				Timelines = std::make_unique<EmoteTimelineScheduler>(*Variables, *Document, [this] {
 					RequireSceneMutable();
 				});
-				Physics = std::make_unique<EmoteVelvetyOwner>(Root, Commands, *Plain, *Asset.Document, *Variables, entropy);
+				Physics = std::make_unique<EmoteVelvetyOwner>(Root, Commands, *Plain, *Document, *Variables, entropy);
 			}
 
 			void RequireSceneMutable() const {
@@ -174,7 +176,8 @@ namespace sgre::scene {
 			}
 
 			MotionManagerRuntime& Runtime;
-			const LoadedMotionAsset& Asset;
+			// Native Clear retains metadata atoms; this CPU document share does not own receiving textures.
+			std::shared_ptr<const resource::PsbDocument> Document;
 			MotionPlayerRandom Random;
 			MotionPlayerCommands Commands;
 			MotionRootScene Root;
@@ -436,6 +439,28 @@ namespace sgre::scene {
 		auto& state = m_Implementation->Require();
 		state.RequireMutable();
 		state.Timelines->Pass();
+	}
+	void EmoteScenePlayer::Skip() {
+		auto& state = m_Implementation->Require();
+		state.RequireMutable();
+		state.Physics->RequireCanSkip();
+		state.Operating = true;
+		try {
+			// Native2d0a60 runs one2d0ee0 in the admitted velvetyPartsMaxDepth1 domain.
+			state.Timelines->Skip();
+			state.Variables->FinishNamedTransitions();
+			state.Coordinate.FinishTransitions();
+			state.GlobalScale.FinishTransitions();
+			state.RotationControl.FinishTransitions();
+			state.Color.FinishTransitions();
+			state.Variables->FinishExtensionTransitions();
+			state.Physics->Skip();
+			state.Operating = false;
+		} catch (...) {
+			state.Operating = false;
+			state.Valid = false;
+			throw;
+		}
 	}
 
 	void EmoteScenePlayer::StopTimeline(std::string_view name) {

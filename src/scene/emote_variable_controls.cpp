@@ -153,6 +153,14 @@ namespace sgre::scene {
 		destination.Transitioning = source.Transitioning;
 	}
 
+	template <typename Channel>
+	static void FinishChannelTransition(Channel& channel) noexcept {
+		if (channel.Transitioning) {
+			channel.Current = channel.Target;
+			channel.Transitioning = false;
+		}
+	}
+
 	static bool IsBlinkSelection(const EmoteEyeChannel& eye, std::string_view name) {
 		return name == eye.Definition.BlinkName && name != eye.Definition.Name && name != eye.Definition.LeftName && name != eye.Definition.RightName;
 	}
@@ -258,6 +266,7 @@ namespace sgre::scene {
 				}
 			}
 
+			PrimaryChannelCount = Channels.size();
 			for (auto& name : program.Extensions) {
 				if (Routes.find(name) == Routes.end() && std::find(program.VariableLabels.begin(), program.VariableLabels.end(), name) == program.VariableLabels.end()) {
 					AddChannel(std::move(name));
@@ -280,6 +289,7 @@ namespace sgre::scene {
 		std::function<void(float)> UpdateProperties;
 		std::vector<std::string> Missing;
 		std::vector<EmoteScalarChannel> Channels;
+		std::size_t PrimaryChannelCount = 0;
 		std::vector<std::unique_ptr<EmoteSelectorControl>> Selectors;
 		std::vector<EmoteGraphChannel> Eyebrows;
 		std::vector<EmoteMouthChannel> Mouths;
@@ -437,6 +447,58 @@ namespace sgre::scene {
 			}
 
 			return false;
+		}
+
+		void RequireCanFinishTransitions() const {
+			RequireComplete();
+			RequireMutable();
+			if (Updating || DispatchDepth != 0) {
+				throw std::runtime_error("Emote transition completion requires its idle actual control owner");
+			}
+		}
+
+		void FinishNamedTransitions() {
+			RequireCanFinishTransitions();
+			Updating = true;
+			try {
+				for (auto& eye : Eyes) {
+					for (auto& channel : eye.Channels) {
+						FinishChannelTransition(channel);
+					}
+				}
+				for (auto& channel : Eyebrows) {
+					FinishChannelTransition(channel);
+				}
+				for (auto& mouth : Mouths) {
+					if (mouth.Pending || mouth.Transitioning) {
+						mouth.Talk = mouth.Target;
+						mouth.Pending = false;
+						mouth.Transitioning = false;
+					}
+				}
+				for (auto& selector : Selectors) {
+					// Apply uses this exact owner's internal VariableIo, retaining normal recursive dispatch bounds.
+					selector->FinishTransitions();
+				}
+				for (std::size_t index = 0; index != PrimaryChannelCount; ++index) {
+					FinishChannelTransition(Channels[index]);
+				}
+				Updating = false;
+			} catch (...) {
+				Updating = false;
+				throw;
+			}
+		}
+
+		void FinishExtensionTransitions() {
+			RequireCanFinishTransitions();
+			// Native2d14d0 visits the ordered extension map, including later speed-control bindings.
+			for (const auto& [name, route] : Routes) {
+				static_cast<void>(name);
+				if (route.Kind == EmoteVariableRouteKind::Transition && route.Index >= PrimaryChannelCount) {
+					FinishChannelTransition(Channels[route.Index]);
+				}
+			}
 		}
 
 		void RequireCanAssignState(const Implementation& source) const {
@@ -842,6 +904,12 @@ namespace sgre::scene {
 
 	void EmoteVariableControls::AssignState(const EmoteVariableControls& source) {
 		m_Implementation->AssignState(*source.m_Implementation);
+	}
+	void EmoteVariableControls::FinishNamedTransitions() {
+		m_Implementation->FinishNamedTransitions();
+	}
+	void EmoteVariableControls::FinishExtensionTransitions() {
+		m_Implementation->FinishExtensionTransitions();
 	}
 
 	void EmoteVariableControls::UpdateWithTimelines(float elapsed_ticks, const EmoteTimelineScheduler& actual_timelines) {

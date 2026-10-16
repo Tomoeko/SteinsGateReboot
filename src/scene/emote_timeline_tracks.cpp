@@ -344,6 +344,19 @@ namespace sgre::scene {
 		if (!m_Initialized || position < m_Position) {
 			throw std::runtime_error("Emote timeline crossing requires a real seek and forward position; reverse owner remains unrecovered");
 		}
+		CrossPreparedTo(position, inclusive);
+	}
+
+	void EmoteTimelineTracks::FinishAtLastTime() {
+		RequireOperation(m_Definition.LastTime);
+		if (!m_Initialized || !(m_Definition.LoopBegin < 0)) {
+			throw std::runtime_error("Emote timeline finish requires its prepared finite playback");
+		}
+		// Native2bf9b0 rewrites position even if it already passed LastTime; saved cursors do not rewind.
+		CrossPreparedTo(m_Definition.LastTime, true);
+	}
+
+	void EmoteTimelineTracks::CrossPreparedTo(float position, bool inclusive) {
 		m_Operating = true;
 		try {
 			for (std::size_t index = 0; index != m_Definition.Tracks.size(); ++index) {
