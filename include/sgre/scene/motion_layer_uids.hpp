@@ -41,6 +41,8 @@ namespace sgre::scene {
 		[[nodiscard]] resource::MotionPoint MeshPhysicalOrigin() const;
 		// Native51b5b0/526df0 changes the pending real mesh only; completed frame geometry remains borrowed.
 		bool SetMesh(std::uint32_t mode, const resource::MotionBezierLattice* lattice, bool compare) const;
+		void RequireCanAssignMeshFrom(const MotionLayerUidReference& source) const;
+		void AssignMeshFrom(const MotionLayerUidReference& source) const;
 		// Native51f0f0 initializes the actual mesh override latch and retained boundary origins without forcing a numeric phase.
 		void InitializeMeshOrigin(const resource::MotionPoint& pixel_origin, const resource::MotionPoint& physical_origin) const;
 		[[nodiscard]] std::uint32_t NativeOrdinal() const noexcept;

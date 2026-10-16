@@ -97,6 +97,11 @@ namespace sgre::scene {
 		[[nodiscard]] std::optional<float> SpeedTransitionValue(std::string_view identifier) const;
 		[[nodiscard]] float Read(std::string_view identifier) const;
 		void Set(std::string_view identifier, float value, float duration = 0, float easing = 0);
+		// Exact sorted timeline track names suppress only their matching native named controls.
+		[[nodiscard]] bool Animating(std::span<const std::string_view> timeline_variables = {}) const;
+		void RequireCanAssignState(const EmoteVariableControls& source) const;
+		// Native2bc870 matches source controls to the first destination label, without publication.
+		void AssignState(const EmoteVariableControls& source);
 		void SetBlinkEnabled(bool enabled);
 		[[nodiscard]] bool BlinkEnabled() const;
 		[[nodiscard]] bool IsInstantVariable(std::string_view identifier) const;

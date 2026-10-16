@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace sgre::scene {
 	static constexpr std::size_t kMaximumEmissionParticles = 65536;
@@ -373,4 +374,35 @@ namespace sgre::scene {
 	std::span<const EmoteEmissionEvent> EmoteEmissionPool::Events() const noexcept {
 		return m_Events;
 	}
+	void EmoteEmissionPool::RequireCanAssignState(const EmoteEmissionPool& source) const {
+		RequireIdle();
+		source.RequireIdle();
+		if (source.m_Particles.size() > m_ParticleLimit) {
+			throw std::runtime_error("Emote emission assignment exceeds the destination owned particle capacity");
+		}
+		for (const auto& particle : source.m_Particles) {
+			if (particle.Birth.Emitter >= m_Definition.EmitterCount || particle.Id == std::numeric_limits<std::uint32_t>::max()) {
+				throw std::runtime_error("Emote emission assignment requires destination emitter indices and a bounded next particle ID");
+			}
+		}
+	}
+
+	void EmoteEmissionPool::AssignState(const EmoteEmissionPool& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto particles = source.m_Particles;
+		std::uint32_t next_id = 0;
+		for (const auto& particle : particles) {
+			next_id = std::max(next_id, particle.Id + 1);
+		}
+		m_Particles = std::move(particles);
+		m_NextId = next_id;
+		// Selection stores indices into the old pool; the actual next force query must select its new bounds.
+		m_Selected.clear();
+		m_Prepared = false;
+	}
+
 } // namespace sgre::scene

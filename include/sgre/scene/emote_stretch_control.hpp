@@ -52,6 +52,9 @@ namespace sgre::scene {
 		~EmoteStretchControl() noexcept;
 		EmoteStretchControl(const EmoteStretchControl&) = delete;
 		EmoteStretchControl& operator=(const EmoteStretchControl&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteStretchControl& source) const;
+		void AssignState(const EmoteStretchControl& source);
 		void RequireReady() const;
 		// Native2f2b00 writes pending meshes after the one actual plain Progress operation.
 		void Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent = nullptr);

@@ -1,0 +1,15 @@
+# Emote physical assignment
+
+Reference: supplied `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Read-only analysis explicitly uses Binary Ninja `candidate:view:1:UEU`. Function addresses below are RVAs relative to image base `0x140000000`.
+
+Native `2E1FD0` returns immediately for a disabled destination Common driver. Otherwise it calculates the destination layer frame at zero, prepares the destination Common conversion at zero, then copies source speed-limit/reference history and the first-reference flag. The already prepared destination conversion remains unchanged. Emission assignment follows, then Bloom, String, Catenary, Jelly, Stretch and Synchronize.
+
+The six family copiers (`2E20B0`, `2E2FF0`, `2E2390`, `2E2980`, `2E2D70`, `2E3310`) match existing destination UID keys and occurrence keys. They copy the control posture/cache. The four physical families import mutable entity/model snapshots into existing destination storage; extra destination particles remain present. Bloom/String/Catenary/Jelly also copy the occurrence reset flag. Prediction history, destination resources, authored calibration, UID subscriptions, collider leases and source/target relationships remain destination-owned. Stretch and Synchronize copy neither prediction history nor the reset flag.
+
+Native `2E41A0` reads the source current mesh and assigns it through `51B5B0` with comparison enabled. This writes the destination pending lattice. It does not recompose completed packet geometry. The next genuine plain progress consumes the pending mesh.
+
+Emission `2E2710` copies the separate PCG state, then matches existing destination group UIDs and emitter ordinals. Virtual emitter snapshots preserve each destination pool/random reference; Point `31DEB0` additionally imports point coordinates, while Rectangle `31DE70` retains its destination corners. Pool `31BD90` deep-copies particles and derives the next ID. Destination group phase/anchor, trigger metadata and leases remain local.
+
+The portable preflight retains existing finite-state and ownership gates, rejects enabled-destination/disabled-source Common state, missing emitter ordinals, incompatible emitter geometry, and source particles outside destination capacity/emitter/ID bounds. Assignment never creates a substitute player or physical step. Portable initialization flags track whether imported physical values have a genuine initialized producer; they do not replace metadata or recompute state.
+
+Coherent ASan/UBSan receiving passes the six physical leaf groups and the actual six-family Common assignment/source-first fixture. Source fixtures cover mutable-prefix copying, retained destination calibration, independent particle/string owners, rigid/soft category ordering, point versus rectangle snapshot behavior, source-first retirement, all six actual Common families, pending mesh comparison and queued-draw guards. These tests do not by themselves prove native numerical fidelity. The recovered Common/header, seven family copiers and model imports have retained static evidence; independent original-instruction comparison remains distinct.

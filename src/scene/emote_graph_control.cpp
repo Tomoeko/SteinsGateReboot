@@ -340,6 +340,14 @@ namespace sgre::scene {
 		m_Implementation->Prepare(start, target);
 	}
 
+	void EmoteGraphControl::AssignPath(const EmoteGraphControl& source) {
+		if (!m_Implementation || !source.m_Implementation) {
+			throw std::runtime_error("Emote graph assignment requires two live owned graphs");
+		}
+
+		m_Implementation->Prepare(source.m_Implementation->Start, source.m_Implementation->Target);
+	}
+
 	float EmoteGraphControl::Evaluate(float ratio) const {
 		return m_Implementation->Evaluate(ratio);
 	}

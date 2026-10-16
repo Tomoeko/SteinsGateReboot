@@ -86,6 +86,9 @@ namespace sgre::scene {
 		EmoteEmissionEmitter(EmoteEmissionPool& pool, EmoteEmissionRandomState& actual_random, const EmoteEmissionEmitterDefinition& definition);
 		EmoteEmissionEmitter(const EmoteEmissionEmitter&) = delete;
 		EmoteEmissionEmitter& operator=(const EmoteEmissionEmitter&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteEmissionEmitter& source) const;
+		void AssignState(const EmoteEmissionEmitter& source);
 		void SetPosture(const EmoteEmissionEmitterPosture& posture);
 		void Step(float ticks);
 		[[nodiscard]] float Countdown() const noexcept;

@@ -59,6 +59,9 @@ namespace sgre::scene {
 		[[nodiscard]] std::uint32_t Color() const;
 		// Native2bdd90 clears each actual plain tree without retiring the enclosing task or controls.
 		void Clear();
+		// Native2BC870 transfers supported owned controls into this existing player; registrations and schema remain destination-owned.
+		[[nodiscard]] bool Animating() const;
+		void AssignState(const EmoteScenePlayer& source);
 		[[nodiscard]] float ReadVariable(std::string_view name) const;
 		void SetVariable(std::string_view name, float value, float duration = 0, float easing = 0);
 		void SetBlinkEnabled(bool enabled);

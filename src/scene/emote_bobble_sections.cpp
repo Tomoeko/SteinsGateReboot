@@ -4,6 +4,7 @@
 
 #include "sgre/scene/emote_bobble_model.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <stdexcept>
@@ -140,4 +141,18 @@ namespace sgre::scene {
 
 		return m_Sections;
 	}
+	void EmoteBobbleSections::RequireCanAssignState(const EmoteBobbleSections& source) const {
+		m_Model.RequireIdle();
+		source.m_Model.RequireIdle();
+		if (!m_Valid || !source.m_Valid) {
+			throw std::runtime_error("Emote section assignment requires valid actual numerical owners");
+		}
+	}
+
+	void EmoteBobbleSections::AssignState(const EmoteBobbleSections& source) {
+		RequireCanAssignState(source);
+		std::copy_n(source.m_Sections.begin(), std::min(m_Sections.size(), source.m_Sections.size()), m_Sections.begin());
+		m_Ready = source.m_Ready;
+	}
+
 } // namespace sgre::scene

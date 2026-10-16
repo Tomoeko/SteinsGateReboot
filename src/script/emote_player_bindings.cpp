@@ -65,7 +65,9 @@ namespace sgre::script {
 		FadeIn = 57,
 		FadeOut = 58,
 		MainLabels = 61,
-		DifferenceLabels = 62
+		DifferenceLabels = 62,
+		AssignState = 63,
+		GetAnimating = 64
 	};
 
 	static float EmoteNativeFloat(const SquirrelValue& input) {
@@ -249,6 +251,31 @@ namespace sgre::script {
 			const auto input = [&](std::int32_t index) {
 				return Vm.NativeAllocatedStackValue(index);
 			};
+			if (method == EmoteNativeMethod::GetAnimating) {
+				return SquirrelNativeResult::ReturnValue(!record->Detached && record->Task->Player().Animating());
+			}
+			if (method == EmoteNativeMethod::AssignState) {
+				// Native2AC820 keeps its capture and performs typed physical2 extraction before either detach test.
+				const auto source_value = input(2);
+				std::shared_ptr<EmoteNativeRecord> source;
+				if (Vm.IsInstanceOf(source_value, Registration.EmoteClass())) {
+					const auto identity = Vm.BorrowObjectIdentity(source_value);
+					const auto found = Records.find(identity.Index);
+					if (found != Records.end() && found->second->Instance == identity) {
+						source = found->second;
+					}
+				}
+				if (record->Detached) {
+					return SquirrelNativeResult::NoValues();
+				}
+				if (!source) {
+					throw std::runtime_error("Emote assignment requires its actual typed source wrapper; native null-source dereference is unsupported");
+				}
+				if (!source->Detached) {
+					record->Task->Player().AssignState(source->Task->Player());
+				}
+				return SquirrelNativeResult::NoValues();
+			}
 			if (method == EmoteNativeMethod::StartWind) {
 				// Native2acaf0 extracts physical6..2 before the member's detached-owner check.
 				scene::EmoteWindParameters parameters;
@@ -497,7 +524,7 @@ namespace sgre::script {
 			owner->Construct(arguments, weak);
 			return SquirrelNativeResult::NoValues();
 		}));
-		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 45> methods{{{"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
+		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 47> methods{{{"getAnimating", EmoteNativeMethod::GetAnimating}, {"assignState", EmoteNativeMethod::AssignState}, {"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
 		    {"setBlinkEnabled", EmoteNativeMethod::SetBlink}, {"getBlinkEnabled", EmoteNativeMethod::GetBlink},
 		    {"setVisible", EmoteNativeMethod::SetVisible}, {"getVisible", EmoteNativeMethod::GetVisible},
 		    {"playTimeline", EmoteNativeMethod::Play}, {"stopTimeline", EmoteNativeMethod::Stop}, {"getTimelinePlaying", EmoteNativeMethod::Playing},
@@ -520,7 +547,7 @@ namespace sgre::script {
 				if (bytes.size() != descriptor.size() || !std::equal(bytes.begin(), bytes.end(), descriptor.begin())) {
 					throw std::runtime_error("Emote captured route does not match its actual native method");
 				}
-				if (method != EmoteNativeMethod::StartWind && method != EmoteNativeMethod::StopWind && method != EmoteNativeMethod::SetMeshDivision && method != EmoteNativeMethod::GetMeshDivision && method != EmoteNativeMethod::SetBustScale && method != EmoteNativeMethod::GetBustScale && method != EmoteNativeMethod::SetHairScale && method != EmoteNativeMethod::GetHairScale && method != EmoteNativeMethod::SetPartsScale && method != EmoteNativeMethod::GetPartsScale && method != EmoteNativeMethod::GetLeft && method != EmoteNativeMethod::GetTop && method != EmoteNativeMethod::GetScale && method != EmoteNativeMethod::GetRotation && method != EmoteNativeMethod::GetColor && method != EmoteNativeMethod::Pause && method != EmoteNativeMethod::Clear && method != EmoteNativeMethod::GetVariable && method != EmoteNativeMethod::GetBlend && method != EmoteNativeMethod::SetVisible && method != EmoteNativeMethod::GetVisible && method != EmoteNativeMethod::SetBlink && method != EmoteNativeMethod::GetBlink) {
+				if (method != EmoteNativeMethod::GetAnimating && method != EmoteNativeMethod::AssignState && method != EmoteNativeMethod::StartWind && method != EmoteNativeMethod::StopWind && method != EmoteNativeMethod::SetMeshDivision && method != EmoteNativeMethod::GetMeshDivision && method != EmoteNativeMethod::SetBustScale && method != EmoteNativeMethod::GetBustScale && method != EmoteNativeMethod::SetHairScale && method != EmoteNativeMethod::GetHairScale && method != EmoteNativeMethod::SetPartsScale && method != EmoteNativeMethod::GetPartsScale && method != EmoteNativeMethod::GetLeft && method != EmoteNativeMethod::GetTop && method != EmoteNativeMethod::GetScale && method != EmoteNativeMethod::GetRotation && method != EmoteNativeMethod::GetColor && method != EmoteNativeMethod::Pause && method != EmoteNativeMethod::Clear && method != EmoteNativeMethod::GetVariable && method != EmoteNativeMethod::GetBlend && method != EmoteNativeMethod::SetVisible && method != EmoteNativeMethod::GetVisible && method != EmoteNativeMethod::SetBlink && method != EmoteNativeMethod::GetBlink) {
 					// Native04dc10 pops its code descriptor before calling raw-VM methods.
 					active.SetNativeStackSize(active.NativeStackSize() - 1);
 					arguments = arguments.first(arguments.size() - 1);

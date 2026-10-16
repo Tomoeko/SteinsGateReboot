@@ -30,12 +30,16 @@ namespace sgre::scene {
 		EmoteTimelineScheduler& operator=(const EmoteTimelineScheduler&) = delete;
 		void Play(std::string_view name, std::uint32_t flags = 0);
 		void Stop(std::string_view name = {});
+		void RequireCanAssignState(const EmoteTimelineScheduler& source) const;
+		// Copies active playback into matching destination metadata without dispatching variable keys.
+		void AssignState(const EmoteTimelineScheduler& source);
 		void SetBlendRatio(std::string_view name, float ratio, float duration = 0, float easing = 0, bool stop_when_finished = false);
 		void FadeIn(std::string_view name, float duration = 0, float easing = 0);
 		void FadeOut(std::string_view name, float duration = 0, float easing = 0);
 		[[nodiscard]] float BlendRatio(std::string_view name) const;
 		void RequirePublicationOwner(const EmoteVariableControls& actual_controls, std::size_t actual_value_count) const;
 		[[nodiscard]] float ApplyDifference(std::string_view name, float base) const;
+		[[nodiscard]] bool Animating() const;
 		[[nodiscard]] bool IsPlaying(std::string_view name = {}) const;
 		[[nodiscard]] std::optional<EmoteTimelinePlaybackState> State(std::string_view name) const;
 		[[nodiscard]] std::size_t ActiveCount() const;

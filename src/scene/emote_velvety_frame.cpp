@@ -233,4 +233,22 @@ namespace sgre::scene {
 		}
 		return m_Inverse;
 	}
+	void EmoteVelvetyFrameOwner::RequireCanAssignHistory(const EmoteVelvetyFrameOwner& source) const {
+		if (m_Thread != std::this_thread::get_id() || source.m_Thread != std::this_thread::get_id() || !m_Valid || !source.m_Valid || !m_Plain.CanMutate() || !source.m_Plain.CanMutate() || !m_Plain.ResourcesLive() || !source.m_Plain.ResourcesLive()) {
+			throw std::runtime_error("Emote frame assignment requires both actual live idle frame owners");
+		}
+	}
+
+	void EmoteVelvetyFrameOwner::AssignHistory(const EmoteVelvetyFrameOwner& source) {
+		RequireCanAssignHistory(source);
+		if (!m_Prepared) {
+			throw std::runtime_error("Emote frame assignment requires destination zero-time preparation before history import");
+		}
+		m_Definition.ReferenceSpeedLimit = source.m_Definition.ReferenceSpeedLimit;
+		m_PrecedingReference = source.m_PrecedingReference;
+		m_AccumulatedReference = source.m_AccumulatedReference;
+		m_First = source.m_First;
+		// Native2e1fd0 retains the destination conversion computed before these history writes.
+	}
+
 } // namespace sgre::scene

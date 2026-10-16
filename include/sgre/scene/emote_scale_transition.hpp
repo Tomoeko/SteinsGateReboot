@@ -8,6 +8,7 @@ namespace sgre::scene {
 	public:
 		EmoteScaleTransition();
 		void Set(float scale, float duration = 0, float easing = 0);
+		[[nodiscard]] bool Changing() const noexcept;
 		[[nodiscard]] float Current() const noexcept;
 		[[nodiscard]] float Advance(float elapsed_ticks);
 

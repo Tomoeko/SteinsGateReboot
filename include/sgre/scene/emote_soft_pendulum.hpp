@@ -67,6 +67,9 @@ namespace sgre::scene {
 		explicit EmoteSoftPendulum(const EmoteSoftPendulumDefinition& definition);
 		EmoteSoftPendulum(const EmoteSoftPendulum&) = delete;
 		EmoteSoftPendulum& operator=(const EmoteSoftPendulum&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteSoftPendulum& source) const;
+		void AssignState(const EmoteSoftPendulum& source);
 		void SetPosture(const EmoteSoftPendulumPosture& posture);
 		// Native322190 supplies the real two endpoints after SetPosture; no endpoint is synthesized.
 		void SetFixedEnds(const std::array<float, 2>& first, const std::array<float, 2>& last);

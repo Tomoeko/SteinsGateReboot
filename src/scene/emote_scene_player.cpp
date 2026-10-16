@@ -154,19 +154,22 @@ namespace sgre::scene {
 				}
 				Operating = true;
 				try {
-					Timelines->Update(elapsed);
-					Variables->UpdateWithTimelines(elapsed, *Timelines);
-					Plain->Progress(elapsed);
-					// Native2d33b8 follows plain composition/publication and does not run at an exactly zero delta.
-					if (elapsed != 0) {
-						// Native2ca710 reads the separate extended angular owner at+2c8, whose admitted default is zero.
-						Physics->Update(elapsed, Global);
-					}
+					ProgressNative(elapsed);
 					Operating = false;
 				} catch (...) {
 					Operating = false;
 					Valid = false;
 					throw;
+				}
+			}
+			void ProgressNative(float elapsed) {
+				Timelines->Update(elapsed);
+				Variables->UpdateWithTimelines(elapsed, *Timelines);
+				Plain->Progress(elapsed);
+				// Native2d33b8 follows plain composition/publication and does not run at an exactly zero delta.
+				if (elapsed != 0) {
+					// Native2ca710 reads the separate extended angular owner at+2c8, whose admitted default is zero.
+					Physics->Update(elapsed, Global);
 				}
 			}
 
@@ -360,6 +363,52 @@ namespace sgre::scene {
 		} catch (...) {
 			state.Operating = false;
 			state.Valid = false;
+			throw;
+		}
+	}
+	bool EmoteScenePlayer::Animating() const {
+		auto& state = m_Implementation->Require();
+		state.RequireMutable();
+		// Native2c9520 excludes color, Wind and physical simulation. Extended rotation remains constructor-zero in the admitted setter domain.
+		return state.Coordinate.Changing() || state.GlobalScale.Changing() || state.RotationControl.Changing() || state.Timelines->Animating();
+	}
+
+	void EmoteScenePlayer::AssignState(const EmoteScenePlayer& source) {
+		auto& destination = m_Implementation->Require();
+		auto& origin = source.m_Implementation->Require();
+		destination.RequireMutable();
+		origin.RequireMutable();
+		if (&destination == &origin) {
+			return;
+		}
+		destination.Variables->RequireCanAssignState(*origin.Variables);
+		destination.Timelines->RequireCanAssignState(*origin.Timelines);
+		destination.Physics->RequireCanAssignState(*origin.Physics);
+		destination.Operating = true;
+		origin.Operating = true;
+		try {
+			// Native reconfigures the destination wind; bands and the shared random stream are not cloned.
+			destination.Wind->AssignState(*origin.Wind);
+			destination.BustScale = origin.BustScale;
+			destination.HairScale = origin.HairScale;
+			destination.PartsScale = origin.PartsScale;
+			destination.Coordinate.AssignState(origin.Coordinate);
+			destination.Color = origin.Color;
+			destination.GlobalScale = origin.GlobalScale;
+			destination.RotationControl = origin.RotationControl;
+			destination.Variables->AssignState(*origin.Variables);
+			destination.Timelines->AssignState(*origin.Timelines);
+			if (destination.Physics->Enabled()) {
+				// Native2E1FD0 first performs the genuine containing CalcLayerFrameInfo(0), without a shared-clock step.
+				destination.ProgressNative(0);
+			}
+			destination.Physics->AssignState(*origin.Physics, destination.Global);
+			origin.Operating = false;
+			destination.Operating = false;
+		} catch (...) {
+			origin.Operating = false;
+			destination.Operating = false;
+			destination.Valid = false;
 			throw;
 		}
 	}

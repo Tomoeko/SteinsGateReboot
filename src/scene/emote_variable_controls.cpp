@@ -10,6 +10,7 @@
 #include <bit>
 #include <cmath>
 #include <map>
+#include <memory>
 #include <set>
 #include <stdexcept>
 #include <utility>
@@ -17,6 +18,7 @@
 namespace sgre::scene {
 
 	static constexpr std::size_t kMaximumEmoteControls = 65536;
+	static constexpr std::size_t kMaximumEmoteAnimationNames = 1000000;
 	static constexpr std::size_t kMaximumEmoteChannelBytes = 8 * 1024 * 1024;
 
 	struct EmoteScalarChannel {
@@ -81,6 +83,75 @@ namespace sgre::scene {
 		std::array<EmoteGraphChannel, 3> Channels;
 		std::unique_ptr<EmoteBlinkControl> Blink;
 	};
+
+	template <typename Collection, typename Source, typename Name, typename Operation>
+	static void VisitAssignedControls(Collection& destination, const Source& source, Name name, Operation operation) {
+		using TargetPointer = decltype(std::addressof(*destination.begin()));
+		std::map<std::string_view, TargetPointer, std::less<>> targets;
+		for (auto& control : destination) {
+			targets.try_emplace(name(control), std::addressof(control));
+		}
+		for (const auto& control : source) {
+			if (const auto found = targets.find(name(control)); found != targets.end()) {
+				operation(*found->second, control);
+			}
+		}
+	}
+
+	static void AssignGraphChannel(EmoteGraphChannel& destination, const EmoteGraphChannel& source) {
+		destination.Current = source.Current;
+		destination.Target = source.Target;
+		destination.Duration = source.Duration;
+		destination.Elapsed = source.Elapsed;
+		destination.Easing = source.Easing;
+		destination.Transitioning = source.Transitioning;
+		destination.Graph.AssignPath(source.Graph);
+	}
+
+	static void RequireEyeAssignment(const EmoteEyeChannel& destination, const EmoteEyeChannel& source) {
+		if (!destination.Blink || !source.Blink) {
+			throw std::runtime_error("Emote eye assignment requires both actual initialized blink owners");
+		}
+		const auto index = source.Definition.BlinkParameterIndex;
+		if (!destination.Definition.BlinkChoices.empty() && (index < 0 || static_cast<std::size_t>(index) >= destination.Definition.BlinkChoices.size())) {
+			// Native2d6180 clamps the stored index but addresses the parameter vector with the original index.
+			throw std::runtime_error("Emote eye assignment source parameter index exceeds the destination native-safe vector");
+		}
+	}
+
+	static void AssignEyeChannel(EmoteEyeChannel& destination, const EmoteEyeChannel& source) {
+		for (std::size_t index = 0; index != destination.Channels.size(); ++index) {
+			AssignGraphChannel(destination.Channels[index], source.Channels[index]);
+		}
+		destination.Definition.BlinkParameterIndex = source.Definition.BlinkParameterIndex;
+		if (!destination.Definition.BlinkChoices.empty()) {
+			destination.Blink->SetParameters(destination.Definition.BlinkChoices[static_cast<std::size_t>(destination.Definition.BlinkParameterIndex)], false);
+		}
+		destination.Blink->AssignState(*source.Blink);
+	}
+
+	static void AssignMouthChannel(EmoteMouthChannel& destination, const EmoteMouthChannel& source) {
+		destination.Frame = source.Frame;
+		destination.Talk = source.Talk;
+		destination.Start = source.Start;
+		destination.Target = source.Target;
+		destination.Duration = source.Duration;
+		destination.ReciprocalDuration = source.ReciprocalDuration;
+		destination.Progress = source.Progress;
+		destination.Easing = source.Easing;
+		destination.Pending = source.Pending;
+		destination.Transitioning = source.Transitioning;
+	}
+
+	static void AssignScalarChannel(EmoteScalarChannel& destination, const EmoteScalarChannel& source) {
+		destination.Current = source.Current;
+		destination.Start = source.Start;
+		destination.Target = source.Target;
+		destination.Duration = source.Duration;
+		destination.Elapsed = source.Elapsed;
+		destination.Easing = source.Easing;
+		destination.Transitioning = source.Transitioning;
+	}
 
 	static bool IsBlinkSelection(const EmoteEyeChannel& eye, std::string_view name) {
 		return name == eye.Definition.BlinkName && name != eye.Definition.Name && name != eye.Definition.LeftName && name != eye.Definition.RightName;
@@ -324,6 +395,149 @@ namespace sgre::scene {
 				Values.try_emplace(name);
 			}
 			Eyes.emplace_back(std::move(definition), Random ? &*Random : nullptr);
+		}
+
+		bool Animating(std::span<const std::string_view> timeline_variables) const {
+			RequireComplete();
+			RequireMutable();
+			if (Updating || DispatchDepth != 0 || timeline_variables.size() > kMaximumEmoteAnimationNames || !std::is_sorted(timeline_variables.begin(), timeline_variables.end())) {
+				throw std::runtime_error("Emote animation query requires idle controls and bounded sorted exact timeline names");
+			}
+			const auto overridden = [timeline_variables](std::string_view name) {
+				return std::binary_search(timeline_variables.begin(), timeline_variables.end(), name);
+			};
+			for (const auto& selector : Selectors) {
+				const auto state = selector->TransitionState();
+				if ((state.Active || state.Queued != 0) && !overridden(selector->Definition().Label)) {
+					return true;
+				}
+			}
+			for (const auto& channel : Channels) {
+				if (channel.Transitioning && !overridden(channel.Name)) {
+					return true;
+				}
+			}
+			for (const auto& eye : Eyes) {
+				const auto changing = std::any_of(eye.Channels.begin(), eye.Channels.end(), [](const auto& channel) {
+					return channel.Transitioning;
+				});
+				if (changing && !overridden(eye.Definition.Name)) {
+					return true;
+				}
+			}
+			for (const auto& channel : Eyebrows) {
+				if (channel.Transitioning && !overridden(channel.Name)) {
+					return true;
+				}
+			}
+			for (const auto& mouth : Mouths) {
+				if ((mouth.Pending || mouth.Transitioning) && !overridden(mouth.Name) && !overridden(mouth.TalkName)) {
+					return true;
+				}
+			}
+
+			return false;
+		}
+
+		void RequireCanAssignState(const Implementation& source) const {
+			RequireComplete();
+			source.RequireComplete();
+			RequireMutable();
+			source.RequireMutable();
+			if (Updating || DispatchDepth != 0 || source.Updating || source.DispatchDepth != 0 || Random.has_value() != source.Random.has_value()) {
+				throw std::runtime_error("Emote variable assignment requires two idle actual owners and compatible random-state producers");
+			}
+
+			VisitAssignedControls(Eyes, source.Eyes, [](const auto& eye) -> std::string_view {
+				return eye.Definition.Name;
+			},
+			    RequireEyeAssignment);
+			VisitAssignedControls(Selectors, source.Selectors, [](const auto& selector) -> std::string_view {
+				return selector->Definition().Label;
+			},
+			    [](const auto& destination, const auto& origin) {
+				    destination->RequireCanAssignState(*origin);
+			    });
+		}
+
+		std::map<std::string, EmotePublishedValue, std::less<>> PrepareAssignedValues(const Implementation& source, std::size_t& key_bytes, std::size_t& active_values) const {
+			std::map<std::string, EmotePublishedValue, std::less<>> values;
+			for (const auto& route : Routes) {
+				values.try_emplace(route.first);
+			}
+			for (const auto& eye : Eyes) {
+				if (!eye.Definition.BlinkName.empty()) {
+					values.try_emplace(eye.Definition.BlinkName);
+				}
+			}
+			active_values = 0;
+			for (const auto& entry : source.Values) {
+				if (entry.second.Present) {
+					values.insert_or_assign(entry.first, entry.second);
+					++active_values;
+				}
+			}
+			if (values.size() > kMaximumEmoteControls) {
+				throw std::runtime_error("Emote assignment value slots exceed the actual bounded owner count");
+			}
+
+			std::size_t old_value_bytes = 0;
+			for (const auto& entry : Values) {
+				if (entry.first.size() >= KeyBytes - old_value_bytes) {
+					throw std::runtime_error("Emote assignment lost its actual value-key accounting");
+				}
+				old_value_bytes += entry.first.size() + 1;
+			}
+			key_bytes = KeyBytes - old_value_bytes;
+			for (const auto& entry : values) {
+				if (entry.first.size() >= kMaximumEmoteChannelBytes - key_bytes) {
+					throw std::runtime_error("Emote assignment value keys exceed the actual bounded owner storage");
+				}
+				key_bytes += entry.first.size() + 1;
+			}
+
+			return values;
+		}
+
+		void AssignState(const Implementation& source) {
+			RequireCanAssignState(source);
+			if (this == &source) {
+				return;
+			}
+
+			std::size_t key_bytes = 0;
+			std::size_t active_values = 0;
+			auto values = PrepareAssignedValues(source, key_bytes, active_values);
+			if (Random) {
+				*Random = *source.Random;
+			}
+			Values = std::move(values);
+			KeyBytes = key_bytes;
+			ActiveValues = active_values;
+			BlinkEnabled = source.BlinkEnabled;
+
+			VisitAssignedControls(Eyes, source.Eyes, [](const auto& eye) -> std::string_view {
+				return eye.Definition.Name;
+			},
+			    AssignEyeChannel);
+			VisitAssignedControls(Eyebrows, source.Eyebrows, [](const auto& channel) -> std::string_view {
+				return channel.Name;
+			},
+			    AssignGraphChannel);
+			VisitAssignedControls(Mouths, source.Mouths, [](const auto& channel) -> std::string_view {
+				return channel.Name;
+			},
+			    AssignMouthChannel);
+			VisitAssignedControls(Selectors, source.Selectors, [](const auto& selector) -> std::string_view {
+				return selector->Definition().Label;
+			},
+			    [](auto& destination, const auto& origin) {
+				    destination->AssignState(*origin);
+			    });
+			VisitAssignedControls(Channels, source.Channels, [](const auto& channel) -> std::string_view {
+				return channel.Name;
+			},
+			    AssignScalarChannel);
 		}
 
 		float Read(std::string_view name) const override {
@@ -617,6 +831,18 @@ namespace sgre::scene {
 	}
 
 	EmoteVariableControls::~EmoteVariableControls() noexcept = default;
+
+	bool EmoteVariableControls::Animating(std::span<const std::string_view> timeline_variables) const {
+		return m_Implementation->Animating(timeline_variables);
+	}
+
+	void EmoteVariableControls::RequireCanAssignState(const EmoteVariableControls& source) const {
+		m_Implementation->RequireCanAssignState(*source.m_Implementation);
+	}
+
+	void EmoteVariableControls::AssignState(const EmoteVariableControls& source) {
+		m_Implementation->AssignState(*source.m_Implementation);
+	}
 
 	void EmoteVariableControls::UpdateWithTimelines(float elapsed_ticks, const EmoteTimelineScheduler& actual_timelines) {
 		actual_timelines.RequirePublicationOwner(*this, m_Implementation->Values.size());

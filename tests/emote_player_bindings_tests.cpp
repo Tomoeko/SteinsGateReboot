@@ -8,6 +8,7 @@
 #include "sgre/scene/emote_parts_tree.hpp"
 #include "sgre/scene/emote_rotation_transition.hpp"
 #include "sgre/scene/emote_scale_transition.hpp"
+#include "sgre/scene/emote_wind.hpp"
 
 #include "sgre/scene/emote_variable_controls.hpp"
 #include "sgre/scene/emote_velvety_frame.hpp"
@@ -1403,11 +1404,242 @@ static void TestWindPauseClearQueueAndLayerRetirement() {
 	queued.Bindings->ReleaseInstance(selected);
 }
 
+static void TestWindAssignmentRetainsDestinationControlAndSourceCache() {
+	std::size_t seed_reads = 0;
+	sgre::scene::EmoteWindRandom random([&] {
+		++seed_reads;
+		return std::int64_t{1700000000};
+	});
+	sgre::scene::EmoteWindOwner source(1, &random), destination(2, &random);
+	source.Start({10, 30, 2, .25f, .75f});
+	destination.Start({-8, 8, .001f, .5f, 1});
+	destination.Advance(64);
+	const auto preceding = destination.Snapshot();
+	const auto random_before = random.State();
+	Require(preceding.Control && std::any_of(preceding.Control->Bands.begin(), preceding.Control->Bands.end(), [](const auto& band) {
+		return band.Active;
+	}),
+	    "assignment discriminator requires a genuinely spawned destination band");
+	destination.AssignState(source);
+	const auto assigned = destination.Snapshot();
+	Require(assigned.Parameters.Start == 10 && assigned.Parameters.Goal == 30 && assigned.Parameters.Speed == 2 && assigned.Parameters.Minimum == .25f && assigned.Parameters.Maximum == .75f, "assignment copies all five source authored wind words");
+	Require(assigned.Control && assigned.Control->Start == -4 && assigned.Control->Goal == 4 && assigned.Control->SignedVelocity == 1 && assigned.Control->BirthClock == 0, "precopy before Start retains destination physical endpoints while reconfiguring calibrated speed");
+	for (std::size_t index = 0; index < assigned.Control->Bands.size(); ++index) {
+		const auto& actual = assigned.Control->Bands[index];
+		const auto& expected = preceding.Control->Bands[index];
+		Require(actual.Active == expected.Active && actual.Position == expected.Position && actual.Strength == expected.Strength, "assignment retains destination band ownership and numeric state");
+	}
+	Require(seed_reads == 1 && random.State() == random_before, "wind assignment cannot reseed or consume the shared process-equivalent stream");
+
+	sgre::scene::EmoteWindOwner stopped_defaults(1, nullptr);
+	destination.AssignState(stopped_defaults);
+	const auto cleared = destination.Snapshot();
+	Require(!cleared.Control && cleared.Parameters.Start == 0 && cleared.Parameters.Goal == 0 && cleared.Parameters.Speed == 0 && cleared.Parameters.Minimum == 0 && cleared.Parameters.Maximum == 0, "zero source assignment stops destination and replaces its authored cache before Start");
+
+	source.Stop();
+	Require(!source.Snapshot().Control && source.Snapshot().Parameters.Goal == 30, "ordinary Stop retains nonzero source authored words");
+	destination.AssignState(source);
+	const auto restarted = destination.Snapshot();
+	Require(restarted.Control && restarted.Control->Start == 5 && restarted.Control->Goal == 15 && restarted.Control->SignedVelocity == 1, "assigning stopped source cached words creates a destination-calibrated controller rather than copying source controller absence");
+	Require(random.State() == random_before && seed_reads == 1, "restarting from assigned authored words remains lazy without wind birth work");
+}
+
+static void TestAssignStateRealControlsAndSourceFirstRetirement() {
+	Fixture fixture(false);
+	const auto source = fixture.New();
+	const auto destination = fixture.New();
+	const auto source_task = fixture.Bindings->Task(source);
+	const auto destination_task = fixture.Bindings->Task(destination);
+	static_cast<void>(fixture.Call(source, "setCoord", {8.0f, 16.0f, 4.0f}));
+	static_cast<void>(fixture.Call(source, "setScale", {5.0f, 4.0f}));
+	static_cast<void>(fixture.Call(source, "setColor", {std::int32_t{-1}, 4.0f}));
+	static_cast<void>(fixture.Call(source, "setRot", {1.0f, 4.0f}));
+	static_cast<void>(fixture.Call(source, "setVariable", {std::string("probe"), 16.0f, 4.0f}));
+	Require(source_task.Player().ReadVariable("probe") == 16, "the actual probe metadata is immediateControl, so duration cannot create a scalar transition");
+	source_task.Player().Progress(1);
+	const auto source_color = PublishedColor(fixture, source);
+	const auto source_tick = source_task.Player().Commands().ClockState().TickCount;
+	const auto destination_tick = destination_task.Player().Commands().ClockState().TickCount;
+	Require(std::holds_alternative<std::monostate>(fixture.Call(destination, "assignState", {source, std::int32_t{81}})), "typed assignState ignores extra operands and returns no physical values");
+	Require(destination_task.Player().Coordinate() == source_task.Player().Coordinate() && destination_task.Player().Scale() == 2, "assignment copies real retained transition state into the existing destination owner");
+	Require(PublishedColor(fixture, destination) == 0x808080ffu && destination_task.Player().Root().Overrides().Coordinate[0] == 0, "disabled Common assignment must not invent immediate plain-root publication");
+	Require(destination_task.Player().Commands().ClockState().TickCount == destination_tick && source_task.Player().Commands().ClockState().TickCount == source_tick, "assignment never replaces plain owners or advances either actual clock");
+	destination_task.Player().Progress(0);
+	Require(PublishedColor(fixture, destination) == source_color && destination_task.Player().Root().Overrides().Coordinate[0] == 2, "the destination's retained dirty phase publishes copied controls at genuine zero progress");
+	static_cast<void>(fixture.Call(destination, "pause", {true}));
+	fixture.Bindings->ReleaseInstance(source);
+	fixture.Second().Update();
+	Require(!source_task.IsLive() && destination_task.IsLive(), "source task retirement must not retire destination controls or actual resource registration");
+	static_cast<void>(fixture.Call(destination, "pause", {false}));
+	destination_task.Player().Progress(2);
+	Require(destination_task.Player().Coordinate() == std::array<float, 2>{6, 12} && destination_task.Player().Scale() == 4, "complete coordinate and scale transitions continue after source retirement rather than starting anew from copied current values");
+	Require(destination_task.Player().ReadVariable("probe") == 16, "source immediate-control published storage remains exact after assignment and subsequent progress");
+	Require(fixture.Layers.MotionResources(fixture.Leaf).ReferenceCount(fixture.Project) == 1 && fixture.Uploads == 1, "state transfer does not register or reupload the source resource");
+}
+
+static void TestAssignStateTypedOwnerDetachAndQueueGuards() {
+	Fixture fixture(false);
+	const auto source = fixture.New();
+	const auto destination = fixture.New();
+	const auto source_task = fixture.Bindings->Task(source);
+	const auto destination_task = fixture.Bindings->Task(destination);
+	static_cast<void>(fixture.Call(destination, "setCoord", {3.0f, 4.0f}));
+	static_cast<void>(fixture.Call(destination, "assignState", {destination}));
+	Require(destination_task.Player().Coordinate() == std::array<float, 2>{3, 4}, "self assignment retains owned state and skips copy phases");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(destination, "assignState", {fixture.Vm.CreateTable()}));
+	},
+	    "typed source wrapper");
+	Require(destination_task.Player().Coordinate() == std::array<float, 2>{3, 4}, "invalid typed source rejects before destination mutation");
+	static_cast<void>(fixture.Call(source, "setVisible", {true}));
+	source_task.Player().Progress(0);
+	fixture.Second().Draw(0);
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(destination, "assignState", {source}));
+	},
+	    "unqueued");
+	fixture.Secondary->SceneContext().Clear();
+	Require(destination_task.Player().Coordinate() == std::array<float, 2>{3, 4}, "queued assignment rejection preserves destination state after the actual draw inputs retire");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	static_cast<void>(fixture.Call(destination, "assignState", {source}));
+	static_cast<void>(fixture.Call(destination, "assignState", {std::int32_t{7}}));
+	static_cast<void>(fixture.Call(destination, "assignState", {fixture.Vm.CreateInstance(fixture.Bindings->EmoteClass())}));
+	Require(!source_task.IsLive() && !destination_task.IsLive(), "detached member guard skips expired task fields even with a failed source conversion");
+}
+
+static void TestAssignStateCommonPreparationAndDestinationPublication() {
+	Fixture fixture;
+	const auto source = fixture.New();
+	const auto destination = fixture.New();
+	const auto source_task = fixture.Bindings->Task(source);
+	const auto destination_task = fixture.Bindings->Task(destination);
+	static_cast<void>(fixture.Call(source, "setVisible", {true}));
+	static_cast<void>(fixture.Call(destination, "setVisible", {true}));
+	static_cast<void>(fixture.Call(source, "setCoord", {8.0f, -4.0f}));
+	static_cast<void>(fixture.Call(source, "setScale", {1.5f}));
+	static_cast<void>(fixture.Call(source, "setColor", {std::bit_cast<std::int32_t>(0x10203040u)}));
+	source_task.Player().Progress(.25f);
+	const auto source_counts = source_task.Player().PhysicalCounts();
+	Require(source_counts.Updated == 6, "assignment source must genuinely advance all six active physical families before importing their state");
+	const auto destination_tick = destination_task.Player().Commands().ClockState().TickCount;
+	static_cast<void>(fixture.Call(destination, "assignState", {source}));
+	Require(destination_task.Player().Root().Overrides().Coordinate == source_task.Player().Root().Overrides().Coordinate && PublishedColor(fixture, destination) == PublishedColor(fixture, source), "enabled Common assignment performs genuine destination zero-delta property/plain publication");
+	Require(destination_task.Player().Commands().ClockState().TickCount == destination_tick && destination_task.Player().PhysicalCounts().AttachedPartsControls == source_counts.AttachedPartsControls, "Common assignment preserves actual destination ownership and the already constructed physical family graph");
+	static_cast<void>(fixture.Call(destination, "pause", {true}));
+	fixture.Bindings->ReleaseInstance(source);
+	fixture.Second().Update();
+	Require(!source_task.IsLive(), "actual source physical and listener owners retire before destination continuation");
+	static_cast<void>(fixture.Call(destination, "pause", {false}));
+	destination_task.Player().Progress(.25f);
+	const auto conversion = destination_task.Player().PhysicsToWorld();
+	Require(destination_task.Player().PhysicalCounts().Updated == 6 && std::isfinite(conversion.XX) && std::isfinite(conversion.YY), "destination continues all real physical families after source retirement");
+}
+
+static void TestAnimatingTypedBooleanExtrasAndDetachedReceiver() {
+	std::size_t conversions = 0;
+	Fixture fixture(false);
+	const auto instance = fixture.New();
+	const auto task = fixture.Bindings->Task(instance);
+	const auto initial = fixture.Call(instance, "getAnimating");
+	Require(std::holds_alternative<bool>(initial) && !std::get<bool>(initial), "native getAnimating returns SQBoolean false for an idle real owner, not an integer or native no-values result");
+	const auto argument_class = fixture.Vm.CreateClass();
+	fixture.Vm.NewSlot(argument_class, "_tostring", fixture.Vm.CreateNativeClosure("getAnimating-extra-conversion-tripwire", [&](auto&, auto) {
+		++conversions;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("unexpected conversion"));
+	}));
+	const auto argument = fixture.Vm.CreateInstance(argument_class);
+	Require(!std::get<bool>(fixture.Call(instance, "getAnimating", {argument, std::numeric_limits<float>::quiet_NaN(), false})) && conversions == 0, "typed animation getter ignores every extra operand without string or numeric conversion");
+	static_cast<void>(fixture.Call(instance, "setCoord", {8.0f, -4.0f, 4.0f}));
+	Require(std::get<bool>(fixture.Call(instance, "getAnimating", {argument})), "actual live coordinate transition is visible through the typed native getter");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	const auto detached = fixture.Call(instance, "getAnimating", {argument, std::numeric_limits<float>::infinity()});
+	Require(!task.IsLive() && std::holds_alternative<bool>(detached) && !std::get<bool>(detached) && conversions == 0, "detached animation getter returns native false before reading an expired task or converting ignored operands");
+	fixture.Bindings->ReleaseInstance(instance);
+	Require(fixture.Bindings->CanClose(), "detached animation receiver retains no independent physical owner");
+}
+
+static void TestAnimatingControllersPauseAndColorExclusion() {
+	Fixture fixture(false);
+	const auto instance = fixture.New();
+	const auto task = fixture.Bindings->Task(instance);
+	static_cast<void>(fixture.Call(instance, "setColor", {std::int32_t{-1}, 4.0f}));
+	Require(!std::get<bool>(fixture.Call(instance, "getAnimating")), "native animation query excludes a newly active color transition");
+	task.Player().Progress(1);
+	Require(PublishedColor(fixture, instance) != 0x808080ffu && !std::get<bool>(fixture.Call(instance, "getAnimating")), "real color interpolation and publication cannot turn the color-excluding native query true");
+	task.Player().Progress(3);
+	static_cast<void>(fixture.Call(instance, "setCoord", {8.0f, -4.0f, 4.0f}));
+	Require(std::get<bool>(fixture.Call(instance, "getAnimating")), "native coordinate current/start/target state reports active before any advance");
+	static_cast<void>(fixture.Call(instance, "pause", {true}));
+	const auto paused_coordinate = task.Player().Coordinate();
+	fixture.Second().Update();
+	Require(task.Player().Coordinate() == paused_coordinate && std::get<bool>(fixture.Call(instance, "getAnimating")), "actual task pause stops progression while the retained controller query remains true");
+	static_cast<void>(fixture.Call(instance, "pause", {false}));
+	fixture.Second().Update();
+	Require(task.Player().Coordinate() != paused_coordinate && std::get<bool>(fixture.Call(instance, "getAnimating")), "resuming the real task advances the same unfinished coordinate transition");
+	task.Player().Progress(4);
+	Require(!std::get<bool>(fixture.Call(instance, "getAnimating")), "completed coordinate transition returns native false without requiring task retirement");
+	static_cast<void>(fixture.Call(instance, "setScale", {2.0f, 2.0f}));
+	Require(std::get<bool>(fixture.Call(instance, "getAnimating")), "the independent real scale transition participates in native animation query");
+	task.Player().Progress(3);
+	Require(RetainedScale(fixture, instance) == 2 && !std::get<bool>(fixture.Call(instance, "getAnimating")), "completed real scale transition leaves an idle animation query");
+	static_cast<void>(fixture.Call(instance, "setRot", {.5f, 2.0f}));
+	Require(std::get<bool>(fixture.Call(instance, "getAnimating")), "the primary cyclic rotation owner participates independently of Common extended rotation");
+	task.Player().Progress(3);
+	Require(!std::get<bool>(fixture.Call(instance, "getAnimating")), "completed primary rotation does not stay active solely because its published angle is nonzero");
+}
+
+static void TestAnimatingActualQueuedNativeAndSceneGuards() {
+	Fixture fixture;
+	const auto instance = fixture.New();
+	const auto task = fixture.Bindings->Task(instance);
+	static_cast<void>(fixture.Call(instance, "setVisible", {true}));
+	task.Player().Progress(1);
+	Require(task.Player().PhysicalCounts().Updated == 6 && !std::get<bool>(fixture.Call(instance, "getAnimating")), "genuine enabled Common simulation does not contribute to the native control animation predicate");
+	static_cast<void>(fixture.Call(instance, "setScale", {2.0f, 4.0f}));
+	task.Player().Progress(1);
+	Require(std::get<bool>(fixture.Call(instance, "getAnimating")), "queued-query fixture must start with a genuine active transition");
+	const auto scale = task.Player().Scale();
+	fixture.Second().Draw(0);
+	const auto queued = fixture.Secondary->SceneContext().Size();
+	std::exception_ptr binding_failure;
+	std::exception_ptr scene_failure;
+	try {
+		static_cast<void>(fixture.Call(instance, "getAnimating", {false, std::int32_t{77}}));
+	} catch (...) {
+		binding_failure = std::current_exception();
+	}
+	try {
+		static_cast<void>(task.Player().Animating());
+	} catch (...) {
+		scene_failure = std::current_exception();
+	}
+	// End the genuine frame borrow before any assertion or guarded getter can obscure a failure during fixture teardown.
+	fixture.Primary->SceneContext().Clear();
+	fixture.Secondary->SceneContext().Clear();
+	fixture.Primary->Context().Clear();
+	fixture.Secondary->Context().Clear();
+	Require(queued != 0 && binding_failure && scene_failure, "both actual native and direct scene queries must reject a genuinely queued draw occurrence");
+	for (const auto& failure : {binding_failure, scene_failure}) {
+		RequireFailure([&] {
+			std::rethrow_exception(failure);
+		},
+		    "unqueued");
+	}
+	Require(task.Player().Scale() == scale && std::get<bool>(fixture.Call(instance, "getAnimating")) && task.Player().CanClose(), "rejected queries preserve the active controller and resume only after real frame inputs retire");
+}
+
 int main(int argc, char** argv) {
 	try {
+		TestAnimatingTypedBooleanExtrasAndDetachedReceiver();
+		TestAnimatingControllersPauseAndColorExclusion();
+		TestAnimatingActualQueuedNativeAndSceneGuards();
 		TestWindSharedStreamAndActualSubsteps();
 		TestWindTypedBridgeStopAndServiceBoundary();
 		TestWindPauseClearQueueAndLayerRetirement();
+		TestWindAssignmentRetainsDestinationControlAndSourceCache();
+		TestAssignStateRealControlsAndSourceFirstRetirement();
+		TestAssignStateTypedOwnerDetachAndQueueGuards();
+		TestAssignStateCommonPreparationAndDestinationPublication();
 		TestMeshDivisionActualGeometryAndTypedSurface();
 		TestMeshDivisionAdmissionQueueAndDetachedOwner();
 		TestLegacyScalarTypedConversionsAndIndependentState();

@@ -28,6 +28,9 @@ namespace sgre::scene {
 		// Borrows the actual numerical owner, which must outlive this publication owner.
 		EmoteBobbleSections(const EmoteBobbleModel& model, const EmoteBobbleSectionDefinition& definition);
 		// Native325fc0 runs after Initialize/Step, without an additional numerical update.
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteBobbleSections& source) const;
+		void AssignState(const EmoteBobbleSections& source);
 		void Refresh();
 		[[nodiscard]] std::span<const EmoteBobbleSection> Sections() const;
 

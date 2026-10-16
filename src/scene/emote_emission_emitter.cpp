@@ -245,4 +245,22 @@ namespace sgre::scene {
 	bool EmoteEmissionEmitter::Emitted() const noexcept {
 		return m_Emitted;
 	}
+	void EmoteEmissionEmitter::RequireCanAssignState(const EmoteEmissionEmitter& source) const {
+		if (m_Operating || source.m_Operating || !m_Valid || !source.m_Valid || m_Definition.Geometry != source.m_Definition.Geometry) {
+			throw std::runtime_error("Emote emitter assignment requires idle valid matching native geometry owners");
+		}
+	}
+
+	void EmoteEmissionEmitter::AssignState(const EmoteEmissionEmitter& source) {
+		RequireCanAssignState(source);
+		m_Posture = source.m_Posture;
+		m_Countdown = source.m_Countdown;
+		m_Emitted = source.m_Emitted;
+		m_PostureSet = source.m_PostureSet;
+		if (m_Definition.Geometry == EmoteEmissionGeometry::Point) {
+			// Point31deb0 imports its coordinates; Rectangle31de70 deliberately retains both destination corners.
+			m_Definition.First = source.m_Definition.First;
+		}
+	}
+
 } // namespace sgre::scene

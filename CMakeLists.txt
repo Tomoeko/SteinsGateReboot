@@ -962,6 +962,7 @@ if(SGRE_BUILD_TESTS)
 		emote_emission_emitter
 		emote_emission_owner
 		emote_scene_player
+		emote_physical_assignment
 		emote_player_bindings
 		emote_wind
 		emote_timeline_scheduler

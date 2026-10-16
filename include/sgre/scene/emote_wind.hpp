@@ -61,6 +61,8 @@ namespace sgre::scene {
 		EmoteWindOwner(float metadata_scale, EmoteWindRandom* shared_random);
 		void Start(EmoteWindParameters parameters);
 		void Stop();
+		// Native assignment copies authored words before reconfiguration, retaining any existing destination bands/endpoints.
+		void AssignState(const EmoteWindOwner& source);
 		void Advance(float elapsed_ticks);
 		[[nodiscard]] float Sample(float position) const;
 		[[nodiscard]] EmoteWindSnapshot Snapshot() const;

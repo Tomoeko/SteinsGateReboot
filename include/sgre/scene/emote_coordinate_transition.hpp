@@ -16,6 +16,9 @@ namespace sgre::scene {
 		// Native2CDF50/2BEC20 scale the dim2 transition only in coordinate mode1.
 		explicit EmoteCoordinateTransition(EmoteCoordinateMode coordinate_mode = EmoteCoordinateMode::Pixels, float units_per_meter = 1);
 		void Set(const std::array<float, 2>& coordinate, float duration = 0, float easing = 0);
+		// Native export/import copies pixel-valued controls while retaining the destination coordinate policy.
+		void AssignState(const EmoteCoordinateTransition& source) noexcept;
+		[[nodiscard]] bool Changing() const noexcept;
 		[[nodiscard]] std::array<float, 2> Current() const;
 		// The property phase consumes pixel units; script getters consume Current instead.
 		[[nodiscard]] std::array<float, 2> Advance(float elapsed_ticks);

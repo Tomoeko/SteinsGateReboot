@@ -20,6 +20,9 @@ namespace sgre::scene {
 		~EmoteJellyControl() noexcept;
 		EmoteJellyControl(const EmoteJellyControl&) = delete;
 		EmoteJellyControl& operator=(const EmoteJellyControl&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteJellyControl& source) const;
+		void AssignState(const EmoteJellyControl& source);
 		void RequireReady() const;
 		// Complete actual UID joins outside noexcept notifications, before the containing collider-pose phase.
 		void FinishLayerChanges();

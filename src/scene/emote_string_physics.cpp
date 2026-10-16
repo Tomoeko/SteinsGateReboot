@@ -535,4 +535,28 @@ namespace sgre::scene {
 		const auto& definition = m_Implementation->Definition;
 		return definition.HorizontalBones ? static_cast<std::uint8_t>(definition.LongitudinalDegree | 0x30) : static_cast<std::uint8_t>((definition.LongitudinalDegree << 4) | 3);
 	}
+	void EmoteStringPhysics::RequireCanAssignState(const EmoteStringPhysics& source) const {
+		m_Implementation->RequireIdle();
+		source.m_Implementation->RequireIdle();
+		const auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		for (std::size_t index = 0; index != std::min(target.Tresses.size(), from.Tresses.size()); ++index) {
+			target.Tresses[index].Model->RequireCanAssignState(*from.Tresses[index].Model);
+		}
+	}
+
+	void EmoteStringPhysics::AssignState(const EmoteStringPhysics& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Previous = from.Previous;
+		for (std::size_t index = 0; index != std::min(target.Tresses.size(), from.Tresses.size()); ++index) {
+			target.Tresses[index].Model->AssignState(*from.Tresses[index].Model);
+		}
+	}
+
 } // namespace sgre::scene

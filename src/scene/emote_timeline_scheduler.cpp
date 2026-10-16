@@ -127,12 +127,44 @@ namespace sgre::scene {
 			RequireIdle();
 			RequireMutable();
 		}
+		bool Animating() {
+			RequireMutation();
+			for (const auto* entry : Active) {
+				if (entry->Blend.Changing() || entry->Tracks->Definition().LoopBegin < 0) {
+					return true;
+				}
+			}
+			if (TimelineVariablesDirty) {
+				std::size_t count = 0;
+				for (const auto* entry : Active) {
+					const auto size = entry->Tracks->Definition().Tracks.size();
+					if (size > kMaximumSchedulerWork - count) {
+						throw std::runtime_error("Emote animation query exceeds bounded active timeline track names");
+					}
+					count += size;
+				}
+				TimelineVariables.clear();
+				TimelineVariables.reserve(count);
+				for (const auto* entry : Active) {
+					for (const auto& track : entry->Tracks->Definition().Tracks) {
+						TimelineVariables.push_back(track.Name);
+					}
+				}
+				std::sort(TimelineVariables.begin(), TimelineVariables.end());
+				TimelineVariables.erase(std::unique(TimelineVariables.begin(), TimelineVariables.end()), TimelineVariables.end());
+				TimelineVariablesDirty = false;
+			}
+
+			return Controls.Animating(TimelineVariables);
+		}
+
 		void Play(std::string_view label, std::uint32_t flags) {
 			RequireMutation();
 			if ((flags & ~std::uint32_t{7}) != 0) {
 				throw std::runtime_error("Emote timeline scheduler flags exceed recovered native playback policy");
 			}
 			const auto name = TimelineName(label);
+			TimelineVariablesDirty = true;
 			Operating = true;
 			try {
 				if ((flags & 1) == 0) {
@@ -164,6 +196,7 @@ namespace sgre::scene {
 		}
 		void Stop(std::string_view label) {
 			RequireMutation();
+			TimelineVariablesDirty = true;
 			const auto name = TimelineName(label);
 			if (name.empty()) {
 				Active.clear();
@@ -179,6 +212,66 @@ namespace sgre::scene {
 			if (const auto found = Entries.find(TimelineName(label)); found != Entries.end() && found->second.Tracks) {
 				found->second.Blend.Set(ratio, duration, easing);
 				found->second.StopWhenBlendFinished = stop;
+			}
+		}
+		const std::string& EntryName(const Entry* entry, std::size_t& work) const {
+			for (const auto& [name, candidate] : Entries) {
+				if (work++ == kMaximumSchedulerWork) {
+					throw std::runtime_error("Emote timeline assignment exceeds bounded catalogue matching work");
+				}
+				if (&candidate == entry) {
+					return name;
+				}
+			}
+			throw std::runtime_error("Emote timeline assignment requires actual source catalogue ownership");
+		}
+		void RequireCanAssign(const Implementation& source) const {
+			RequireMutation();
+			source.RequireMutation();
+			std::size_t work = 0;
+			for (const auto* origin : source.Active) {
+				const auto& name = source.EntryName(origin, work);
+				if (!origin->Tracks || (origin->Flags & ~std::uint32_t{7}) != 0) {
+					throw std::runtime_error("Emote timeline assignment requires actual prepared source playback");
+				}
+				if (const auto destination = Entries.find(name); destination != Entries.end() && destination->second.Tracks) {
+					destination->second.Tracks->RequireCanAssignState(*origin->Tracks);
+				}
+			}
+		}
+		void AssignState(const Implementation& source) {
+			RequireCanAssign(source);
+			if (this == &source) {
+				return;
+			}
+			Operating = true;
+			try {
+				TimelineVariablesDirty = true;
+				Active.clear();
+				std::size_t work = 0;
+				for (const auto* origin : source.Active) {
+					const auto found = Entries.find(source.EntryName(origin, work));
+					if (found == Entries.end()) {
+						continue;
+					}
+					auto& destination = found->second;
+					const auto flags = origin->Flags | 1u;
+					if (!destination.Tracks) {
+						destination.Tracks = std::make_unique<EmoteTimelineTracks>(Controls, *destination.Metadata, flags);
+					}
+					destination.Tracks->AssignState(*origin->Tracks, flags);
+					destination.Flags = flags;
+					destination.Looped = false;
+					destination.Blend = origin->Blend;
+					destination.BlendRatio = origin->BlendRatio;
+					destination.StopWhenBlendFinished = origin->StopWhenBlendFinished;
+					Active.push_back(&destination);
+				}
+				Operating = false;
+			} catch (...) {
+				Operating = false;
+				Valid = false;
+				throw;
 			}
 		}
 		static void AdvanceDifference(Entry& entry, float elapsed) {
@@ -242,6 +335,7 @@ namespace sgre::scene {
 						AdvanceDifference(entry, elapsed);
 					}
 					if ((definition.LoopBegin < 0 && !(tracks.Position() < definition.LastTime)) || (entry.StopWhenBlendFinished && !entry.Blend.Changing())) {
+						TimelineVariablesDirty = true;
 						iterator = Active.erase(iterator);
 					} else {
 						++iterator;
@@ -255,6 +349,9 @@ namespace sgre::scene {
 			}
 		}
 
+		// Views borrow immutable prepared track definitions; membership changes invalidate this query cache.
+		std::vector<std::string_view> TimelineVariables;
+		bool TimelineVariablesDirty = true;
 		EmoteVariableControls& Controls;
 		std::function<void()> RequireMutable;
 		std::map<std::string, Entry, std::less<>> Entries;
@@ -273,6 +370,12 @@ namespace sgre::scene {
 	}
 	void EmoteTimelineScheduler::Stop(std::string_view name) {
 		m_Implementation->Stop(name);
+	}
+	void EmoteTimelineScheduler::RequireCanAssignState(const EmoteTimelineScheduler& source) const {
+		m_Implementation->RequireCanAssign(*source.m_Implementation);
+	}
+	void EmoteTimelineScheduler::AssignState(const EmoteTimelineScheduler& source) {
+		m_Implementation->AssignState(*source.m_Implementation);
 	}
 	void EmoteTimelineScheduler::SetBlendRatio(std::string_view name, float ratio, float duration, float easing, bool stop_when_finished) {
 		m_Implementation->SetBlend(name, ratio, duration, easing, stop_when_finished);
@@ -316,6 +419,10 @@ namespace sgre::scene {
 		}
 		return base;
 	}
+	bool EmoteTimelineScheduler::Animating() const {
+		return m_Implementation->Animating();
+	}
+
 	bool EmoteTimelineScheduler::IsPlaying(std::string_view name) const {
 		auto& state = *m_Implementation;
 		state.RequireIdle();

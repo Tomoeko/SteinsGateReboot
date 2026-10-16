@@ -38,6 +38,9 @@ namespace sgre::scene {
 		EmoteVelvetyOwner& operator=(const EmoteVelvetyOwner&) = delete;
 		// Runs only after the containing plain Progress; it never evaluates Motion a second time.
 		void Update(float elapsed_ticks, const EmoteVelvetyGlobalControls& actual_controls);
+		void RequireCanAssignState(const EmoteVelvetyOwner& source) const;
+		// The containing owner first completes its genuine zero-time layer calculation.
+		void AssignState(const EmoteVelvetyOwner& source, const EmoteVelvetyGlobalControls& actual_controls);
 		// Runs the genuine plain clear while preserving only the measured warm numeric-cell lifetime.
 		void ClearPlain(MotionScenePlayer& actual_plain);
 		[[nodiscard]] bool Enabled() const noexcept;

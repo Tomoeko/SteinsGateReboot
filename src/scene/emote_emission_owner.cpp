@@ -432,4 +432,59 @@ namespace sgre::scene {
 		m_Implementation->RequireIdle();
 		return m_Implementation->Random;
 	}
+	void EmoteEmissionOwner::RequireCanAssignState(const EmoteEmissionOwner& source) const {
+		const auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.RequireIdle();
+		from.RequireIdle();
+		for (const auto& [uid, group] : target.Groups) {
+			const auto found = from.Groups.find(uid);
+			if (found == from.Groups.end()) {
+				continue;
+			}
+			const auto& receiving = *group->m_Implementation;
+			const auto& original = *found->second->m_Implementation;
+			receiving.RequireReady();
+			original.RequireReady();
+			if (receiving.Emitters.size() > original.Emitters.size()) {
+				throw std::runtime_error("Emote emission assignment requires each destination emitter's actual source ordinal");
+			}
+			for (std::size_t index = 0; index != receiving.Emitters.size(); ++index) {
+				receiving.Emitters[index]->RequireCanAssignState(*original.Emitters[index]);
+			}
+			receiving.Pool.RequireCanAssignState(original.Pool);
+		}
+	}
+
+	void EmoteEmissionOwner::AssignState(const EmoteEmissionOwner& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Phase.Operating = true;
+		try {
+			target.Random = from.Random;
+			for (auto& [uid, group] : target.Groups) {
+				const auto found = from.Groups.find(uid);
+				if (found == from.Groups.end()) {
+					continue;
+				}
+				auto& receiving = *group->m_Implementation;
+				const auto& original = *found->second->m_Implementation;
+				for (std::size_t index = 0; index != receiving.Emitters.size(); ++index) {
+					receiving.Emitters[index]->AssignState(*original.Emitters[index]);
+				}
+				receiving.Pool.AssignState(original.Pool);
+			}
+			target.Phase.Operating = false;
+		} catch (...) {
+			target.Phase.Operating = false;
+			target.Phase.Valid = false;
+			throw;
+		}
+	}
+
 } // namespace sgre::scene

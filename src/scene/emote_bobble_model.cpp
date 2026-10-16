@@ -5,6 +5,7 @@
 #include "sgre/scene/emote_bobble_sections.hpp"
 #include "sgre/scene/emote_collider.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
@@ -454,4 +455,29 @@ namespace sgre::scene {
 	std::span<const EmoteBobbleParticle> EmoteBobbleModel::Particles() const noexcept {
 		return m_Particles;
 	}
+	void EmoteBobbleModel::RequireCanAssignState(const EmoteBobbleModel& source) const {
+		RequireIdle();
+		source.RequireIdle();
+		if (m_CompletedSections && source.m_CompletedSections) {
+			m_CompletedSections->RequireCanAssignState(*source.m_CompletedSections);
+		}
+	}
+
+	void EmoteBobbleModel::AssignState(const EmoteBobbleModel& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		m_Anchor = source.m_Anchor;
+		m_Direction = source.m_Direction;
+		m_PostureRotation = source.m_PostureRotation;
+		std::copy_n(source.m_Particles.begin(), std::min(m_Particles.size(), source.m_Particles.size()), m_Particles.begin());
+		if (m_CompletedSections && source.m_CompletedSections) {
+			m_CompletedSections->AssignState(*source.m_CompletedSections);
+		}
+		m_PostureSet = source.m_PostureSet;
+		m_Initialized = source.m_Initialized;
+	}
+
 } // namespace sgre::scene

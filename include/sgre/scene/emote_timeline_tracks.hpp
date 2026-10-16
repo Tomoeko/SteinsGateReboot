@@ -45,6 +45,9 @@ namespace sgre::scene {
 		void Seek(float position, bool dispatch = true);
 		// Native2c5670 resets playback state while retaining the first prepared metadata/instant-policy snapshot.
 		void Reset(std::uint32_t flags = 0);
+		// Native assignment retains destination keys/policy/cache and recomputes cursors without dispatch.
+		void RequireCanAssignState(const EmoteTimelineTracks& source) const;
+		void AssignState(const EmoteTimelineTracks& source, std::uint32_t flags);
 		void AdvanceDifference(float elapsed_ticks);
 		[[nodiscard]] float ApplyDifference(std::string_view name, float base, float blend) const;
 		// Native2bf9b0 crosses every reached key; false excludes a key exactly at the supplied boundary.
@@ -61,6 +64,7 @@ namespace sgre::scene {
 		EmoteTimelineTrackDefinition m_Definition;
 		std::vector<std::size_t> m_Cursors;
 		std::vector<EmoteTimelineTransition> m_Difference;
+		std::vector<bool> m_HasDifference;
 		std::vector<float> m_DifferenceValues;
 		std::uint32_t m_Flags = 0;
 		float m_Position = 0;

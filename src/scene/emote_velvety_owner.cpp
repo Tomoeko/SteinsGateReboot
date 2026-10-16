@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -81,6 +82,25 @@ namespace sgre::scene {
 		std::sort(controls.begin(), controls.end(), [](const auto& left, const auto& right) {
 			return left->Uid() < right->Uid();
 		});
+	}
+
+	template <typename Controls, typename Action>
+	static void VisitMatchingVelvetyControls(const Controls& destination, const Controls& source, Action&& action) {
+		using Control = typename Controls::value_type::element_type;
+		std::map<std::string_view, const Control*, std::less<>> originals;
+		std::map<std::string_view, Control*, std::less<>> receiving;
+		for (const auto& control : source) {
+			originals.emplace(control->Uid(), control.get());
+		}
+		for (const auto& control : destination) {
+			receiving.emplace(control->Uid(), control.get());
+		}
+		for (const auto& [uid, target] : receiving) {
+			const auto found = originals.find(uid);
+			if (found != originals.end()) {
+				action(*target, *found->second);
+			}
+		}
 	}
 
 	class EmoteVelvetyOwner::Implementation {
@@ -381,4 +401,66 @@ namespace sgre::scene {
 		state.Frame.reset();
 		state.Closed = true;
 	}
+	void EmoteVelvetyOwner::RequireCanAssignState(const EmoteVelvetyOwner& source) const {
+		const auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.RequireIdle();
+		from.RequireIdle();
+		if (!target.Enabled) {
+			return;
+		}
+		if (!from.Enabled) {
+			throw std::runtime_error("Emote enabled Common assignment requires initialized source Common state");
+		}
+		target.Frame->RequireCanAssignHistory(*from.Frame);
+		target.Emissions->RequireCanAssignState(*from.Emissions);
+		const auto check = [](const auto& receiving, const auto& original) {
+			receiving.RequireCanAssignState(original);
+		};
+		VisitMatchingVelvetyControls(target.Blooms, from.Blooms, check);
+		VisitMatchingVelvetyControls(target.Strings, from.Strings, check);
+		VisitMatchingVelvetyControls(target.Catenaries, from.Catenaries, check);
+		VisitMatchingVelvetyControls(target.Jellies, from.Jellies, check);
+		VisitMatchingVelvetyControls(target.Stretches, from.Stretches, check);
+		VisitMatchingVelvetyControls(target.Synchronize, from.Synchronize, check);
+	}
+
+	void EmoteVelvetyOwner::AssignState(const EmoteVelvetyOwner& source, const EmoteVelvetyGlobalControls& actual_controls) {
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.RequireIdle();
+		from.RequireIdle();
+		if (this == &source || !target.Enabled) {
+			return;
+		}
+		// The containing zero-time calculation can install destination occurrences and their own collider leases.
+		for (auto& control : target.Strings) {
+			control->FinishLayerChanges();
+		}
+		for (auto& control : target.Jellies) {
+			control->FinishLayerChanges();
+		}
+		RequireCanAssignState(source);
+		target.Operating = true;
+		try {
+			static_cast<void>(target.Frame->Prepare(0, actual_controls));
+			target.Frame->AssignHistory(*from.Frame);
+			target.Emissions->AssignState(*from.Emissions);
+			const auto assign = [](auto& receiving, const auto& original) {
+				receiving.AssignState(original);
+			};
+			VisitMatchingVelvetyControls(target.Blooms, from.Blooms, assign);
+			VisitMatchingVelvetyControls(target.Strings, from.Strings, assign);
+			VisitMatchingVelvetyControls(target.Catenaries, from.Catenaries, assign);
+			VisitMatchingVelvetyControls(target.Jellies, from.Jellies, assign);
+			VisitMatchingVelvetyControls(target.Stretches, from.Stretches, assign);
+			VisitMatchingVelvetyControls(target.Synchronize, from.Synchronize, assign);
+			target.Operating = false;
+		} catch (...) {
+			target.Operating = false;
+			target.Valid = false;
+			throw;
+		}
+	}
+
 } // namespace sgre::scene

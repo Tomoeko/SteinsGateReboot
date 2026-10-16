@@ -2,6 +2,7 @@
 
 #include "sgre/scene/motion_player_commands.hpp"
 
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -523,8 +524,377 @@ static void TestActualGraphMetadata() {
 	Require(program.Eyebrows.size() == 1 && program.Eyebrows[0].InitialFrame == 2 && program.Eyebrows[0].Graph.Nodes[0][1] == 20 && program.Mouths.size() == 1 && program.Mouths[0].TalkName == "talk" && program.Mouths[0].InitialFrame == 3 && program.Eyes.empty() && program.UnsupportedFamilies.empty(), "actual graph node/edge schema, mouth labels or disabled declaration handling differ");
 }
 
+class VariableAssignmentFixture {
+public:
+	VariableAssignmentFixture(sgre::scene::EmoteVariableProgram program, std::uint32_t seed = 42)
+	    : Cache([](auto, const auto&) -> sgre::render::SpriteTextureHandle {
+		      throw std::runtime_error("assignment fixture has no texture input");
+	      },
+	          [](auto) {
+		          throw std::runtime_error("assignment fixture has no texture release");
+	          }),
+	      Manager(Cache), Commands(Manager) {
+		Controls = std::make_unique<sgre::scene::EmoteVariableControls>(Commands, [this] {
+			if (RejectMutable) {
+				throw std::runtime_error("assignment fixture actual owner is queued");
+			}
+		},
+		    std::move(program), [this, seed] {
+			    ++EntropyReads;
+			    return seed;
+		    },
+		    [this](float) {
+			    ++PropertyPhases;
+		    });
+	}
+
+	sgre::scene::TextureCache Cache;
+	sgre::scene::MotionResourceManager Manager;
+	sgre::scene::MotionPlayerCommands Commands;
+	std::unique_ptr<sgre::scene::EmoteVariableControls> Controls;
+	std::size_t EntropyReads = 0;
+	std::size_t PropertyPhases = 0;
+	bool RejectMutable = false;
+};
+
+static void TestAssignedValuesRetainDestinationPublicationPhase() {
+	sgre::scene::EmoteVariableProgram source_program;
+	source_program.Transitions = {"scalar", "source-only"};
+	source_program.Immediate = {"instant"};
+	sgre::scene::EmoteVariableProgram destination_program;
+	destination_program.Transitions = {"scalar", "destination-only"};
+	destination_program.Immediate = {"instant"};
+	VariableAssignmentFixture source(std::move(source_program));
+	VariableAssignmentFixture destination(std::move(destination_program));
+	source.Controls->Set("source-only", 19);
+	source.Controls->Set("instant", 42);
+	source.Controls->Set("scalar", 20, 10);
+	source.Controls->Update(3);
+	destination.Controls->Set("scalar", 100);
+	destination.Controls->Set("destination-only", 7);
+	destination.Controls->Update(0);
+	const auto prior_plain = destination.Commands.ParameterValues().Read("scalar");
+	destination.Controls->AssignState(*source.Controls);
+	Require(destination.Controls->TransitionValue("scalar") == source.Controls->TransitionValue("scalar") && destination.Controls->Read("instant") == 42 && destination.Controls->Read("source-only") == 19 && destination.Controls->PublishedVariableCount() == source.Controls->PublishedVariableCount(), "assignment must copy actual active value map and matching scalar controls");
+	Require(!destination.Controls->TransitionValue("source-only") && destination.Controls->TransitionValue("destination-only") == 7 && destination.Commands.ParameterValues().Read("scalar") == prior_plain, "assignment must retain destination routes and staged plain values");
+	const auto prior_phases = destination.PropertyPhases;
+	destination.Controls->Update(0);
+	Require(destination.PropertyPhases == prior_phases && destination.Commands.ParameterValues().Read("scalar") == source.Controls->Read("scalar"), "clean zero-delta update must publish copied native values without entering a controller/property phase");
+	destination.Controls->Update(0.5f);
+	Require(std::abs(destination.Controls->TransitionValue("scalar").value() - 7.0f) < 0.00001f && destination.Controls->TransitionValue("destination-only") == 7 && destination.Controls->Read("source-only") == 19, "actual next phase must continue copied transition while preserving unmatched destination control");
+	Require(source.EntropyReads == 1 && destination.EntropyReads == 1, "assignment must not draw or reseed entropy");
+
+	destination.RejectMutable = true;
+	RequireFailure([&] {
+		destination.Controls->AssignState(*source.Controls);
+	},
+	    "queued");
+	destination.RejectMutable = false;
+	source.RejectMutable = true;
+	RequireFailure([&] {
+		destination.Controls->AssignState(*source.Controls);
+	},
+	    "queued");
+	source.RejectMutable = false;
+	Require(destination.Controls->Read("instant") == 42, "failed actual ownership preflight must preserve destination values");
+}
+
+static void TestAssignedGraphAndMouthUseDestinationMetadata() {
+	sgre::scene::EmoteVariableProgram source_program;
+	sgre::scene::EmoteGraphChannelDefinition eyebrow;
+	eyebrow.Name = "brow";
+	eyebrow.InitialFrame = 2;
+	eyebrow.Graph.Edges = {{0, 10}, {20, 30}};
+	source_program.Eyebrows.push_back(eyebrow);
+	source_program.Mouths.push_back({"mouth", "talk", 3});
+	auto destination_program = source_program;
+	destination_program.Eyebrows[0].Graph.Nodes = {{10, 20}};
+	destination_program.Mouths[0].TalkName = "destination-talk";
+	auto source = std::make_unique<VariableAssignmentFixture>(std::move(source_program));
+	VariableAssignmentFixture destination(std::move(destination_program));
+	source->Controls->Set("brow", 28, 4);
+	source->Controls->Set("talk", 8, 4);
+	source->Controls->Set("mouth", 9);
+	source->Controls->Update(1);
+	Require(source->Controls->TransitionValue("brow") == 28 && source->Controls->TransitionValue("talk") == 2, "source fixture must exercise a disconnected graph and active mouth interpolation");
+	destination.Controls->AssignState(*source->Controls);
+	Require(destination.Controls->TransitionValue("brow") == 28 && destination.Controls->TransitionValue("mouth") == 9 && destination.Controls->TransitionValue("destination-talk") == 2 && !destination.Controls->TransitionValue("talk"), "matching import must preserve destination channel identities");
+	source.reset();
+	destination.Controls->Update(1);
+	Require(destination.Controls->TransitionValue("brow") == 10 && destination.Controls->TransitionValue("destination-talk") == 4, "copied graph must rebuild the destination equivalent-endpoint route and mouth must survive source retirement");
+	destination.Controls->Set("destination-talk", 6);
+	destination.Controls->Update(0);
+	Require(destination.Controls->Read("destination-talk") == 6, "destination mouth routes must remain independently mutable");
+}
+
+static sgre::scene::EmoteVariableProgram AssignmentEyeProgram(float close_ticks) {
+	sgre::scene::EmoteVariableProgram program;
+	sgre::scene::EmoteEyeDefinition eye;
+	eye.Name = "eye";
+	eye.LeftName = "eye-left";
+	eye.RightName = "eye-right";
+	eye.BlinkName = "blink";
+	eye.InitialFrame = 2;
+	eye.EndFrame = 10;
+	eye.BlinkParameterIndex = 1;
+	eye.Graph.Edges = {{0, 10}};
+	eye.Blink.IntervalMinimum = 2;
+	eye.Blink.IntervalMaximum = 3;
+	eye.Blink.CloseTicks = close_ticks;
+	eye.Blink.HoldTicks = 1;
+	eye.Blink.OpenTicks = 2;
+	eye.BlinkChoices = {{}, eye.Blink};
+	program.Eyes.push_back(std::move(eye));
+
+	return program;
+}
+
+static void TestAssignedEyeRandomAndParameterOwnership() {
+	auto source = std::make_unique<VariableAssignmentFixture>(AssignmentEyeProgram(2), 42);
+	VariableAssignmentFixture destination(AssignmentEyeProgram(2), 7);
+	source->Controls->Update(1);
+	source->Controls->Update(1);
+	source->Controls->Update(1);
+	source->Controls->Set("eye-left", 4);
+	source->Controls->Update(0);
+	destination.Controls->AssignState(*source->Controls);
+	for (std::size_t phase = 0; phase != 32; ++phase) {
+		source->Controls->Update(0.5f);
+		destination.Controls->Update(0.5f);
+		for (const auto key : {"eye", "eye-left", "eye-right", "blink"}) {
+			Require(source->Controls->Read(key) == destination.Controls->Read(key), "copied eye graphs, blink phase and shared PCG must continue without a source borrow");
+		}
+	}
+	Require(source->EntropyReads == 1 && destination.EntropyReads == 1, "copying shared PCG must consume no new entropy");
+	source.reset();
+	for (std::size_t phase = 0; phase != 32; ++phase) {
+		destination.Controls->Update(0.5f);
+	}
+	Require(std::isfinite(destination.Controls->Read("eye")), "destination blink must retain its own random borrow after complete source destruction");
+
+	VariableAssignmentFixture another(AssignmentEyeProgram(2));
+	auto incompatible_program = AssignmentEyeProgram(2);
+	incompatible_program.Eyes[0].BlinkChoices.resize(1);
+	VariableAssignmentFixture incompatible(std::move(incompatible_program));
+	incompatible.Controls->Update(0);
+	const auto before = incompatible.Controls->Read("eye");
+	RequireFailure([&] {
+		incompatible.Controls->AssignState(*another.Controls);
+	},
+	    "source parameter index");
+	Require(incompatible.Controls->Read("eye") == before, "native-unsafe cross-metadata index must reject before value mutation");
+}
+
+static void TestAssignedSelectorDoesNotCallVariableIo() {
+	class VariableIo final : public sgre::scene::EmoteVariableIo {
+	public:
+		float Read(std::string_view) const override {
+			++Reads;
+			return 0;
+		}
+		void Set(std::string_view, float, float, float) override {
+			++Writes;
+		}
+		mutable std::size_t Reads = 0;
+		std::size_t Writes = 0;
+	};
+	VariableIo source_io;
+	VariableIo destination_io;
+	sgre::resource::EmoteSelectorDefinition definition;
+	definition.Label = "selection";
+	sgre::resource::EmoteSelectorOption option;
+	option.Variable = "target";
+	definition.Options.push_back(option);
+	auto source = std::make_unique<sgre::scene::EmoteSelectorControl>(definition, source_io);
+	sgre::scene::EmoteSelectorControl destination(std::move(definition), destination_io);
+	source->Set(2, 4, 0, true);
+	source->Set(3, 2, 0, true);
+	source->Update(1);
+	const auto reads = destination_io.Reads;
+	const auto writes = destination_io.Writes;
+	destination.AssignState(*source);
+	Require(destination_io.Reads == reads && destination_io.Writes == writes && destination.Selection() == 2 && destination.TransitionState().Queued == 1, "selector assignment must deep-copy the FIFO without invoking destination variable IO");
+	source.reset();
+	destination.Update(4);
+	Require(destination.Selection() == 3 && destination.TransitionState().Queued == 0 && destination_io.Reads == reads + 1 && destination_io.Writes == writes + 1, "copied selector must invoke its own variable IO only on the genuine next queued transition");
+}
+
+static void TestAnimatingScalarAndExactTimelineMask() {
+	sgre::scene::EmoteVariableProgram program;
+	program.Transitions = {"scalar"};
+	program.Immediate = {"instant"};
+	VariableAssignmentFixture fixture(std::move(program));
+	Require(!fixture.Controls->Animating(), "fresh scalar controls must have no pending animation");
+	fixture.Controls->Set("instant", 7, 12);
+	fixture.Controls->Set("scalar", 4);
+	Require(!fixture.Controls->Animating(), "immediate storage and immediate scalar replacement must not count as animation");
+	fixture.Controls->Set("scalar", 8, 2);
+	const std::array<std::string_view, 1> covered{"scalar"};
+	const std::array<std::string_view, 1> different_case{"Scalar"};
+	const std::array<std::string_view, 1> prefix{"scal"};
+	const std::string longer_name("scalar\0suffix", 13);
+	const std::array<std::string_view, 1> longer{longer_name};
+	const auto phases = fixture.PropertyPhases;
+	const auto entropy = fixture.EntropyReads;
+	const auto local_values = fixture.Commands.ParameterValues().LocalValueCount();
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(covered), "a pending scalar transition contributes only when its exact timeline name is uncovered");
+	Require(fixture.Controls->Animating(different_case) && fixture.Controls->Animating(prefix) && fixture.Controls->Animating(longer), "timeline masks use exact stored bytes and lengths without case folding or C-string truncation");
+	Require(fixture.Controls->TransitionValue("scalar") == 4 && fixture.PropertyPhases == phases && fixture.EntropyReads == entropy && fixture.Commands.ParameterValues().LocalValueCount() == local_values, "scalar queries must not advance, publish or draw random values");
+	fixture.Controls->Update(1);
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(covered), "an in-progress scalar remains animated under the same exact masking policy");
+	fixture.Controls->Update(1);
+	Require(!fixture.Controls->Animating() && fixture.Controls->TransitionValue("scalar") == 8, "the actual scalar endpoint must retire its animation state");
+	fixture.RejectMutable = true;
+	RequireFailure([&] {
+		static_cast<void>(fixture.Controls->Animating());
+	},
+	    "queued");
+	fixture.RejectMutable = false;
+}
+
+static void TestAnimatingSelectorQueueIsReadOnly() {
+	sgre::scene::EmoteVariableProgram program;
+	program.Transitions = {"target"};
+	sgre::resource::EmoteSelectorDefinition definition;
+	definition.Label = "selection";
+	sgre::resource::EmoteSelectorOption option;
+	option.Variable = "target";
+	option.OnValue = 9;
+	option.OffValue = -3;
+	option.Immediate = true;
+	option.Ranges.push_back({0, 0});
+	definition.Options.push_back(option);
+	program.Selectors.Selectors.push_back(definition);
+	program.PrimarySelectorCount = 1;
+	VariableAssignmentFixture fixture(std::move(program));
+	fixture.Controls->Update(0);
+	Require(!fixture.Controls->Animating() && fixture.Controls->Read("target") == 9, "selector initialization must finish before observing a queued request");
+	fixture.Controls->Set("selection", 1, 2);
+	const std::array<std::string_view, 1> covered{"selection"};
+	const std::array<std::string_view, 1> unrelated{"target"};
+	const auto phases = fixture.PropertyPhases;
+	const auto entropy = fixture.EntropyReads;
+	for (std::size_t query = 0; query != 4; ++query) {
+		Require(fixture.Controls->Animating() && !fixture.Controls->Animating(covered) && fixture.Controls->Animating(unrelated), "queued selector work counts before its first update and is masked by its own label only");
+	}
+	Require(fixture.Controls->Read("selection") == 0 && fixture.Controls->TransitionValue("target") == 9 && fixture.Commands.ParameterValues().Read("target") == 9 && fixture.PropertyPhases == phases && fixture.EntropyReads == entropy, "querying the real selector owner must not apply its queued option or enter a property phase");
+	fixture.Controls->Update(1);
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(covered) && fixture.Controls->Read("selection") == 1 && fixture.Controls->Read("target") == -3, "only the real update starts selector IO while its timed request remains active");
+	fixture.Controls->Update(1);
+	Require(!fixture.Controls->Animating(), "completed selector work must no longer contribute");
+
+	class QueryVariableIo final : public sgre::scene::EmoteVariableIo {
+	public:
+		float Read(std::string_view) const override {
+			++Reads;
+			return Value;
+		}
+		void Set(std::string_view, float value, float, float) override {
+			++Writes;
+			Value = value;
+		}
+		mutable std::size_t Reads = 0;
+		std::size_t Writes = 0;
+		float Value = 0;
+	};
+	QueryVariableIo io;
+	sgre::scene::EmoteSelectorControl selector(std::move(definition), io);
+	const auto reads = io.Reads;
+	const auto writes = io.Writes;
+	selector.Set(1, 2, 0);
+	const auto pending = selector.TransitionState();
+	Require(pending.Queued == 1 && !pending.Active && io.Reads == reads && io.Writes == writes && io.Value == 9, "the actual selector snapshot used by animation queries must perform no VariableIo calls");
+	selector.Update(1);
+	Require(io.Reads == reads + 1 && io.Writes == writes + 1 && io.Value == -3, "counted VariableIo must observe the later genuine selector update");
+}
+
+static void TestAnimatingEyePrimaryNameMask() {
+	VariableAssignmentFixture fixture(AssignmentEyeProgram(2));
+	fixture.Controls->SetBlinkEnabled(false);
+	fixture.Controls->Update(0);
+	fixture.Controls->Set("eye-left", 8, 2);
+	const std::array<std::string_view, 1> primary{"eye"};
+	const std::array<std::string_view, 1> left{"eye-left"};
+	const std::array<std::string_view, 1> right{"eye-right"};
+	const std::array<std::string_view, 1> blink{"blink"};
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(primary), "an eye component transition is masked by the eye controller's primary name");
+	Require(fixture.Controls->Animating(left) && fixture.Controls->Animating(right) && fixture.Controls->Animating(blink), "left, right and blink labels must not replace the native primary eye-name mask");
+	Require(fixture.Controls->TransitionValue("eye-left") == 2, "eye queries must leave the graph transition at its actual current frame");
+	fixture.Controls->Update(1);
+	Require(fixture.Controls->Animating(), "eye graph animation must survive its actual midpoint");
+	fixture.Controls->Update(1);
+	Require(!fixture.Controls->Animating(), "the completed eye graph must retire its contributing transition flag");
+}
+
+static void TestAnimatingEyebrowTransition() {
+	sgre::scene::EmoteVariableProgram program;
+	sgre::scene::EmoteGraphChannelDefinition definition;
+	definition.Name = "brow";
+	definition.InitialFrame = 2;
+	definition.Graph.Edges = {{0, 10}};
+	program.Eyebrows.push_back(std::move(definition));
+	VariableAssignmentFixture fixture(std::move(program));
+	fixture.Controls->Update(0);
+	fixture.Controls->Set("brow", 4);
+	Require(!fixture.Controls->Animating(), "an immediate eyebrow frame must not count as a graph animation");
+	fixture.Controls->Set("brow", 8, 2);
+	const std::array<std::string_view, 1> covered{"brow"};
+	const std::array<std::string_view, 1> unrelated{"brow-extra"};
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(covered) && fixture.Controls->Animating(unrelated), "a timed eyebrow contributes only under its exact uncovered name");
+	fixture.Controls->Update(1);
+	Require(fixture.Controls->Animating(), "eyebrow graph interpolation must remain active at its actual midpoint");
+	fixture.Controls->Update(1);
+	Require(!fixture.Controls->Animating() && fixture.Controls->TransitionValue("brow") == 8, "the actual eyebrow endpoint must stop contributing");
+}
+
+static void TestAnimatingMouthPendingAndEitherNameMask() {
+	sgre::scene::EmoteVariableProgram program;
+	program.Mouths.push_back({"mouth", "talk", 3});
+	VariableAssignmentFixture fixture(std::move(program));
+	fixture.Controls->Update(0);
+	fixture.Controls->Set("mouth", 8, 12);
+	fixture.Controls->Set("talk", 8);
+	Require(!fixture.Controls->Animating(), "an immediate mouth frame or talk value must not invent pending mouth interpolation");
+	fixture.Controls->Set("talk", 4, 2);
+	const std::array<std::string_view, 1> frame_name{"mouth"};
+	const std::array<std::string_view, 1> talk_name{"talk"};
+	const std::array<std::string_view, 1> unrelated{"mouth-extra"};
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(frame_name) && !fixture.Controls->Animating(talk_name) && fixture.Controls->Animating(unrelated), "pending mouth interpolation is suppressed when either native mouth label is covered");
+	Require(fixture.Controls->TransitionValue("talk") == 8 && fixture.Controls->Read("talk") == 0, "mouth queries must not start pending interpolation or publish the staged talk value");
+	fixture.Controls->Update(1);
+	Require(fixture.Controls->Animating() && !fixture.Controls->Animating(frame_name) && !fixture.Controls->Animating(talk_name) && fixture.Controls->TransitionValue("talk") == 6, "running mouth interpolation retains the same either-name masking rule");
+	fixture.Controls->Update(1);
+	Require(!fixture.Controls->Animating() && fixture.Controls->TransitionValue("talk") == 4, "actual completed mouth interpolation must stop contributing");
+}
+
+static void TestAnimatingExcludesAutonomousBlink() {
+	VariableAssignmentFixture fixture(AssignmentEyeProgram(2), 42);
+	fixture.Controls->Update(0);
+	Require(fixture.Controls->BlinkEnabled() && !fixture.Controls->Animating(), "an enabled idle blink owner must not itself count as a named graph transition");
+	bool saw_blink_frame = false;
+	for (std::size_t phase = 0; phase != 64; ++phase) {
+		fixture.Controls->Update(.5f);
+		saw_blink_frame = saw_blink_frame || fixture.Controls->Read("eye") != 2;
+		const auto phases = fixture.PropertyPhases;
+		const auto entropy = fixture.EntropyReads;
+		Require(!fixture.Controls->Animating(), "actual autonomous blink motion must remain excluded from getAnimating");
+		Require(fixture.PropertyPhases == phases && fixture.EntropyReads == entropy, "blink activity queries must not advance properties or acquire more random entropy");
+	}
+	Require(saw_blink_frame && fixture.EntropyReads == 1, "blink exclusion must be exercised during real changed eye output from its one owned random stream");
+}
+
 int main() {
 	try {
+		TestAnimatingScalarAndExactTimelineMask();
+		TestAnimatingSelectorQueueIsReadOnly();
+		TestAnimatingEyePrimaryNameMask();
+		TestAnimatingEyebrowTransition();
+		TestAnimatingMouthPendingAndEitherNameMask();
+		TestAnimatingExcludesAutonomousBlink();
+		TestAssignedValuesRetainDestinationPublicationPhase();
+		TestAssignedGraphAndMouthUseDestinationMetadata();
+		TestAssignedEyeRandomAndParameterOwnership();
+		TestAssignedSelectorDoesNotCallVariableIo();
 		TestActualPublicationPhase();
 		TestUnsupportedFamilyRejectsBeforeMutation();
 		TestGraphAndMouthPublication();

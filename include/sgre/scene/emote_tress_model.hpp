@@ -58,6 +58,9 @@ namespace sgre::scene {
 		~EmoteTressModel() noexcept;
 		EmoteTressModel(const EmoteTressModel&) = delete;
 		EmoteTressModel& operator=(const EmoteTressModel&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteTressModel& source) const;
+		void AssignState(const EmoteTressModel& source);
 		void SetPosture(const EmotePhysicalPosture& posture);
 		void Initialize();
 		void ClearForcesAndMeasureBounds();

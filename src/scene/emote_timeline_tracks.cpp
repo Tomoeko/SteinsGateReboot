@@ -144,6 +144,7 @@ namespace sgre::scene {
 		}
 		m_Definition = PrepareTracks(actual_definition, controls);
 		m_Cursors.resize(m_Definition.Tracks.size());
+		m_HasDifference.resize(m_Definition.Tracks.size());
 		Reset(flags);
 	}
 
@@ -158,6 +159,7 @@ namespace sgre::scene {
 			for (std::size_t index = 0; index != m_Definition.Tracks.size(); ++index) {
 				if (!m_Definition.Tracks[index].Instant) {
 					m_Difference[index].Set(0);
+					m_HasDifference[index] = true;
 				}
 			}
 		}
@@ -165,6 +167,55 @@ namespace sgre::scene {
 		m_Position = 0;
 		m_Initialized = false;
 		std::fill(m_Cursors.begin(), m_Cursors.end(), 0);
+	}
+
+	void EmoteTimelineTracks::RequireCanAssignState(const EmoteTimelineTracks& source) const {
+		RequireOperation(m_Position);
+		source.RequireOperation(source.m_Position);
+		if (!source.m_Initialized || source.m_Definition.Tracks.size() != source.m_HasDifference.size()) {
+			throw std::runtime_error("Emote timeline assignment requires its actual prepared source tracks");
+		}
+		if (!m_Definition.Tracks.empty() && source.m_Definition.Tracks.size() > kMaximumTimelineKeys / m_Definition.Tracks.size()) {
+			throw std::runtime_error("Emote timeline assignment exceeds bounded exact-name matching work");
+		}
+	}
+
+	void EmoteTimelineTracks::AssignState(const EmoteTimelineTracks& source, std::uint32_t flags) {
+		RequireCanAssignState(source);
+		if ((flags & ~std::uint32_t{7}) != 0) {
+			throw std::runtime_error("Emote timeline assignment requires recovered native playback flags");
+		}
+		if (this == &source) {
+			return;
+		}
+		// Allocate before resetting any retained state. A source transition can exist even after flags2 was cleared.
+		auto next_difference = m_Difference;
+		next_difference.resize(m_Definition.Tracks.size());
+		auto next_present = m_HasDifference;
+		if ((flags & 2) != 0) {
+			for (std::size_t index = 0; index != m_Definition.Tracks.size(); ++index) {
+				if (!m_Definition.Tracks[index].Instant) {
+					next_difference[index].Set(0);
+					next_present[index] = true;
+				}
+			}
+		}
+		for (std::size_t destination = 0; destination != m_Definition.Tracks.size(); ++destination) {
+			for (std::size_t origin = 0; origin != source.m_Definition.Tracks.size(); ++origin) {
+				if (m_Definition.Tracks[destination].Name != source.m_Definition.Tracks[origin].Name) {
+					continue;
+				}
+				if (source.m_HasDifference[origin]) {
+					next_difference[destination] = source.m_Difference[origin];
+					next_present[destination] = true;
+				}
+				break;
+			}
+		}
+		Reset(flags);
+		Seek(source.m_Position, false);
+		m_Difference.swap(next_difference);
+		m_HasDifference.swap(next_present);
 	}
 
 	void EmoteTimelineTracks::AdvanceDifference(float elapsed_ticks) {

@@ -52,6 +52,9 @@ namespace sgre::scene {
 		~EmoteCatenaryPhysics() noexcept;
 		EmoteCatenaryPhysics(const EmoteCatenaryPhysics&) = delete;
 		EmoteCatenaryPhysics& operator=(const EmoteCatenaryPhysics&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteCatenaryPhysics& source) const;
+		void AssignState(const EmoteCatenaryPhysics& source);
 		void SetPosture(const EmotePhysicalPosture& posture);
 		void SetCorrection(float angle, float scale);
 		void SetWorldFixes(std::span<const resource::MotionPoint> targets);

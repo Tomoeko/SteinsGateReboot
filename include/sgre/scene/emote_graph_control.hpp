@@ -27,6 +27,8 @@ namespace sgre::scene {
 		EmoteGraphControl(const EmoteGraphControl&) = delete;
 		EmoteGraphControl& operator=(const EmoteGraphControl&) = delete;
 		void Prepare(float start, float target);
+		// Native graph import rebuilds the route against destination metadata.
+		void AssignPath(const EmoteGraphControl& source);
 		[[nodiscard]] float Evaluate(float ratio) const;
 
 	private:

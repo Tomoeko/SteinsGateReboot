@@ -47,6 +47,9 @@ namespace sgre::scene {
 		// Containing MEmote calls this once after actual plain Progress; no second Motion update is performed here.
 		// Global frame and parent cache are the real preceding driver/PartsTree inputs, not fabricated clock or poses.
 		void Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent = nullptr);
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteStringControl& source) const;
+		void AssignState(const EmoteStringControl& source);
 		void RequireReady() const;
 		// Complete actual UID transitions outside their noexcept notification, before collider-pose preparation.
 		void FinishLayerChanges();

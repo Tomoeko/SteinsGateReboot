@@ -64,6 +64,9 @@ namespace sgre::scene {
 		~EmoteSynchronizeControl() noexcept;
 		EmoteSynchronizeControl(const EmoteSynchronizeControl&) = delete;
 		EmoteSynchronizeControl& operator=(const EmoteSynchronizeControl&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteSynchronizeControl& source) const;
+		void AssignState(const EmoteSynchronizeControl& source);
 		void RequireReady() const;
 		// Native2f3260 consumes source's actual current mesh and writes only pending target controls.
 		void Update(float elapsed_ticks, const EmoteVelvetyInputFrame& actual_frame, const EmoteVelvetyPartPosture* actual_parent = nullptr);

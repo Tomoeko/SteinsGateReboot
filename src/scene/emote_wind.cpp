@@ -98,6 +98,22 @@ namespace sgre::scene {
 	void EmoteWindOwner::Stop() {
 		Start({});
 	}
+	void EmoteWindOwner::AssignState(const EmoteWindOwner& source) {
+		RequireIdle();
+		source.RequireIdle();
+		if (this == &source) {
+			return;
+		}
+		const auto preceding = m_Parameters;
+		m_Parameters = source.m_Parameters;
+		try {
+			// This order is significant: native 2BC982 copies 260..270 before 2BCA48 calls Start.
+			Start(m_Parameters);
+		} catch (...) {
+			m_Parameters = preceding;
+			throw;
+		}
+	}
 	void EmoteWindOwner::Advance(float elapsed_ticks) {
 		RequireIdle();
 		if (!std::isfinite(elapsed_ticks) || elapsed_ticks < 0) {

@@ -550,4 +550,25 @@ namespace sgre::scene {
 	std::span<const EmoteSoftPendulumParticle> EmoteCatenaryPhysics::Particles() const noexcept {
 		return m_Implementation->Model->Particles();
 	}
+	void EmoteCatenaryPhysics::RequireCanAssignState(const EmoteCatenaryPhysics& source) const {
+		m_Implementation->RequireIdle();
+		source.m_Implementation->RequireIdle();
+		m_Implementation->Model->RequireCanAssignState(*source.m_Implementation->Model);
+	}
+
+	void EmoteCatenaryPhysics::AssignState(const EmoteCatenaryPhysics& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Previous = from.Previous;
+		target.PreviousTargets = from.PreviousTargets;
+		target.Model->AssignState(*from.Model);
+		target.Initialized = from.Initialized;
+		target.Dirty = true;
+	}
+
 } // namespace sgre::scene

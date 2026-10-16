@@ -774,4 +774,30 @@ namespace sgre::scene {
 		return std::span<const resource::MotionPoint>(state.Targets).subspan(part.TargetOffset, part.Bindings.size());
 	}
 
+	void EmoteJellyPhysics::RequireCanAssignState(const EmoteJellyPhysics& source) const {
+		m_Implementation->RequireIdle();
+		source.m_Implementation->RequireIdle();
+		const auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		for (std::size_t index = 0; index != std::min(target.Tresses.size(), from.Tresses.size()); ++index) {
+			target.Tresses[index]->Model->RequireCanAssignState(*from.Tresses[index]->Model);
+		}
+	}
+
+	void EmoteJellyPhysics::AssignState(const EmoteJellyPhysics& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Previous = from.Previous;
+		for (std::size_t index = 0; index != std::min(target.Tresses.size(), from.Tresses.size()); ++index) {
+			target.Tresses[index]->Previous = from.Tresses[index]->Previous;
+			target.Tresses[index]->Model->AssignState(*from.Tresses[index]->Model);
+		}
+		target.Initialized = from.Initialized;
+	}
+
 } // namespace sgre::scene

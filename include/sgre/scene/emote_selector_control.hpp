@@ -35,6 +35,9 @@ namespace sgre::scene {
 		EmoteSelectorControl& operator=(EmoteSelectorControl&&) = delete;
 		// Native2d7df0 application helper; Set owns the separate native queued setter policy.
 		// Each nonempty option performs Read then Set; Immediate zeroes that option's duration only.
+		void RequireCanAssignState(const EmoteSelectorControl& source) const;
+		// Native2d81d0 imports the owned FIFO without invoking VariableIo or replacing its definition.
+		void AssignState(const EmoteSelectorControl& source);
 		void Apply(std::int32_t selection, float duration, float easing);
 		// Native2d8110 retains the float selection until the actual update starts this transition.
 		void Set(float selection, float duration, float easing, bool append = false);

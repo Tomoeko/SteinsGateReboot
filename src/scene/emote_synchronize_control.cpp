@@ -638,4 +638,49 @@ namespace sgre::scene {
 	void EmoteSynchronizeControl::Close() {
 		m_Implementation->Close();
 	}
+	void EmoteSynchronizeControl::RequireCanAssignState(const EmoteSynchronizeControl& source) const {
+		const auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.RequireReady();
+		from.RequireReady();
+		if (Uid() != source.Uid()) {
+			throw std::runtime_error("Emote physical assignment requires an exact family UID match");
+		}
+		for (const auto& [occurrence, instance] : target.Instances) {
+			const auto found = from.Instances.find(occurrence);
+			if (found == from.Instances.end()) {
+				continue;
+			}
+			instance->Layer.RequireCanAssignMeshFrom(found->second->Layer);
+		}
+	}
+
+	void EmoteSynchronizeControl::AssignState(const EmoteSynchronizeControl& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Operating = true;
+		try {
+			target.Posture = from.Posture;
+			target.Cache = from.Cache;
+			// Native instance maps match occurrence keys; prediction history and destination leases stay local.
+			for (auto& [occurrence, instance] : target.Instances) {
+				const auto found = from.Instances.find(occurrence);
+				if (found == from.Instances.end()) {
+					continue;
+				}
+				instance->Layer.AssignMeshFrom(found->second->Layer);
+			}
+			target.Operating = false;
+		} catch (...) {
+			target.Operating = false;
+			target.Valid = false;
+			throw;
+		}
+	}
+
 } // namespace sgre::scene

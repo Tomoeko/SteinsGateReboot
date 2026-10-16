@@ -93,6 +93,9 @@ namespace sgre::scene {
 		explicit EmoteEmissionPool(const EmoteEmissionPoolDefinition& definition);
 		EmoteEmissionPool(const EmoteEmissionPool&) = delete;
 		EmoteEmissionPool& operator=(const EmoteEmissionPool&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteEmissionPool& source) const;
+		void AssignState(const EmoteEmissionPool& source);
 		void Spawn(const EmoteEmissionBirth& birth);
 		void AddPeriodicTrigger(std::uint32_t source_emitter, std::uint32_t target_emitter, float frequency);
 		void Update(float ticks);

@@ -29,6 +29,8 @@ namespace sgre::scene {
 		// The actual containing Emote eye owner must outlive this borrowed generator.
 		// Parameter selection/range words require their genuine constructor producer, not metadata guesses.
 		EmoteBlinkControl(EmoteBlinkRandom& random, EmoteBlinkParameters parameters);
+		// Copies native eye270..27d state while retaining destination parameters and random borrow.
+		void AssignState(const EmoteBlinkControl& source) noexcept;
 		void SetSuppressed(bool suppressed) noexcept;
 		void ResetIdleClock() noexcept;
 		void SetParameters(EmoteBlinkParameters parameters, bool reset_idle_clock);

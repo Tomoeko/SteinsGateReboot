@@ -2,9 +2,9 @@
 
 #include <algorithm>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cmath>
 #include <stdexcept>
 #include <utility>
 
@@ -65,6 +65,26 @@ namespace sgre::scene {
 	}
 
 	static constexpr std::size_t kMaximumSelectorTransitions = 4096;
+
+	void EmoteSelectorControl::RequireCanAssignState(const EmoteSelectorControl& source) const {
+		if (m_Applying || m_Updating || source.m_Applying || source.m_Updating || source.m_Pending.size() > kMaximumSelectorTransitions) {
+			throw std::runtime_error("Emote selector assignment requires two idle bounded actual controls");
+		}
+	}
+
+	void EmoteSelectorControl::AssignState(const EmoteSelectorControl& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto pending = source.m_Pending;
+		m_Selection = source.m_Selection;
+		m_ReciprocalDuration = source.m_ReciprocalDuration;
+		m_Progress = source.m_Progress;
+		m_Transitioning = source.m_Transitioning;
+		m_Pending = std::move(pending);
+	}
 
 	void EmoteSelectorControl::Set(float selection, float duration, float easing, bool append) {
 		if (m_Applying || m_Updating || !std::isfinite(selection) || selection < -2147483648.0f || selection >= 2147483648.0f || !std::isfinite(duration) || !std::isfinite(easing)) {

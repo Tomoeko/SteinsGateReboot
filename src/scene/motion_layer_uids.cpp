@@ -368,4 +368,19 @@ namespace sgre::scene {
 	std::size_t MotionPlayerLayerUids::SubscriptionCount() const noexcept {
 		return m_Root->m_Subscriptions;
 	}
+	void MotionLayerUidReference::RequireCanAssignMeshFrom(const MotionLayerUidReference& source) const {
+		static_cast<void>(Node());
+		const auto& source_node = source.Node();
+		if (source_node.Prepared->MeshTransform == 1) {
+			static_cast<void>(source.CurrentMesh());
+		}
+	}
+
+	void MotionLayerUidReference::AssignMeshFrom(const MotionLayerUidReference& source) const {
+		RequireCanAssignMeshFrom(source);
+		// Native2e41a0 reads the completed source, then51b5b0 replaces only the destination pending lattice.
+		const auto* lattice = source.Node().Prepared->MeshTransform == 1 ? &source.CurrentMesh() : nullptr;
+		static_cast<void>(SetMesh(1, lattice != nullptr && lattice->EncodedDegree != 0 ? lattice : nullptr, true));
+	}
+
 } // namespace sgre::scene

@@ -37,6 +37,14 @@ namespace sgre::scene {
 		m_Components = next;
 	}
 
+	void EmoteCoordinateTransition::AssignState(const EmoteCoordinateTransition& source) noexcept {
+		m_Components = source.m_Components;
+	}
+
+	bool EmoteCoordinateTransition::Changing() const noexcept {
+		return m_Components[0].Changing() || m_Components[1].Changing();
+	}
+
 	std::array<float, 2> EmoteCoordinateTransition::Current() const {
 		std::array<float, 2> coordinate{m_Components[0].Current(), m_Components[1].Current()};
 		if (m_Mode == EmoteCoordinateMode::Meters) {

@@ -27,6 +27,12 @@ namespace sgre::scene {
 			m_LocalSine = std::sin(kNativeHalfPi);
 		}
 
+		void AssignState(const EmoteTressRigidRod& source) {
+			m_Posture = source.m_Posture;
+			std::copy_n(source.m_Particles.begin(), std::min(m_Particles.size(), source.m_Particles.size()), m_Particles.begin());
+			std::copy_n(source.m_Trailing.begin(), std::min(m_Trailing.size(), source.m_Trailing.size()), m_Trailing.begin());
+		}
+
 		void SetPosture(const EmotePhysicalPosture& posture) {
 			m_Posture = posture;
 			m_Particles[0] = posture.Coordinate;
@@ -377,4 +383,58 @@ namespace sgre::scene {
 			}
 		}
 	}
+	void EmoteTressModel::RequireCanAssignState(const EmoteTressModel& source) const {
+		m_Implementation->RequireIdle();
+		source.m_Implementation->RequireIdle();
+		for (const auto* state : {m_Implementation.get(), source.m_Implementation.get()}) {
+			for (const auto* branch : {&state->First, &state->Second}) {
+				if (branch->Soft) {
+					branch->Soft->RequireCanAssignState(*branch->Soft);
+				}
+			}
+		}
+	}
+
+	void EmoteTressModel::AssignState(const EmoteTressModel& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		std::array<EmoteSoftPendulum*, 2> target_soft{};
+		std::array<const EmoteSoftPendulum*, 2> source_soft{};
+		std::array<EmoteTressRigidRod*, 2> target_rigid{};
+		std::array<const EmoteTressRigidRod*, 2> source_rigid{};
+		std::size_t target_soft_count = 0;
+		std::size_t source_soft_count = 0;
+		std::size_t target_rigid_count = 0;
+		std::size_t source_rigid_count = 0;
+		for (auto* branch : {&target.First, &target.Second}) {
+			if (branch->Soft) {
+				target_soft[target_soft_count++] = branch->Soft.get();
+			}
+			if (branch->Rigid) {
+				target_rigid[target_rigid_count++] = branch->Rigid.get();
+			}
+		}
+		for (const auto* branch : {&from.First, &from.Second}) {
+			if (branch->Soft) {
+				source_soft[source_soft_count++] = branch->Soft.get();
+			}
+			if (branch->Rigid) {
+				source_rigid[source_rigid_count++] = branch->Rigid.get();
+			}
+		}
+		for (std::size_t index = 0; index != std::min(target_soft_count, source_soft_count); ++index) {
+			target_soft[index]->AssignState(*source_soft[index]);
+		}
+		for (std::size_t index = 0; index != std::min(target_rigid_count, source_rigid_count); ++index) {
+			target_rigid[index]->AssignState(*source_rigid[index]);
+		}
+		target.PostureSet = from.PostureSet;
+		target.Initialized = from.Initialized;
+	}
+
 } // namespace sgre::scene

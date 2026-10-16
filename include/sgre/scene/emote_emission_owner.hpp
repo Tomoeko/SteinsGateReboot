@@ -47,6 +47,9 @@ namespace sgre::scene {
 		EmoteEmissionOwner& operator=(const EmoteEmissionOwner&) = delete;
 		[[nodiscard]] std::shared_ptr<EmoteEmissionGroup> Acquire(std::string_view uid);
 		// After genuine plain Progress/source/collider poses, before the ordered physical-family updates.
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteEmissionOwner& source) const;
+		void AssignState(const EmoteEmissionOwner& source);
 		void Prepare(const EmoteVelvetyInputFrame& actual_frame, float elapsed_ticks);
 		void Close();
 		[[nodiscard]] bool UsesCommands(const MotionPlayerCommands& actual_primary) const noexcept;

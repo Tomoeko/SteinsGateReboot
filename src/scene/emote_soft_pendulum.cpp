@@ -561,4 +561,24 @@ namespace sgre::scene {
 		}
 		return m_Bounds;
 	}
+	void EmoteSoftPendulum::RequireCanAssignState(const EmoteSoftPendulum& source) const {
+		RequireIdle();
+		source.RequireIdle();
+	}
+
+	void EmoteSoftPendulum::AssignState(const EmoteSoftPendulum& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		m_Anchor = source.m_Anchor;
+		m_PostureRotation = source.m_PostureRotation;
+		std::copy_n(source.m_Particles.begin(), std::min(m_Particles.size(), source.m_Particles.size()), m_Particles.begin());
+		std::copy_n(source.m_TrailingPositions.begin(), std::min(m_TrailingPositions.size(), source.m_TrailingPositions.size()), m_TrailingPositions.begin());
+		m_DirectionPrepared = false;
+		m_PostureSet = source.m_PostureSet;
+		m_Initialized = source.m_Initialized;
+	}
+
 } // namespace sgre::scene

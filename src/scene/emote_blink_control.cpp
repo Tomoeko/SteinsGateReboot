@@ -41,6 +41,14 @@ namespace sgre::scene {
 		m_NextInterval = random.Unit() * (parameters.IntervalMaximum - parameters.IntervalMinimum) + parameters.IntervalMinimum;
 	}
 
+	void EmoteBlinkControl::AssignState(const EmoteBlinkControl& source) noexcept {
+		m_Amount = source.m_Amount;
+		m_NextInterval = source.m_NextInterval;
+		m_Elapsed = source.m_Elapsed;
+		m_Active = source.m_Active;
+		m_Suppressed = source.m_Suppressed;
+	}
+
 	void EmoteBlinkControl::SetSuppressed(bool suppressed) noexcept {
 		m_Suppressed = suppressed;
 	}

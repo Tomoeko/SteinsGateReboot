@@ -37,6 +37,8 @@ namespace sgre::scene {
 		EmoteVelvetyFrameOwner(const MotionRootScene& actual_root, const MotionPlayerCommands& actual_commands, const MotionScenePlayer& actual_plain, EmoteVelvetyFrameDefinition definition, float actual_view_height);
 		[[nodiscard]] EmoteVelvetyInputFrame Prepare(float elapsed_ticks, const EmoteVelvetyGlobalControls& actual_controls);
 		[[nodiscard]] const resource::MotionMeshMatrix& PhysicsToWorld() const;
+		void RequireCanAssignHistory(const EmoteVelvetyFrameOwner& source) const;
+		void AssignHistory(const EmoteVelvetyFrameOwner& source);
 		// Native50FD90 retains physical numeric cells. Capture their value before the actual portable tree retires.
 		void ClearPlain(MotionScenePlayer& actual_plain);
 

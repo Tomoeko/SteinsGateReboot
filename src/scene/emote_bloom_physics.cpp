@@ -611,4 +611,32 @@ namespace sgre::scene {
 		return m_Implementation->Inputs;
 	}
 
+	void EmoteBloomPhysics::RequireCanAssignState(const EmoteBloomPhysics& source) const {
+		m_Implementation->RequireIdle();
+		source.m_Implementation->RequireIdle();
+	}
+
+	void EmoteBloomPhysics::AssignState(const EmoteBloomPhysics& source) {
+		RequireCanAssignState(source);
+		if (this == &source) {
+			return;
+		}
+
+		auto& target = *m_Implementation;
+		const auto& from = *source.m_Implementation;
+		target.Current = from.Current;
+		for (std::size_t index = 0; index != std::min(target.Points.size(), from.Points.size()); ++index) {
+			auto& point = target.Points[index];
+			const auto& previous = from.Points[index];
+			point.Target = previous.Target;
+			point.Previous = previous.Previous;
+			point.Predicted = previous.Predicted;
+			point.Coordinate = previous.Coordinate;
+			point.Velocity = previous.Velocity;
+			point.Force = previous.Force;
+		}
+		target.Initialized = from.Initialized;
+		target.Dirty = true;
+	}
+
 } // namespace sgre::scene

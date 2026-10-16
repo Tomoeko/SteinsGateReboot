@@ -284,11 +284,188 @@ static void TestLazyAdmissionAndContainingGuards() {
 	    "idle valid");
 }
 
+static void TestAssignedSchedulerRetainsCatalogAndSourceOrder() {
+	ActualMotionFixture source_motion;
+	ActualMotionFixture destination_motion;
+	auto source_controls = source_motion.Controls();
+	auto destination_controls = destination_motion.Controls();
+	const auto source_document = Document({Labeled("A", Definition({Track("instant", {Key(0, 5), Key(2, 7), Hidden(8)})})), Labeled("B", Definition({Track("instant", {Key(0, 15), Key(2, 17), Hidden(8)})})), Labeled("missing", Definition({Track("instant", {Key(0, 25), Hidden(8)})}))});
+	const auto destination_document = Document({Labeled("A", Definition({Track("instant", {Key(0, 6), Key(2, 9), Hidden(8)})})), Labeled("B", Definition({Track("instant", {Key(0, 16), Key(2, 19), Hidden(8)})})), Labeled("dormant", Definition({Track("instant", {Key(0, 26), Hidden(8)})}))});
+	sgre::scene::EmoteTimelineScheduler source(*source_controls, source_document, [] {
+	});
+	sgre::scene::EmoteTimelineScheduler destination(*destination_controls, destination_document, [] {
+	});
+	source.Play("B");
+	source.Play("A", 1);
+	source.Play("missing", 1);
+	source.Update(1);
+	destination.Play("dormant");
+	destination.Update(1);
+	destination_controls->Set("instant", 77);
+	destination.AssignState(source);
+	Require(destination.ActiveCount() == 2 && destination.CatalogCount() == 3 && !destination.State("missing"), "assignment clears active playback, skips unknown destination labels and retains the destination catalogue");
+	Require(destination.State("dormant")->Position == 1 && !destination.State("dormant")->Playing, "inactive prepared destination entries retain their owned playback state");
+	Require(destination.State("B")->Flags == 1 && destination.State("A")->Flags == 1 && destination_controls->Read("instant") == 77, "native assign ORs parallel flag without dispatching its seek");
+	destination.Update(1);
+	Require(destination_controls->Read("instant") == 9, "source active order B thenA must use destination keys and retain A as the final writer");
+}
+
+static void TestAssignedSchedulerBlendAndSourceRetirement() {
+	ActualMotionFixture source_motion;
+	ActualMotionFixture destination_motion;
+	auto source_controls = source_motion.Controls();
+	auto destination_controls = destination_motion.Controls();
+	auto source_document = std::make_unique<sgre::resource::PsbDocument>(Document({Labeled("loop", Definition({Track("continuous", {Key(0, 12), Hidden(3)})}, 0, 3, 9))}));
+	const auto destination_document = Document({Labeled("loop", Definition({Track("continuous", {Key(0, 90), Hidden(3)})}, 0, 3, 9))});
+	auto source = std::make_unique<sgre::scene::EmoteTimelineScheduler>(*source_controls, *source_document, [] {
+	});
+	sgre::scene::EmoteTimelineScheduler destination(*destination_controls, destination_document, [] {
+	});
+	source->Play("loop", 3);
+	source->Update(4);
+	source->FadeOut("loop", 4);
+	source->Update(1);
+	Require(source->State("loop")->Looped && source->State("loop")->BlendRatio == .75f, "source fixture must own a looped timeline and an in-flight fade");
+	destination.AssignState(*source);
+	Require(!destination.State("loop")->Looped && destination.State("loop")->Position == 2 && destination.BlendRatio("loop") == .75f, "assignment resets looped but preserves source position, cached blend and in-flight transition");
+	source.reset();
+	source_document.reset();
+	source_controls.reset();
+	destination.Update(.5f);
+	Require(destination.BlendRatio("loop") == .625f && destination.IsPlaying("loop"), "destination owns the complete blend transition after source scheduler/document retirement");
+	destination.Update(3);
+	Require(!destination.IsPlaying("loop"), "copied stop-when-fade-finished policy retires genuine destination playback");
+}
+
+static void TestAnimatingTimelineLifetimeAndBlend() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("finite", Definition({}, -1, -1, 3)), Labeled("loop", Definition({}, 0, 4, 4))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	Require(!scheduler.Animating(), "empty actual scheduler and settled controls are not animating");
+	scheduler.Play("finite");
+	Require(scheduler.Animating(), "native negative loopBegin counts even an active finite timeline without tracks");
+	scheduler.Update(0);
+	Require(scheduler.Animating() && scheduler.State("finite")->Position == 0, "animation query and zero elapsed must not consume finite timeline time");
+	scheduler.Update(3);
+	Require(!scheduler.Animating() && !scheduler.IsPlaying(), "finite timeline retirement removes its animation contribution");
+	scheduler.Play("loop", 3);
+	Require(scheduler.IsPlaying() && !scheduler.Animating(), "native steady looping playback alone does not count as animation");
+	scheduler.SetBlendRatio("loop", .25f, 2);
+	Require(scheduler.Animating(), "actual in-flight loop blend counts as animation");
+	scheduler.Update(2);
+	Require(scheduler.IsPlaying() && !scheduler.Animating() && scheduler.BlendRatio("loop") == .25f, "completed blend retains looping playback without retaining its animation predicate");
+	scheduler.FadeOut("loop", 2);
+	Require(scheduler.Animating(), "pending fade-out counts before its genuine update");
+	scheduler.Update(2);
+	Require(!scheduler.Animating() && !scheduler.IsPlaying(), "stop-when-blend-finished retires the actual loop and its coverage");
+}
+
+static void TestAnimatingExactTrackCoverageAndMembership() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("covered", Definition({Track("continuous", {Hidden(0), Hidden(4)}), Track("continuous", {Hidden(0), Hidden(4)})}, 0, 4, 4)), Labeled("wrong-case", Definition({Track("Continuous", {Hidden(0), Hidden(4)})}, 0, 4, 4))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	controls->Set("continuous", 20, 8);
+	Require(scheduler.Animating(), "uncovered dedicated scalar transition counts without active timelines");
+	scheduler.Play("covered");
+	const auto retained = controls->Read("continuous");
+	const auto published = actual.Parent.ParameterValues().Read("continuous");
+	for (std::size_t query = 0; query != 10; ++query) {
+		Require(!scheduler.Animating(), "all active track labels mask their exact variable even when every key is hidden");
+	}
+	Require(controls->Read("continuous") == retained && actual.Parent.ParameterValues().Read("continuous") == published && scheduler.State("covered")->Position == 0, "repeated animation queries must not advance, publish or dispatch timeline variables");
+	scheduler.Stop("covered");
+	Require(scheduler.Animating(), "stopping a masking timeline invalidates cached names");
+	scheduler.Play("wrong-case");
+	Require(scheduler.Animating(), "native variable-name coverage is case-sensitive and does not normalize labels");
+	scheduler.Play("covered", 1);
+	Require(!scheduler.Animating(), "parallel timeline membership contributes the union of exact track names");
+	scheduler.Play("unknown");
+	Require(scheduler.Animating() && !scheduler.IsPlaying(), "unknown nonparallel playback clears prior coverage");
+	scheduler.Play("covered");
+	Require(!scheduler.Animating(), "replay rebuilds coverage from retained prepared destination definitions");
+	scheduler.Stop();
+	controls->Update(8);
+	Require(!scheduler.Animating(), "completed uncovered scalar stops contributing after its genuine control update");
+}
+
+static void TestAnimatingInstantPolicyAndAssignmentCoverage() {
+	ActualMotionFixture source_motion;
+	ActualMotionFixture destination_motion;
+	sgre::scene::EmoteVariableProgram program;
+	program.Transitions = {"continuous", "other"};
+	program.InstantVariables = {"continuous"};
+	sgre::scene::EmoteVariableControls source_controls(source_motion.Parent, [] {
+	},
+	    program);
+	sgre::scene::EmoteVariableControls destination_controls(destination_motion.Parent, [] {
+	},
+	    program);
+	const auto source_document = Document({Labeled("shared", Definition({Track("continuous", {Hidden(0), Hidden(4)})}, 0, 4, 4))});
+	const auto destination_document = Document({Labeled("shared", Definition({Track("other", {Hidden(0), Hidden(4)})}, 0, 4, 4)), Labeled("cover", Definition({Track("continuous", {Hidden(0), Hidden(4)})}, 0, 4, 4))});
+	auto source = std::make_unique<sgre::scene::EmoteTimelineScheduler>(source_controls, source_document, [] {
+	});
+	sgre::scene::EmoteTimelineScheduler destination(destination_controls, destination_document, [] {
+	});
+	source->Play("shared", 4);
+	source_controls.Set("continuous", 30, 8);
+	Require(!source->Animating(), "native query includes an instant-policy track even when flags skip its dispatch");
+	destination.Play("cover");
+	destination_controls.Set("continuous", 30, 8);
+	Require(!destination.Animating(), "destination fixture primes its previous exact coverage cache");
+	destination.AssignState(*source);
+	Require(destination.IsPlaying("shared") && destination.Animating(), "assignment replaces cached membership with destination prepared track names rather than source names");
+	destination_controls.Set("continuous", 0);
+	destination_controls.Set("other", 40, 8);
+	Require(!destination.Animating(), "assigned destination track metadata masks its own exact dedicated control");
+	source.reset();
+	Require(!destination.Animating(), "coverage views remain owned by destination after source scheduler retirement");
+	destination.Stop();
+	Require(destination.Animating(), "assigned mask disappears on real stop-all");
+}
+
+static void TestAnimatingContainingGuardAndThread() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({});
+	bool blocked = false;
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [&] {
+		if (blocked) {
+			throw std::runtime_error("actual containing query guard");
+		}
+	});
+	blocked = true;
+	RequireFailure([&] {
+		(void)scheduler.Animating();
+	},
+	    "containing query guard");
+	blocked = false;
+	bool rejected = false;
+	std::thread foreign([&] {
+		try {
+			(void)scheduler.Animating();
+		} catch (const std::runtime_error&) {
+			rejected = true;
+		}
+	});
+	foreign.join();
+	Require(rejected && !scheduler.Animating(), "foreign-thread queries reject while retaining genuine owner state");
+}
+
 int main() {
 	try {
+		TestAnimatingTimelineLifetimeAndBlend();
+		TestAnimatingExactTrackCoverageAndMembership();
+		TestAnimatingInstantPolicyAndAssignmentCoverage();
+		TestAnimatingContainingGuardAndThread();
 		TestOriginalSchedulerStatesAndRealControlPublication();
 		TestPlayStopParallelAndNormalization();
 		TestLazyAdmissionAndContainingGuards();
+		TestAssignedSchedulerRetainsCatalogAndSourceOrder();
+		TestAssignedSchedulerBlendAndSourceRetirement();
 		std::cout << "original timeline scheduler states and actual control/parameter publication passed\n";
 		return 0;
 	} catch (const std::exception& error) {

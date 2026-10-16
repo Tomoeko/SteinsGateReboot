@@ -101,6 +101,10 @@ namespace sgre::scene {
 		return current;
 	}
 
+	bool EmoteRotationTransition::Changing() const noexcept {
+		return m_Active || m_Pending.has_value();
+	}
+
 	float EmoteRotationTransition::Current() const noexcept {
 		return m_Current;
 	}

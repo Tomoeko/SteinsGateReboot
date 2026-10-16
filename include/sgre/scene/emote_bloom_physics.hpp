@@ -61,6 +61,9 @@ namespace sgre::scene {
 		~EmoteBloomPhysics() noexcept;
 		EmoteBloomPhysics(const EmoteBloomPhysics&) = delete;
 		EmoteBloomPhysics& operator=(const EmoteBloomPhysics&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteBloomPhysics& source) const;
+		void AssignState(const EmoteBloomPhysics& source);
 		void SetPosture(const EmotePhysicalPosture& actual_posture);
 		void Initialize();
 		void ClearForces();

@@ -60,6 +60,9 @@ namespace sgre::scene {
 		~EmoteBobbleModel() noexcept;
 		EmoteBobbleModel(const EmoteBobbleModel&) = delete;
 		EmoteBobbleModel& operator=(const EmoteBobbleModel&) = delete;
+		// Native assignment copies mutable values while retaining this owner's resources and bindings.
+		void RequireCanAssignState(const EmoteBobbleModel& source) const;
+		void AssignState(const EmoteBobbleModel& source);
 		void SetPosture(const EmoteBobblePosture& posture);
 		// Native325e80 consumes these actual retained cosine/sine fields directly.
 		void SetPosture(const EmoteBobblePosture& posture, float cosine, float sine);

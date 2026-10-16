@@ -298,12 +298,58 @@ static void TestMalformedInputAndFailurePhase() {
 	    "invalid after failed dispatch");
 }
 
+static void TestAssignedTracksRetainMetadataAndCompletedCache() {
+	ActualMotionFixture source_motion;
+	ActualMotionFixture destination_motion;
+	auto source_controls = source_motion.Controls();
+	auto destination_controls = destination_motion.Controls();
+	sgre::scene::EmoteTimelineTracks source(*source_controls, Definition({Track("continuous", {Key(0, 12), Hidden(6)})}), 2);
+	source.Seek(0);
+	source.AdvanceDifference(1);
+	sgre::scene::EmoteTimelineTracks destination(*destination_controls, Definition({Track("continuous", {Key(0, 99), Key(2, 100), Hidden(6)})}), 2);
+	destination.Seek(0);
+	destination.AdvanceDifference(.25f);
+	const auto retained_cache = destination.ApplyDifference("continuous", 10, 1);
+	const auto calls = destination_motion.GuardCalls;
+	destination.AssignState(source, 3);
+	Require(destination_motion.GuardCalls == calls && destination_controls->Read("continuous") == 0, "state import must not dispatch timeline keys or variable IO");
+	Require(destination.Definition().Tracks.front().Keys.front().Value == 99 && destination.Cursors().front() == 0, "assignment retains destination metadata and recomputes its own cursor");
+	Require(destination.ApplyDifference("continuous", 10, 1) == retained_cache, "assignment retains completed destination difference cache until positive advance");
+	destination.AdvanceDifference(1);
+	RequireNear(destination.ApplyDifference("continuous", 10, 1), 14.8f, "imported transition continues source elapsed/start/target rather than resetting to its current value");
+	// A retained native transition exists independently of the current additive playback flag.
+	source.Reset(0);
+	source.Seek(1, false);
+	destination.AssignState(source, 3);
+	destination.AdvanceDifference(1);
+	RequireNear(destination.ApplyDifference("continuous", 0, 1), 4.8f, "source flags0 must retain and copy its previously allocated difference transition");
+}
+
+static void TestAssignedTracksFirstSourceMatchAndFreshCache() {
+	ActualMotionFixture source_motion;
+	ActualMotionFixture destination_motion;
+	auto source_controls = source_motion.Controls();
+	auto destination_controls = destination_motion.Controls();
+	auto source = std::make_unique<sgre::scene::EmoteTimelineTracks>(*source_controls, Definition({Track("continuous", {Key(0, 12), Hidden(6)}), Track("continuous", {Key(0, 90), Hidden(6)})}), 2);
+	source->Seek(0);
+	source->AdvanceDifference(1);
+	sgre::scene::EmoteTimelineTracks destination(*destination_controls, Definition({Track("continuous", {Key(0, 77), Hidden(6)}), Track("continuous", {Key(0, 88), Hidden(6)})}));
+	destination.AssignState(*source, 3);
+	Require(destination.ApplyDifference("continuous", 5, 1) == 5, "fresh destination cache must not borrow source completed additive values");
+	source.reset();
+	source_controls.reset();
+	destination.AdvanceDifference(1);
+	RequireNear(destination.ApplyDifference("continuous", 0, 1), 9.6f, "each duplicate destination track must own a copy of the first matching source transition after source retirement");
+}
+
 int main() {
 	try {
 		TestNativePreparation();
 		TestSeekAndActualParameterPublication();
 		TestCrossedOrderAndPolicy();
 		TestMalformedInputAndFailurePhase();
+		TestAssignedTracksRetainMetadataAndCompletedCache();
+		TestAssignedTracksFirstSourceMatchAndFreshCache();
 		std::cout << "Emote timeline preparation, native seek/crossing and actual Motion publication passed\n";
 		return 0;
 	} catch (const std::exception& error) {

@@ -361,10 +361,152 @@ static void TestAbsentDriverAndFailureRollback() {
 	}
 }
 
+static void TestCommonAssignmentKeepsDestinationOwnersAndPendingMesh() {
+	Fixture fixture(OwnerDocument());
+	std::size_t entropy_reads = 0;
+	const auto entropy = [&] {
+		return static_cast<std::uint32_t>(++entropy_reads);
+	};
+	const auto listener = [](const auto&) {
+	};
+	auto source = std::make_unique<sgre::scene::EmoteScenePlayer>(*fixture.Runtime, fixture.Project, entropy, listener);
+	sgre::scene::EmoteScenePlayer destination(*fixture.Runtime, fixture.Project, entropy, listener);
+	const ClearPublication publication{*fixture.Runtime};
+	source->SetVisible(true);
+	destination.SetVisible(true);
+	source->PlayTimeline("phase");
+	source->Progress(1);
+	source->Progress(1);
+	destination.Progress(0);
+	Require(entropy_reads == 4 && fixture.Runtime->PlayerCount() == 2 && source->PhysicalCounts().Updated == 6, "assignment fixture must own two real enabled Common graphs and a genuinely advanced source");
+	const std::array<std::string_view, 6> uids{"bloom-uid", "string-uid", "catenary-uid", "jelly-uid", "stretch-uid", "sync-uid"};
+	std::vector<sgre::resource::MotionBezierLattice> expected;
+	std::vector<sgre::scene::MotionLayerUidReference> destination_layers;
+	for (const auto uid : uids) {
+		const auto& source_matches = source->Commands().LayerUids().Matches(uid);
+		const auto& target_matches = destination.Commands().LayerUids().Matches(uid);
+		Require(source_matches.size() == 1 && target_matches.size() == 1 && !(source_matches.front().Layer == target_matches.front().Layer), "actual family assignments must begin with distinct source and destination UID cells");
+		auto imported = target_matches.front().Layer.CurrentMesh();
+		const auto& source_lattice = source_matches.front().Layer.CurrentMesh();
+		// Native2e41a0 passes null when the source degree is zero.
+		static_cast<void>(sgre::scene::AssignMotionBezierLattice(imported, source_lattice.EncodedDegree != 0 ? &source_lattice : nullptr, true));
+		expected.push_back(std::move(imported));
+		destination_layers.push_back(target_matches.front().Layer);
+	}
+	const auto source_tick = source->Commands().ClockState().TickCount;
+	const auto destination_tick = destination.Commands().ClockState().TickCount;
+	destination.AssignState(*source);
+	Require(source->Commands().ClockState().TickCount == source_tick && destination.Commands().ClockState().TickCount == destination_tick && entropy_reads == 4, "zero-time assignment must not advance either actual plain clock or reseed the destination");
+	Require(destination.PhysicalCounts().Updated == 0 && destination.PhysicalCounts().AttachedPartsControls == 6, "physical assignment imports state without inventing a solver step or replacing actual PartsTree attachments");
+	for (std::size_t index = 0; index != uids.size(); ++index) {
+		const auto& actual_layer = destination.Commands().LayerUids().Matches(uids[index]).front().Layer;
+		Require(actual_layer == destination_layers[index], "physical assignment retains each exact destination occurrence binding");
+		const auto& actual = actual_layer.CurrentMesh();
+		Require(actual.EncodedDegree == expected[index].EncodedDegree && actual.Controls.size() == expected[index].Controls.size(), "native2e41a0 imports the actual source pending lattice shape");
+		for (std::size_t point = 0; point != actual.Controls.size(); ++point) {
+			Require(std::bit_cast<std::uint32_t>(actual.Controls[point].X) == std::bit_cast<std::uint32_t>(expected[index].Controls[point].X) && std::bit_cast<std::uint32_t>(actual.Controls[point].Y) == std::bit_cast<std::uint32_t>(expected[index].Controls[point].Y), "imported mesh controls must be copied exactly into independent destination storage");
+		}
+	}
+	destination.Draw();
+	Require(!destination.CanClose() && fixture.Runtime->SceneContext().Size() != 0, "the destination's completed geometry remains independently queueable before copied pending controls are consumed");
+	RequireFailure([&] {
+		destination.AssignState(*source);
+	},
+	    "unqueued");
+	fixture.Runtime->SceneContext().Clear();
+	source->Close();
+	source.reset();
+	Require(fixture.Runtime->PlayerCount() == 1 && fixture.Manager.Contains(fixture.Project), "source-first retirement keeps only the genuine destination player and its resource registration");
+	destination.Progress(1);
+	Require(destination.PhysicalCounts().Updated == 6 && entropy_reads == 4, "destination-owned models, collider leases and prediction history continue after source retirement");
+	destination.Draw();
+	fixture.Runtime->SceneContext().Clear();
+	destination.Close();
+	Require(fixture.Runtime->PlayerCount() == 0 && fixture.Manager.Contains(fixture.Project), "all assigned physical and UID owners retire before the enclosing resource registration");
+}
+
+static std::shared_ptr<sgre::resource::PsbDocument> AnimationQueryDocument(bool scalar_transitions) {
+	auto document = OwnerDocument(false);
+	auto& metadata = MutableField(document->Root, "metadata");
+	auto& timelines = std::get<sgre::resource::PsbArray>(MutableField(metadata, "timelineControl").Data);
+	auto steady = timelines.front();
+	Set(steady, "label", Atom(std::string("steady")));
+	Set(steady, "loopBegin", Atom(0.0));
+	Set(steady, "loopEnd", Atom(4.0));
+	timelines.push_back(steady);
+	if (scalar_transitions) {
+		Set(metadata, "immediateControl", Atom(sgre::resource::PsbArray{}));
+		Set(metadata, "transitionControl", Atom(sgre::resource::PsbArray{Atom(sgre::resource::PsbObject{{"label", Atom(std::string("probe"))}, {"enabled", Atom(true)}}), Atom(sgre::resource::PsbObject{{"label", Atom(std::string("free"))}, {"enabled", Atom(true)}})}));
+		Set(steady, "label", Atom(std::string("steady-free")));
+		auto& tracks = std::get<sgre::resource::PsbArray>(MutableField(steady, "variableList").Data);
+		Set(tracks.front(), "label", Atom(std::string("free")));
+		timelines.push_back(std::move(steady));
+	}
+
+	return document;
+}
+
+static void TestAnimatingFiniteTimelineLoopAndBlendOwners() {
+	Fixture fixture(AnimationQueryDocument(false));
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	Require(!owner.Animating(), "idle real scene has no transition or active timeline contribution");
+	owner.PlayTimeline("phase");
+	Require(owner.Animating(), "an active finite timeline counts even when every named variable is an immediate control");
+	owner.Progress(5);
+	Require(!owner.TimelinePlaying("phase") && !owner.Animating(), "finite timeline retirement removes its query contribution");
+	owner.PlayTimeline("steady", 2);
+	Require(owner.TimelinePlaying("steady") && !owner.Animating(), "steady loop activity alone is excluded by native LoopBegin semantics");
+	owner.Progress(5);
+	Require(owner.TimelinePlaying("steady") && !owner.Animating(), "crossing the actual loop boundary cannot turn steady looping into finite animation");
+	owner.SetTimelineBlendRatio("steady", .25f, 2, 0);
+	Require(owner.Animating(), "the active loop's real blend transition counts independently of perpetual timeline playback");
+	owner.Progress(3);
+	Require(owner.TimelinePlaying("steady") && owner.TimelineBlendRatio("steady") == .25f && !owner.Animating(), "completed blend returns to native steady-loop false while retaining playback");
+	owner.StopTimeline();
+	Require(!owner.Animating(), "stopping the actual active list leaves the real scene idle");
+	owner.Close();
+}
+
+static void TestAnimatingTimelineNameUnionAndUncoveredScalar() {
+	Fixture fixture(AnimationQueryDocument(true));
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	owner.PlayTimeline("steady");
+	owner.SetVariable("probe", 12, 8, 0);
+	const auto before = owner.Variables().TransitionValue("probe");
+	Require(before.has_value() && !owner.Animating(), "a covered named scalar transition is suppressed by the actual active loop's track-name set");
+	owner.Progress(1);
+	const auto advanced = owner.Variables().TransitionValue("probe");
+	Require(advanced && *advanced > *before && !owner.Animating(), "covered transition genuinely advances even though native animation query excludes it");
+	owner.SetVariable("free", 16, 8, 0);
+	Require(owner.Animating(), "a changing scalar outside the active loop's exact names remains visible to native animation query");
+	owner.PlayTimeline("steady-free", 1);
+	Require(owner.TimelinePlaying("steady") && owner.TimelinePlaying("steady-free") && !owner.Animating(), "query suppression uses the union of every active loop's actual track names");
+	owner.StopTimeline("steady-free");
+	Require(owner.Animating(), "removing one active label invalidates its cached name union and exposes the still-changing scalar");
+	owner.StopTimeline();
+	Require(owner.Animating(), "stopping all timelines cannot discard an unfinished uncovered control");
+	owner.Progress(10);
+	Require(!owner.Animating(), "genuine control completion leaves no named scalar or active timeline contribution");
+	owner.Close();
+}
+
 int main() {
 	try {
+		TestAnimatingFiniteTimelineLoopAndBlendOwners();
+		TestAnimatingTimelineNameUnionAndUncoveredScalar();
 		TestConnectedContainingOwnerAndNativePhases();
 		TestAbsentDriverAndFailureRollback();
+		TestCommonAssignmentKeepsDestinationOwnersAndPendingMesh();
 		std::cout << "containing Emote scene/controls/physical ownership tests passed\n";
 		return 0;
 	} catch (const std::exception& error) {
