@@ -315,15 +315,15 @@ static void TestBoundedQueue(const char* sprite_shader, const char* transfer_sha
 	Require(!control_observation.ApplicationActive && !control_observation.WindowVisible && !control_observation.WindowKey && !control_observation.WindowMain && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == foreground, "windowless media notification changed hidden/foreground state");
 	platform.DispatchEvents(events, pacing);
 	Require(responder->Delivered == 3 && !responder->Failure, "owned key behind the consumed auxiliary notification did not dispatch in its original next budget");
-	NSEvent* unknown_system = [NSEvent otherEventWithType:NSEventTypeSystemDefined location:NSZeroPoint modifierFlags:0 timestamp:8 windowNumber:0 context:nil subtype:NX_SUBTYPE_ACCESSIBILITY data1:17 data2:23];
-	Require(unknown_system != nil && unknown_system.window == nil, "unhandled system-subtype fixture differs");
-	[NSApp postEvent:unknown_system atStart:YES];
-	RequireError([&] {
+	for (const auto subtype : std::array<std::int16_t, 3>{NX_SUBTYPE_ACCESSIBILITY, 211, -1}) {
+		NSEvent* notification = [NSEvent otherEventWithType:NSEventTypeSystemDefined location:NSZeroPoint modifierFlags:0 timestamp:8 windowNumber:0 context:nil subtype:subtype data1:17 data2:23];
+		Require(notification != nil && notification.window == nil, "windowless system-notification fixture differs");
+		[NSApp postEvent:notification atStart:YES];
 		platform.DispatchEvents(events, pacing);
-	},
-	    "eventType=14 timestamp=8.000000 eventWindow=none eventWindowNumber=0 subtype=17 data1=17 data2=23");
-	NSEvent* retained_system = [NSApp nextEventMatchingMask:NSEventMaskSystemDefined untilDate:[NSDate distantPast] inMode:NSDefaultRunLoopMode dequeue:YES];
-	Require(retained_system != nil && retained_system.type == NSEventTypeSystemDefined && retained_system.timestamp == 8 && retained_system.window == nil && retained_system.windowNumber == 0 && retained_system.subtype == NX_SUBTYPE_ACCESSIBILITY && retained_system.data1 == 17 && retained_system.data2 == 23 && responder->Delivered == 3, "unhandled system subtype must preserve its original event fields through rejection/repost");
+		NSEvent* retained = [NSApp nextEventMatchingMask:NSEventMaskSystemDefined untilDate:[NSDate distantPast] inMode:NSDefaultRunLoopMode dequeue:YES];
+		Require(retained == nil && responder->Delivered == 3 && !responder->Failure, "inactive hidden system notifications must consume one queue budget without invoking a responder");
+	}
+	NSEvent* retained_system = nil;
 	NSEvent* unowned_control = CreateUnownedControlEvent();
 	const auto unowned_number = unowned_control.windowNumber;
 	Require(unowned_control.window == nil && unowned_number != 0 && [NSApp windowWithWindowNumber:unowned_number] == nil, "unresolved nonzero-window control fixture differs");

@@ -30,8 +30,8 @@ namespace sgre::platform {
 		}
 	}
 
-	static bool IsHiddenWindowlessAuxiliaryControl(NSEvent* event, NSApplication* application, NSWindow* owned_window) {
-		return event.type == NSEventTypeSystemDefined && event.subtype == NX_SUBTYPE_AUX_CONTROL_BUTTONS && event.window == nil && event.windowNumber == 0 && !application.active && !owned_window.visible && !owned_window.keyWindow && !owned_window.mainWindow;
+	static bool IsInactiveWindowlessSystemEvent(NSEvent* event, NSApplication* application, NSWindow* owned_window) {
+		return event.type == NSEventTypeSystemDefined && event.window == nil && event.windowNumber == 0 && !application.active && !owned_window.visible && !owned_window.keyWindow && !owned_window.mainWindow;
 	}
 
 	static std::string RejectedEventDescription(NSEvent* event, NSApplication* application, NSWindow* owned_window) {
@@ -400,8 +400,8 @@ namespace sgre::platform {
 							state.Dispatching = false;
 							return;
 						}
-						if (IsHiddenWindowlessAuxiliaryControl(event, state.Window.Application, state.Window.Window)) {
-							// This process-local media-control notification is not input for the inactive hidden game.
+						if (!state.Window.Interactive && IsInactiveWindowlessSystemEvent(event, state.Window.Application, state.Window.Window)) {
+							// Windowless OS notifications are not input for an explicitly inactive hidden game.
 							// Consume it within the same queue budget without invoking an AppKit or window handler.
 							continue;
 						}
