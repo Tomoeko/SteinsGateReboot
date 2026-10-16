@@ -1,17 +1,28 @@
 #pragma once
 
+#include "sgre/audio/pcm_output_submission.hpp"
+
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace sgre::platform {
+	enum class MacPcmDeliveryMode {
+		None,
+		CallbackEvents
+	};
+
 	struct MacPcmOutputDescription {
 		std::uint32_t SamplesPerSecond = 48000;
 		std::uint32_t Channels = 2;
 		std::uint32_t MaximumCallbackFrames = 4096;
 		std::size_t CapacityFrames = 8192;
 		std::size_t TargetBufferedFrames = 4096;
+		// Existing callers remain unchanged until a real owner explicitly drains callback receipts.
+		MacPcmDeliveryMode DeliveryMode = MacPcmDeliveryMode::None;
+		std::size_t DeliveryCapacity = 256;
 	};
 
 	struct MacPcmOutputSnapshot {
@@ -37,15 +48,28 @@ namespace sgre::platform {
 		MacPcmOutput& operator=(const MacPcmOutput&) = delete;
 		[[nodiscard]] MacPcmOutputDescription Description() const noexcept;
 		[[nodiscard]] std::size_t FramesToTarget();
-		void Submit(std::span<const float> interleaved);
+		audio::PcmOutputSubmission Submit(std::span<const float> interleaved);
 		// Start requires a real prefilled target. Construction/Submit never start the device.
 		void Start();
 		void FinishInput();
 		// This observes the software ring, not final DAC/device latency or native XAudio2 drain parity.
 		[[nodiscard]] MacPcmOutputSnapshot Snapshot();
+		// Only explicit CallbackEvents mode admits this sole consumer; records are software delivery, not DAC completion.
+		[[nodiscard]] std::optional<audio::PcmOutputDeliveryReceipt> ReadDelivery();
+		void RequireSubmission(const audio::PcmOutputSubmission& submission);
+		void RequireDelivery(const audio::PcmOutputDeliveryReceipt& delivery);
+		[[nodiscard]] std::int64_t ContinuousClockFrequency();
 		void Close();
 
 	private:
+		friend class media::MoviePcmDelivery;
+		void RequireMovieAdmission(const media::MoviePcmDelivery* owner);
+		void BindMovie(const media::MoviePcmDelivery* owner) noexcept;
+		[[nodiscard]] audio::PcmOutputSubmission SubmitMovie(const media::MoviePcmDelivery* owner, std::span<const float> interleaved);
+		[[nodiscard]] std::optional<audio::PcmOutputDeliveryReceipt> ReadMovieDelivery(const media::MoviePcmDelivery* owner);
+		void CloseMovie(const media::MoviePcmDelivery* owner);
+		[[nodiscard]] bool MovieRetired() const noexcept;
+		void ReleaseMovie(const media::MoviePcmDelivery* owner) noexcept;
 		class Implementation;
 		std::unique_ptr<Implementation> m_Implementation;
 	};

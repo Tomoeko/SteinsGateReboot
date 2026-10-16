@@ -16,6 +16,8 @@ add_library(sgre_resource
 	src/app/launch_configuration_json.cpp
 	src/app/launch_archive_seed.cpp
 	src/audio/pcm_output_ring.cpp
+	src/audio/pcm_output_delivery.cpp
+	src/audio/pcm_output_submission.cpp
 	src/audio/sound_configuration_loads.cpp
 	src/audio/sound_resource_control.cpp
 	src/audio/sound_playback.cpp
@@ -499,6 +501,15 @@ if(APPLE)
 	endif()
 endif()
 
+if(SGRE_BUILD_MACOS_MEDIA OR SGRE_BUILD_MACOS_RENDERER)
+	# Audio delivery and rendering use one implementation of the actual continuous host clock.
+	add_library(sgre_platform_clock STATIC src/platform/macos/host_performance_counter.cpp)
+	target_include_directories(sgre_platform_clock PUBLIC include)
+	target_compile_features(sgre_platform_clock PUBLIC cxx_std_20)
+	target_link_libraries(sgre_platform_clock PUBLIC sgre_resource sgre_build_options)
+	set_target_properties(sgre_platform_clock PROPERTIES CXX_EXTENSIONS OFF)
+endif()
+
 if(SGRE_BUILD_MACOS_MEDIA)
 	add_library(sgre_platform_media STATIC src/platform/macos/vp9_decoder.mm src/platform/macos/movie_rgb32.mm src/platform/macos/webm_playback.mm src/platform/macos/movie_opus_decoder.mm src/platform/macos/movie_silent_audio.mm)
 	target_include_directories(sgre_platform_media PUBLIC include)
@@ -513,12 +524,13 @@ if(SGRE_BUILD_MACOS_MEDIA)
 	target_include_directories(sgre_platform_audio PUBLIC include)
 	target_compile_features(sgre_platform_audio PUBLIC cxx_std_20)
 	target_compile_options(sgre_platform_audio PRIVATE -fobjc-arc)
-	target_link_libraries(sgre_platform_audio PUBLIC sgre_resource sgre_build_options "-framework Foundation" "-framework AVFAudio" "-framework AudioToolbox" "-framework CoreAudio")
+	target_link_libraries(sgre_platform_audio PUBLIC sgre_resource sgre_platform_clock sgre_build_options "-framework Foundation" "-framework AVFAudio" "-framework AudioToolbox" "-framework CoreAudio")
 	set_target_properties(sgre_platform_audio PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+	target_link_libraries(sgre_platform_media PUBLIC sgre_platform_audio)
 endif()
 
 if(SGRE_BUILD_MACOS_RENDERER)
-	add_library(sgre_platform_render STATIC src/platform/macos/color_pass.mm src/platform/macos/host_time.cpp src/platform/macos/host_performance_counter.cpp src/platform/macos/application_pump.mm src/platform/macos/hid_controller_presence.mm src/platform/macos/sprite_graphics_targets.mm src/render/presentation_synchronization.cpp src/render/sprite_graphics_camera.cpp src/render/sprite_render_records.cpp src/render/frame_host_pool.cpp src/render/motion_sprite_record_receiver.cpp src/render/graphics_frame_cycle.cpp src/render/graphics_display_frame.cpp src/platform/macos/host_locale.mm src/platform/macos/metal_support.mm src/platform/macos/mutable_texture_backend.mm src/platform/macos/sprite_pass.mm src/platform/macos/sprite_presentation.mm src/platform/macos/motion_sprite_frame.mm)
+	add_library(sgre_platform_render STATIC src/platform/macos/color_pass.mm src/platform/macos/host_time.cpp src/platform/macos/application_pump.mm src/platform/macos/hid_controller_presence.mm src/platform/macos/sprite_graphics_targets.mm src/render/presentation_synchronization.cpp src/render/sprite_graphics_camera.cpp src/render/sprite_render_records.cpp src/render/frame_host_pool.cpp src/render/motion_sprite_record_receiver.cpp src/render/graphics_frame_cycle.cpp src/render/graphics_display_frame.cpp src/platform/macos/host_locale.mm src/platform/macos/metal_support.mm src/platform/macos/mutable_texture_backend.mm src/platform/macos/sprite_pass.mm src/platform/macos/sprite_presentation.mm src/platform/macos/motion_sprite_frame.mm)
 	target_sources(sgre_platform_render PRIVATE src/platform/macos/emote_entropy.cpp src/render/screen_projection_record_receiver.cpp src/script/screen_projection_bindings.cpp src/script/native_texture_bindings.cpp src/platform/macos/motion_seed_source.cpp src/render/raw_texture_record_receiver.cpp src/render/captured_texture_record_receiver.cpp src/render/bitmap_font_record_receiver.cpp src/render/text_glyph_record_receiver.cpp src/render/movie_record_receiver.cpp src/render/picture_record_receiver.cpp)
 	target_include_directories(sgre_platform_render PUBLIC include)
 	if(SGRE_BUILD_TESTS)
@@ -526,7 +538,7 @@ if(SGRE_BUILD_MACOS_RENDERER)
 	endif()
 	target_compile_features(sgre_platform_render PUBLIC cxx_std_20)
 	target_compile_options(sgre_platform_render PRIVATE -fobjc-arc)
-	target_link_libraries(sgre_platform_render PUBLIC sgre_resource sgre_build_options "-framework Foundation" "-framework Metal" "-framework AppKit" "-framework QuartzCore" "-framework Security" "-framework CoreGraphics" "-framework IOKit")
+	target_link_libraries(sgre_platform_render PUBLIC sgre_resource sgre_platform_clock sgre_build_options "-framework Foundation" "-framework Metal" "-framework AppKit" "-framework QuartzCore" "-framework Security" "-framework CoreGraphics" "-framework IOKit")
 	set_target_properties(sgre_platform_render PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
 endif()
 
@@ -767,6 +779,8 @@ if(SGRE_BUILD_TESTS)
 		input_device
 		input_key_mapping
 		pcm_output_ring
+		pcm_output_delivery
+		pcm_output_submission
 		application_finish_event
 		system_termination
 		input_bindings
@@ -1166,6 +1180,15 @@ if(SGRE_BUILD_TESTS)
 		set_target_properties(pcm_output_callback_tests PROPERTIES CXX_EXTENSIONS OFF)
 		add_test(NAME macos_pcm_output_callback COMMAND pcm_output_callback_tests)
 
+		foreach(test_name IN ITEMS pcm_output_delivery_callback pcm_output_submission_callback)
+			add_executable(${test_name}_tests src/platform/macos/tests/${test_name}_tests.cpp)
+			target_include_directories(${test_name}_tests PRIVATE src/platform/macos)
+			target_link_libraries(${test_name}_tests PRIVATE sgre_resource sgre_platform_audio)
+			set_target_properties(${test_name}_tests PROPERTIES CXX_EXTENSIONS OFF)
+			add_test(NAME macos_${test_name} COMMAND ${test_name}_tests)
+			set_tests_properties(macos_${test_name} PROPERTIES TIMEOUT 30 RUN_SERIAL TRUE)
+		endforeach()
+
 		add_executable(offline_sound_mastering_tests tests/offline_sound_mastering_tests.cpp tests/offline_sound_boundary_tests.mm)
 		target_compile_options(offline_sound_mastering_tests PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
 		target_link_libraries(offline_sound_mastering_tests PRIVATE sgre_resource sgre_platform_audio)
@@ -1475,6 +1498,13 @@ if(SGRE_BUILD_TESTS)
 	set_tests_properties(script_thread_file script_thread_pending_destruction PROPERTIES TIMEOUT 30)
 
 	if(SGRE_BUILD_MACOS_MEDIA)
+		add_executable(movie_pcm_delivery_tests src/platform/macos/tests/movie_pcm_delivery_tests.cpp)
+		target_include_directories(movie_pcm_delivery_tests PRIVATE src/platform/macos)
+		target_link_libraries(movie_pcm_delivery_tests PRIVATE sgre_platform_media)
+		set_target_properties(movie_pcm_delivery_tests PROPERTIES CXX_EXTENSIONS OFF)
+		add_test(NAME macos_movie_pcm_delivery COMMAND movie_pcm_delivery_tests)
+		set_tests_properties(macos_movie_pcm_delivery PROPERTIES ENVIRONMENT "ASAN_OPTIONS=detect_leaks=0:halt_on_error=1;UBSAN_OPTIONS=halt_on_error=1" TIMEOUT 30 RUN_SERIAL TRUE)
+
 		add_executable(movie_gain_tests tests/movie_gain_tests.cpp)
 		target_link_libraries(movie_gain_tests PRIVATE sgre_platform_media)
 		set_target_properties(movie_gain_tests PROPERTIES CXX_EXTENSIONS OFF)

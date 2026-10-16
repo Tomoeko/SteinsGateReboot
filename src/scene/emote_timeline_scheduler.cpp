@@ -19,6 +19,7 @@ namespace sgre::scene {
 	static constexpr std::size_t kMaximumSchedulerEntries = 65536;
 	static constexpr std::size_t kMaximumSchedulerNameBytes = 8 * 1024 * 1024;
 	static constexpr std::size_t kMaximumSchedulerWork = 1000000;
+	static constexpr float kPassFadeTicks = 20;
 
 	static std::string TimelineName(std::string_view name) {
 		if (name.size() > kMaximumMotionCommandNameBytes) {
@@ -194,6 +195,50 @@ namespace sgre::scene {
 				throw;
 			}
 		}
+		void Pass() {
+			RequireMutation();
+			std::size_t work = 0;
+			for (const auto* entry : Active) {
+				if (entry->Tracks->Definition().LoopBegin >= 0 || (entry->Flags & 6) == 6) {
+					continue;
+				}
+				for (const auto& track : entry->Tracks->Definition().Tracks) {
+					if (track.Keys.size() > kMaximumSchedulerWork - work) {
+						throw std::runtime_error("Emote timeline pass exceeds bounded remaining-key work");
+					}
+					work += track.Keys.size();
+				}
+			}
+			Operating = true;
+			try {
+				for (auto iterator = Active.begin(); iterator != Active.end();) {
+					auto& entry = **iterator;
+					if (entry.Tracks->Definition().LoopBegin >= 0 || (entry.Flags & 6) == 6) {
+						++iterator;
+						continue;
+					}
+					if ((entry.Flags & 2) != 0) {
+						// Native Pass fades difference playback for 20 ticks and suppresses repeat instant dispatch.
+						entry.Blend.Set(0, kPassFadeTicks, 0);
+						entry.StopWhenBlendFinished = true;
+						entry.Flags |= 4;
+					}
+					entry.Tracks->Pass();
+					if ((entry.Flags & 4) == 0) {
+						TimelineVariablesDirty = true;
+						iterator = Active.erase(iterator);
+					} else {
+						++iterator;
+					}
+				}
+				Operating = false;
+			} catch (...) {
+				Operating = false;
+				Valid = false;
+				throw;
+			}
+		}
+
 		void Stop(std::string_view label) {
 			RequireMutation();
 			TimelineVariablesDirty = true;
@@ -368,6 +413,10 @@ namespace sgre::scene {
 	void EmoteTimelineScheduler::Play(std::string_view name, std::uint32_t flags) {
 		m_Implementation->Play(name, flags);
 	}
+	void EmoteTimelineScheduler::Pass() {
+		m_Implementation->Pass();
+	}
+
 	void EmoteTimelineScheduler::Stop(std::string_view name) {
 		m_Implementation->Stop(name);
 	}

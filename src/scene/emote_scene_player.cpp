@@ -432,6 +432,12 @@ namespace sgre::scene {
 		state.RequireMutable();
 		state.Timelines->Play(name, flags);
 	}
+	void EmoteScenePlayer::Pass() {
+		auto& state = m_Implementation->Require();
+		state.RequireMutable();
+		state.Timelines->Pass();
+	}
+
 	void EmoteScenePlayer::StopTimeline(std::string_view name) {
 		auto& state = m_Implementation->Require();
 		state.RequireMutable();

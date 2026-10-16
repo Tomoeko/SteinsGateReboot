@@ -1628,8 +1628,82 @@ static void TestAnimatingActualQueuedNativeAndSceneGuards() {
 	Require(task.Player().Scale() == scale && std::get<bool>(fixture.Call(instance, "getAnimating")) && task.Player().CanClose(), "rejected queries preserve the active controller and resume only after real frame inputs retire");
 }
 
+static void TestPassTypedVoidExtrasDetachedAndDeferredPublication() {
+	std::size_t conversions = 0;
+	Fixture fixture(false);
+	const auto instance = fixture.New();
+	const auto task = fixture.Bindings->Task(instance);
+	const auto argument_class = fixture.Vm.CreateClass();
+	fixture.Vm.NewSlot(argument_class, "_tostring", fixture.Vm.CreateNativeClosure("Pass-extra-conversion-tripwire", [&](auto&, auto) {
+		++conversions;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("unexpected conversion"));
+	}));
+	const auto argument = fixture.Vm.CreateInstance(argument_class);
+	static_cast<void>(fixture.Call(instance, "setCoord", {8.0f, -4.0f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "setScale", {2.0f, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "setColor", {std::int32_t{-1}, 8.0f}));
+	static_cast<void>(fixture.Call(instance, "playTimeline", {std::string("phase")}));
+	task.Player().Progress(1);
+	const auto coordinate = task.Player().Coordinate();
+	const auto scale = task.Player().Scale();
+	const auto root_coordinate = task.Player().Root().Overrides().Coordinate;
+	const auto color = PublishedColor(fixture, instance);
+	const auto tick = task.Player().Commands().ClockState().TickCount;
+	const auto entropy_reads = fixture.EntropyReads;
+	Require(task.Player().ReadVariable("probe") == 7 && task.Player().Commands().ParameterValues().Read("probe") == 7, "Pass fixture must begin before the genuine finite timeline's remaining visible key");
+	const auto result = fixture.Call(instance, "pass", {argument, std::numeric_limits<float>::quiet_NaN(), false});
+	Require(std::holds_alternative<std::monostate>(result) && conversions == 0, "typed void Pass ignores extra operands without conversion and exposes native no-values through Invoke");
+	Require(!task.Player().TimelinePlaying("phase") && task.Player().ReadVariable("probe") == 9, "ordinary finite Pass dispatches the remaining actual key then removes its active label");
+	Require(task.Player().Commands().ParameterValues().Read("probe") == 7 && task.Player().Root().Overrides().Coordinate == root_coordinate && PublishedColor(fixture, instance) == color, "Pass stores deferred variable state without publishing a plain frame or root properties");
+	Require(task.Player().Coordinate() == coordinate && task.Player().Scale() == scale && task.Player().Commands().ClockState().TickCount == tick && fixture.EntropyReads == entropy_reads, "Pass cannot advance or finish retained property transitions, clocks, or constructor random streams");
+	task.Player().Progress(0);
+	Require(task.Player().Commands().ParameterValues().Read("probe") == 9 && task.Player().Coordinate() == coordinate && task.Player().Scale() == scale && task.Player().Commands().ClockState().TickCount == tick, "the following genuine zero phase publishes Pass writes without inventing elapsed time");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(instance, "pass")) && !task.Player().TimelinePlaying(), "repeated Pass on an empty active list is a real no-values operation");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	Require(!task.IsLive() && std::holds_alternative<std::monostate>(fixture.Call(instance, "pass", {argument, std::numeric_limits<float>::infinity()})) && conversions == 0, "detached typed Pass returns before accessing expired task state or converting ignored operands");
+	fixture.Bindings->ReleaseInstance(instance);
+}
+
+static void TestPassQueuedGuardAndRetainedCompletedCommonFrame() {
+	Fixture fixture;
+	const auto instance = fixture.New();
+	const auto task = fixture.Bindings->Task(instance);
+	static_cast<void>(fixture.Call(instance, "setVisible", {true}));
+	static_cast<void>(fixture.Call(instance, "playTimeline", {std::string("phase")}));
+	task.Player().Progress(1);
+	Require(task.Player().PhysicalCounts().Updated == 6, "Pass Common fixture requires a genuine completed six-family physical phase");
+	const auto tick = task.Player().Commands().ClockState().TickCount;
+	const auto conversion = task.Player().PhysicsToWorld();
+	const auto root_coordinate = task.Player().Root().Overrides().Coordinate;
+	fixture.Second().Draw(0);
+	const auto queued = fixture.Secondary->SceneContext().Size();
+	std::exception_ptr failure;
+	try {
+		static_cast<void>(fixture.Call(instance, "pass"));
+	} catch (...) {
+		failure = std::current_exception();
+	}
+	fixture.Primary->SceneContext().Clear();
+	fixture.Secondary->SceneContext().Clear();
+	fixture.Primary->Context().Clear();
+	fixture.Secondary->Context().Clear();
+	Require(queued != 0 && failure, "typed Pass must reject the real queued owner before dispatching remaining timeline keys");
+	RequireFailure([&] {
+		std::rethrow_exception(failure);
+	},
+	    "unqueued");
+	Require(task.Player().TimelinePlaying("phase") && task.Player().ReadVariable("probe") == 7, "queued Pass rejection preserves active playback and pending control storage");
+	static_cast<void>(fixture.Call(instance, "pass"));
+	const auto retained_conversion = task.Player().PhysicsToWorld();
+	Require(task.Player().Commands().ClockState().TickCount == tick && task.Player().Root().Overrides().Coordinate == root_coordinate && task.Player().PhysicalCounts().Updated == 6, "unblocked Pass preserves the completed Common/plain frame rather than running physics or resetting its counts");
+	Require(retained_conversion.XX == conversion.XX && retained_conversion.XY == conversion.XY && retained_conversion.YX == conversion.YX && retained_conversion.YY == conversion.YY && retained_conversion.TranslationX == conversion.TranslationX && retained_conversion.TranslationY == conversion.TranslationY, "Pass leaves the actual last completed Common coordinate conversion unchanged");
+	Require(!task.Player().TimelinePlaying("phase") && task.Player().ReadVariable("probe") == 9 && task.Player().Commands().ParameterValues().Read("probe") == 7, "successful native Pass remains a deferred control operation even with real Common enabled");
+}
+
 int main(int argc, char** argv) {
 	try {
+		TestPassTypedVoidExtrasDetachedAndDeferredPublication();
+		TestPassQueuedGuardAndRetainedCompletedCommonFrame();
 		TestAnimatingTypedBooleanExtrasAndDetachedReceiver();
 		TestAnimatingControllersPauseAndColorExclusion();
 		TestAnimatingActualQueuedNativeAndSceneGuards();

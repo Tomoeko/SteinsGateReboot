@@ -48,6 +48,8 @@ namespace sgre::scene {
 		// Native assignment retains destination keys/policy/cache and recomputes cursors without dispatch.
 		void RequireCanAssignState(const EmoteTimelineTracks& source) const;
 		void AssignState(const EmoteTimelineTracks& source, std::uint32_t flags);
+		// Native Pass reissues future visible keys with their stored time as duration, retaining cursors.
+		void Pass();
 		void AdvanceDifference(float elapsed_ticks);
 		[[nodiscard]] float ApplyDifference(std::string_view name, float base, float blend) const;
 		// Native2bf9b0 crosses every reached key; false excludes a key exactly at the supplied boundary.

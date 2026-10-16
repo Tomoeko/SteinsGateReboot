@@ -218,6 +218,41 @@ namespace sgre::scene {
 		m_HasDifference.swap(next_present);
 	}
 
+	void EmoteTimelineTracks::Pass() {
+		RequireOperation(m_Position);
+		if (!m_Initialized) {
+			throw std::runtime_error("Emote timeline pass requires its actual prepared seek");
+		}
+		const bool difference = (m_Flags & 2) != 0;
+		if (difference && (m_Flags & 4) != 0) {
+			return;
+		}
+		if (difference) {
+			m_Flags |= 4;
+		}
+		m_Operating = true;
+		try {
+			for (std::size_t index = 0; index != m_Definition.Tracks.size(); ++index) {
+				const auto& track = m_Definition.Tracks[index];
+				if (difference && !track.Instant) {
+					continue;
+				}
+				// Native2CB560 starts after the saved cursor; it neither seeks nor consumes these keys.
+				for (std::size_t key = m_Cursors[index] + 1; key < track.Keys.size(); ++key) {
+					const auto& selected = track.Keys[key];
+					if (!selected.Hidden) {
+						m_Controls.Set(track.Name, selected.Value, selected.Time, selected.Easing);
+					}
+				}
+			}
+			m_Operating = false;
+		} catch (...) {
+			m_Operating = false;
+			m_Valid = false;
+			throw;
+		}
+	}
+
 	void EmoteTimelineTracks::AdvanceDifference(float elapsed_ticks) {
 		RequireOperation(m_Position);
 		if ((m_Flags & 2) != 0) {

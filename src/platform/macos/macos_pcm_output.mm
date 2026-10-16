@@ -1,5 +1,7 @@
 #include "sgre/platform/macos_pcm_output.hpp"
 
+#include "sgre/platform/host_performance_counter.hpp"
+
 #include "pcm_output_callback.hpp"
 
 #include <AudioToolbox/AudioToolbox.h>
@@ -11,6 +13,7 @@
 #include <cmath>
 #include <exception>
 #include <limits>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -26,6 +29,9 @@ namespace sgre::platform {
 		if (description.SamplesPerSecond < 8000 || description.SamplesPerSecond > 192000 || description.Channels == 0 || description.Channels > 8 || description.CapacityFrames == 0 || description.CapacityFrames > 262144 || description.TargetBufferedFrames == 0 || description.TargetBufferedFrames > description.CapacityFrames || description.MaximumCallbackFrames == 0 || description.MaximumCallbackFrames > description.CapacityFrames || description.TargetBufferedFrames < description.MaximumCallbackFrames) {
 			throw std::runtime_error("macOS PCM output requires explicit bounded sample/channel/ring geometry");
 		}
+		if ((description.DeliveryMode != MacPcmDeliveryMode::None && description.DeliveryMode != MacPcmDeliveryMode::CallbackEvents) || (description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents && (description.DeliveryCapacity == 0 || description.DeliveryCapacity > 65536))) {
+			throw std::runtime_error("macOS PCM callback receipt mode/capacity is unsupported");
+		}
 		return description;
 	}
 
@@ -39,8 +45,12 @@ namespace sgre::platform {
 
 	class MacPcmOutput::Implementation {
 	public:
-		explicit Implementation(MacPcmOutputDescription description) : Description(ValidatePcmOutputDescription(description)), Callback(PcmDeviceRingDescription(Description)) {
+		explicit Implementation(MacPcmOutputDescription description) : Description(ValidatePcmOutputDescription(description)), Callback(PcmDeviceRingDescription(Description), Description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents, Description.DeliveryCapacity) {
 			try {
+				if (Description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents) {
+					ContinuousFrequency = HostPerformanceCounter().Frequency();
+				}
+				Submissions.emplace(Callback.Ring, Callback.Deliveries ? &*Callback.Deliveries : nullptr, Callback.Enabled, Callback.ActiveCallbacks, ContinuousFrequency);
 				Prepare();
 			} catch (...) {
 				const auto failure = std::current_exception();
@@ -186,7 +196,10 @@ namespace sgre::platform {
 			}
 		}
 
-		void Release() {
+		void Release(const media::MoviePcmDelivery* movie_owner = nullptr) {
+			if (MovieOwner != movie_owner) {
+				throw std::runtime_error("macOS PCM disposal must retain its actual Movie delivery binding");
+			}
 			if (Closed) {
 				return;
 			}
@@ -246,17 +259,26 @@ namespace sgre::platform {
 				}
 				std::this_thread::yield();
 			}
+			if (Submissions) {
+				if (movie_owner != nullptr) {
+					Submissions->CloseMovie(movie_owner);
+				} else {
+					Submissions->Close();
+				}
+			}
 			Closed = true;
 			RequirePcmAudioStatus(first_failure, first_operation);
 		}
 
+		const media::MoviePcmDelivery* MovieOwner = nullptr;
 		const MacPcmOutputDescription Description;
 		PcmDeviceCallbackState Callback;
 		const std::thread::id Owner = std::this_thread::get_id();
 		AudioUnit Unit = nullptr;
 		std::atomic<bool> PropertiesChanged = false;
 		std::exception_ptr OwnerFailure;
-		std::uint64_t SubmittedFrames = 0;
+		std::optional<audio::PcmOutputSubmissionOwner> Submissions;
+		std::int64_t ContinuousFrequency = 0;
 		std::uint32_t DeviceIdentity = 0;
 		double DeviceSamplesPerSecond = 0;
 		std::uint32_t DeviceChannels = 0;
@@ -283,19 +305,11 @@ namespace sgre::platform {
 		const auto buffered = owner.Callback.Ring.BufferedFrames();
 		return owner.InputFinished || buffered >= owner.Description.TargetBufferedFrames ? 0 : owner.Description.TargetBufferedFrames - buffered;
 	}
-	void MacPcmOutput::Submit(std::span<const float> interleaved) {
+	audio::PcmOutputSubmission MacPcmOutput::Submit(std::span<const float> interleaved) {
 		auto& owner = *m_Implementation;
 		owner.RequireHealthy();
-		if (owner.InputFinished || interleaved.size() % owner.Description.Channels != 0 || interleaved.size() / owner.Description.Channels > owner.Description.MaximumCallbackFrames || !std::all_of(interleaved.begin(), interleaved.end(), [](float sample) {
-			    return std::isfinite(sample);
-		    })) {
-			throw std::runtime_error("macOS PCM submission requires bounded finite interleaved frames before input finish");
-		}
-		const auto frames = interleaved.size() / owner.Description.Channels;
-		if (frames > std::numeric_limits<std::uint64_t>::max() - owner.SubmittedFrames || owner.Callback.Ring.Write(interleaved) != audio::PcmOutputRingStatus::Ready) {
-			throw std::runtime_error("macOS PCM output ring has insufficient bounded submission space");
-		}
-		owner.SubmittedFrames += frames;
+
+		return owner.Submissions->Submit(interleaved);
 	}
 	void MacPcmOutput::Start() {
 		auto& owner = *m_Implementation;
@@ -314,14 +328,14 @@ namespace sgre::platform {
 	void MacPcmOutput::FinishInput() {
 		auto& owner = *m_Implementation;
 		owner.RequireHealthy();
-		owner.Callback.Ring.Finish();
+		owner.Submissions->FinishInput();
 		owner.InputFinished = true;
 	}
 	MacPcmOutputSnapshot MacPcmOutput::Snapshot() {
 		auto& owner = *m_Implementation;
 		owner.RequireHealthy();
 		MacPcmOutputSnapshot result;
-		result.SubmittedFrames = owner.SubmittedFrames;
+		result.SubmittedFrames = owner.Submissions->SubmittedFrames();
 		result.RequestedFrames = owner.Callback.RequestedFrames.load(std::memory_order_relaxed);
 		result.CopiedFrames = owner.Callback.CopiedFrames.load(std::memory_order_relaxed);
 		result.SilentFrames = owner.Callback.SilentFrames.load(std::memory_order_relaxed);
@@ -332,6 +346,61 @@ namespace sgre::platform {
 		result.Started = owner.Started;
 		result.InputFinished = owner.InputFinished;
 		return result;
+	}
+	std::optional<audio::PcmOutputDeliveryReceipt> MacPcmOutput::ReadDelivery() {
+		auto& owner = *m_Implementation;
+		owner.RequireHealthy();
+
+		return owner.Submissions->ReadDelivery();
+	}
+	void MacPcmOutput::RequireSubmission(const audio::PcmOutputSubmission& submission) {
+		auto& owner = *m_Implementation;
+		owner.RequireHealthy();
+		owner.Submissions->RequireSubmission(submission);
+	}
+	void MacPcmOutput::RequireDelivery(const audio::PcmOutputDeliveryReceipt& delivery) {
+		auto& owner = *m_Implementation;
+		owner.RequireHealthy();
+		owner.Submissions->RequireDelivery(delivery);
+	}
+	std::int64_t MacPcmOutput::ContinuousClockFrequency() {
+		auto& owner = *m_Implementation;
+		owner.RequireHealthy();
+		if (!owner.Callback.Deliveries || owner.ContinuousFrequency <= 0) {
+			throw std::runtime_error("macOS PCM delivery clock lacks its actual continuous-counter setup");
+		}
+
+		return owner.ContinuousFrequency;
+	}
+	void MacPcmOutput::RequireMovieAdmission(const media::MoviePcmDelivery* owner) {
+		auto& actual = *m_Implementation;
+		actual.RequireHealthy();
+		if (actual.MovieOwner != nullptr || actual.Description.DeliveryMode != MacPcmDeliveryMode::CallbackEvents || actual.Description.SamplesPerSecond != 48000 || actual.Description.Channels != 2) {
+			throw std::runtime_error("Movie hardware binding requires the actual unbound48k stereo receipt-enabled output");
+		}
+		actual.Submissions->RequireMovieAdmission(owner);
+	}
+	void MacPcmOutput::BindMovie(const media::MoviePcmDelivery* owner) noexcept {
+		m_Implementation->Submissions->BindMovie(owner);
+		m_Implementation->MovieOwner = owner;
+	}
+	audio::PcmOutputSubmission MacPcmOutput::SubmitMovie(const media::MoviePcmDelivery* owner, std::span<const float> interleaved) {
+		m_Implementation->RequireHealthy();
+		return m_Implementation->Submissions->SubmitMovie(owner, interleaved);
+	}
+	std::optional<audio::PcmOutputDeliveryReceipt> MacPcmOutput::ReadMovieDelivery(const media::MoviePcmDelivery* owner) {
+		m_Implementation->RequireHealthy();
+		return m_Implementation->Submissions->ReadMovieDelivery(owner);
+	}
+	void MacPcmOutput::CloseMovie(const media::MoviePcmDelivery* owner) {
+		m_Implementation->Release(owner);
+	}
+	bool MacPcmOutput::MovieRetired() const noexcept {
+		return m_Implementation->Closed;
+	}
+	void MacPcmOutput::ReleaseMovie(const media::MoviePcmDelivery* owner) noexcept {
+		m_Implementation->Submissions->ReleaseMovie(owner);
+		m_Implementation->MovieOwner = nullptr;
 	}
 	void MacPcmOutput::Close() {
 		m_Implementation->Release();

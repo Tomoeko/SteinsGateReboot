@@ -500,8 +500,60 @@ static void TestAnimatingTimelineNameUnionAndUncoveredScalar() {
 	owner.Close();
 }
 
+static void TestPassSceneKeepsActualClocksAndPropertyControllers() {
+	Fixture fixture(OwnerDocument(false));
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	owner.SetCoordinate({8, -4}, 8);
+	owner.SetScale(2, 8);
+	owner.PlayTimeline("phase");
+	owner.Progress(1);
+	const auto coordinate = owner.Coordinate();
+	const auto scale = owner.Scale();
+	const auto tick = owner.Commands().ClockState().TickCount;
+	Require(owner.ReadVariable("probe") == 7 && owner.Commands().ParameterValues().Read("probe") == 7, "scene Pass must start with a real current cursor before the remaining key");
+	owner.Pass();
+	Require(!owner.TimelinePlaying("phase") && owner.ReadVariable("probe") == 9 && owner.Commands().ParameterValues().Read("probe") == 7, "scene Pass dispatches future visible keys while retaining deferred actual parameter publication");
+	Require(owner.Coordinate() == coordinate && owner.Scale() == scale && owner.Commands().ClockState().TickCount == tick && owner.Animating(), "Pass does not finish active coordinate/scale components or step the selected plain clock");
+	owner.Progress(0);
+	Require(owner.Commands().ParameterValues().Read("probe") == 9 && owner.Coordinate() == coordinate && owner.Scale() == scale && owner.Commands().ClockState().TickCount == tick, "only the subsequent genuine containing zero phase publishes the stored Pass result");
+	owner.Close();
+}
+
+static void TestPassSceneDifferenceFadeAndRepeatedCall() {
+	auto document = OwnerDocument(false);
+	auto& metadata = MutableField(document->Root, "metadata");
+	auto& timelines = std::get<sgre::resource::PsbArray>(MutableField(metadata, "timelineControl").Data);
+	Set(timelines.front(), "lastTime", Atom(40.0));
+	Fixture fixture(document);
+	sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+		return std::uint32_t{1};
+	},
+	    [](const auto&) {
+	    });
+	const ClearPublication publication{*fixture.Runtime};
+	owner.PlayTimeline("phase", 2);
+	owner.Progress(0);
+	const auto tick = owner.Commands().ClockState().TickCount;
+	owner.Pass();
+	Require(owner.TimelinePlaying("phase") && owner.TimelineBlendRatio("phase") == 1 && owner.Commands().ClockState().TickCount == tick, "difference Pass starts actual fade0/20/0 without advancing or replacing the published blend cache");
+	owner.Progress(10);
+	Require(owner.TimelinePlaying("phase") && owner.TimelineBlendRatio("phase") == .5f, "genuine subsequent scheduler progression consumes the first half of native twenty-tick Pass fade");
+	owner.Pass();
+	Require(owner.TimelineBlendRatio("phase") == .5f, "repeated Pass on flag6 preserves the current blend instead of publishing or restarting a fade");
+	owner.Progress(10);
+	Require(!owner.TimelinePlaying("phase") && owner.TimelineBlendRatio("phase") == 0, "second half completes the original fade and stop policy; repeated Pass did not restart its duration");
+	owner.Close();
+}
+
 int main() {
 	try {
+		TestPassSceneKeepsActualClocksAndPropertyControllers();
+		TestPassSceneDifferenceFadeAndRepeatedCall();
 		TestAnimatingFiniteTimelineLoopAndBlendOwners();
 		TestAnimatingTimelineNameUnionAndUncoveredScalar();
 		TestConnectedContainingOwnerAndNativePhases();

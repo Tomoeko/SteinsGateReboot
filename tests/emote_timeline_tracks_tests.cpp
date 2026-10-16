@@ -342,8 +342,82 @@ static void TestAssignedTracksFirstSourceMatchAndFreshCache() {
 	RequireNear(destination.ApplyDifference("continuous", 0, 1), 9.6f, "each duplicate destination track must own a copy of the first matching source transition after source retirement");
 }
 
+static void TestPassRawKeyDurationAndRetainedCursor() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	sgre::scene::EmoteTimelineTracks tracks(*controls, Definition({Track("continuous", {Key(0, 8), Key(2, 20), Key(4, 40), Hidden(6)})}));
+	tracks.Seek(1, false);
+	const auto cursor = tracks.Cursors().front();
+	const auto guard_calls = actual.GuardCalls;
+	tracks.Pass();
+	Require(tracks.Position() == 1 && tracks.Cursors().front() == cursor && actual.GuardCalls == guard_calls + 2, "native pass dispatches both future visible keys without consuming the saved cursor or time");
+	Require(controls->Read("continuous") == 0 && actual.Parent.ParameterValues().LocalValueCount() == 0, "pass changes actual transition targets without publishing a plain Motion phase");
+	controls->Update(1);
+	RequireNear(controls->Read("continuous"), 10, "pass uses raw final key time4 as duration, rather than crossed remaining duration or immediate completion");
+	tracks.Pass();
+	controls->Update(1);
+	RequireNear(controls->Read("continuous"), 17.5f, "repeat ordinary pass redispatches from the unchanged cursor and current scalar value");
+}
+
+static void TestPassPlainInstantPolicyAndMetadataOrder() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	sgre::scene::EmoteTimelineTracks tracks(*controls, Definition({Track("instant", {Key(0, 1), Key(2, 7), Hidden(4)}), Track("instant", {Key(0, 2), Key(2, 9), Hidden(4)})}), 4);
+	tracks.Seek(0);
+	Require(controls->Read("instant") == 0, "flags4 fixture must skip ordinary instant seek publication");
+	tracks.Pass();
+	Require(controls->Read("instant") == 9 && tracks.Cursors()[0] == 0 && tracks.Cursors()[1] == 0 && tracks.Position() == 0, "plain flags4 pass bypasses the normal instant-skip policy and preserves metadata dispatch order");
+	controls->Set("instant", 33);
+	tracks.Pass();
+	Require(controls->Read("instant") == 9, "plain flags4 must not inherit the difference already-passed early return");
+}
+
+static void TestPassDifferenceOnceAndSubsequentInstantSuppression() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	sgre::scene::EmoteTimelineTracks tracks(*controls, Definition({Track("continuous", {Key(0, 12), Key(2, 24), Hidden(6)}), Track("instant", {Key(0, 1), Key(2, 9), Hidden(6)})}), 2);
+	tracks.Seek(0);
+	tracks.AdvanceDifference(1);
+	const auto retained = tracks.ApplyDifference("continuous", 10, 1);
+	tracks.Pass();
+	Require(controls->Read("instant") == 9 && controls->Read("continuous") == 0 && tracks.ApplyDifference("continuous", 10, 1) == retained, "difference pass dispatches instant keys only and neither advances nor replaces its retained additive state");
+	controls->Set("instant", 33);
+	tracks.Pass();
+	Require(controls->Read("instant") == 33 && tracks.Cursors()[0] == 0 && tracks.Cursors()[1] == 0, "difference flags6 pass is an idempotent no-dispatch operation");
+	tracks.CrossTo(2);
+	Require(controls->Read("instant") == 33 && tracks.Position() == 2, "difference pass flag4 reaches the actual track owner and suppresses later instant crossing");
+}
+
+static void TestPassSeekAdmissionAndFailedActualDispatch() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	sgre::scene::EmoteTimelineTracks tracks(*controls, Definition({Track("instant", {Key(0, 1), Key(2, 9), Hidden(4)})}));
+	RequireFailure([&] {
+		tracks.Pass();
+	},
+	    "prepared seek");
+	tracks.Seek(0, false);
+	actual.Guard = [] {
+		throw std::runtime_error("actual containing pass guard");
+	};
+	RequireFailure([&] {
+		tracks.Pass();
+	},
+	    "containing pass guard");
+	actual.Guard = {};
+	Require(controls->Read("instant") == 0, "a rejected actual setter must not fabricate the future key value");
+	RequireFailure([&] {
+		tracks.Pass();
+	},
+	    "invalid after failed dispatch");
+}
+
 int main() {
 	try {
+		TestPassRawKeyDurationAndRetainedCursor();
+		TestPassPlainInstantPolicyAndMetadataOrder();
+		TestPassDifferenceOnceAndSubsequentInstantSuppression();
+		TestPassSeekAdmissionAndFailedActualDispatch();
 		TestNativePreparation();
 		TestSeekAndActualParameterPublication();
 		TestCrossedOrderAndPolicy();

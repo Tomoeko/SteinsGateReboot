@@ -29,6 +29,7 @@ namespace sgre::scene {
 		EmoteTimelineScheduler(const EmoteTimelineScheduler&) = delete;
 		EmoteTimelineScheduler& operator=(const EmoteTimelineScheduler&) = delete;
 		void Play(std::string_view name, std::uint32_t flags = 0);
+		void Pass();
 		void Stop(std::string_view name = {});
 		void RequireCanAssignState(const EmoteTimelineScheduler& source) const;
 		// Copies active playback into matching destination metadata without dispatching variable keys.

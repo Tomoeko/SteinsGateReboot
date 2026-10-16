@@ -1,5 +1,8 @@
 #include "sgre/media/movie_audio.hpp"
 
+#include "sgre/media/movie_pcm_delivery.hpp"
+#include "sgre/platform/macos_pcm_output.hpp"
+
 #include "offline_sound_boundary.hpp"
 
 #include "sgre/audio/sound_resource_control.hpp"
@@ -11,12 +14,14 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <cstddef>
 #include <exception>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <thread>
 #include <utility>
+#include <vector>
 
 namespace sgre::media {
 
@@ -24,6 +29,13 @@ namespace sgre::media {
 	static constexpr std::uint32_t kMovieMasterChannels = 2;
 	static constexpr std::uint32_t kMovieRenderMaximum = 2048;
 	static constexpr std::size_t kMovieVoiceCapacity = 16;
+
+	struct MovieVoiceState;
+	struct MoviePhaseBlockEvent {
+		MovieVoiceState* Voice = nullptr;
+		std::uint32_t MasterOffset = 0;
+		std::uint32_t CompletedBlockFrames = 0;
+	};
 
 	struct MovieVoiceState {
 		MoviePcmDescription Description;
@@ -38,6 +50,8 @@ namespace sgre::media {
 		std::size_t CurrentOffset = 0;
 		std::uint32_t AssembledBlocks = 0;
 		std::uint64_t CompletedFrames = 0;
+		std::uint64_t DeliveredFrames = 0;
+		std::optional<std::int64_t> DeliveryClock100ns;
 		std::optional<std::int64_t> SampleEpoch100ns;
 		std::optional<std::int64_t> BlockClock100ns;
 		float Volume = 1;
@@ -59,6 +73,14 @@ namespace sgre::media {
 		std::atomic<bool> Closed = false;
 		bool Rendering = false;
 		std::uint64_t RenderedFrames = 0;
+		const MoviePcmDelivery* DeliveryOwner = nullptr;
+		std::array<MoviePhaseBlockEvent, kMovieVoiceCapacity * 10> PhaseEvents;
+		std::size_t PhaseEventCount = 0;
+		std::uint32_t DeliveryRenderFrames = 0;
+		std::uint32_t DeliveryCallbacks = 0;
+		std::int64_t DeliverySampleOrigin = 0;
+		bool DeliveryRendering = false;
+		bool DeliveryStopped = false;
 	};
 
 	static void RequireMovieAudioOwner(const MovieSilentState& state) {
@@ -124,6 +146,16 @@ namespace sgre::media {
 		voice.SubmittedCount = 0;
 	}
 
+	static void RecordMovieBlockEvent(MovieSilentState& registry, MovieVoiceState& voice, std::size_t offset, std::size_t completed_frames) {
+		if (!registry.DeliveryRendering || registry.PhaseEventCount == registry.PhaseEvents.size() || offset > registry.DeliveryRenderFrames || completed_frames > 65536) {
+			throw std::runtime_error("Movie delivery lost its bounded actual render block-event extent");
+		}
+		auto& event = registry.PhaseEvents[registry.PhaseEventCount++];
+		event.Voice = &voice;
+		event.MasterOffset = static_cast<std::uint32_t>(offset);
+		event.CompletedBlockFrames = static_cast<std::uint32_t>(completed_frames);
+	}
+
 	static void MixMovieVoice(MovieSilentState& registry, MovieVoiceState& voice, AVAudioFrameCount frames, AudioBufferList& output) {
 		if (voice.Closed || !voice.Started) {
 			return;
@@ -136,7 +168,11 @@ namespace sgre::media {
 				throw std::runtime_error("movie submitted PCM queue lost its actual buffer owner");
 			}
 			if (!voice.CurrentStarted) {
-				voice.BlockClock100ns = MovieCallbackClock(registry);
+				if (registry.DeliveryOwner != nullptr) {
+					RecordMovieBlockEvent(registry, voice, offset, 0);
+				} else {
+					voice.BlockClock100ns = MovieCallbackClock(registry);
+				}
 				voice.CurrentStarted = true;
 			}
 			const auto block_frames = actual->Samples.size() / voice.Description.Channels;
@@ -151,7 +187,11 @@ namespace sgre::media {
 			offset += count;
 			if (voice.CurrentOffset == block_frames) {
 				voice.CompletedFrames += block_frames;
-				voice.BlockClock100ns = MovieCallbackClock(registry);
+				if (registry.DeliveryOwner != nullptr) {
+					RecordMovieBlockEvent(registry, voice, offset, block_frames);
+				} else {
+					voice.BlockClock100ns = MovieCallbackClock(registry);
+				}
 				actual.reset();
 				voice.CurrentOffset = 0;
 				voice.CurrentStarted = false;
@@ -162,7 +202,7 @@ namespace sgre::media {
 		}
 	}
 
-	static OSStatus RenderMovieSources(const std::shared_ptr<MovieSilentState>& state, BOOL* silence, AVAudioFrameCount frames, AudioBufferList* output) noexcept {
+	static OSStatus RenderMovieSources(const std::shared_ptr<MovieSilentState>& state, BOOL* silence, const AudioTimeStamp* timestamp, AVAudioFrameCount frames, AudioBufferList* output) noexcept {
 		if (!state || state->Closed.load()) {
 			return kAudio_ParamError;
 		}
@@ -173,6 +213,13 @@ namespace sgre::media {
 		try {
 			if (!state->Rendering || silence == nullptr || output == nullptr || output->mNumberBuffers != kMovieMasterChannels || frames > kMovieRenderMaximum) {
 				throw std::runtime_error("movie source callback lacks its actual bounded manual rendering extent");
+			}
+			if (state->DeliveryOwner != nullptr) {
+				// Exact measured same-rate manual graph domain. Different callback shapes are not silently remapped.
+				if (!state->DeliveryRendering || state->DeliveryCallbacks != 0 || frames != state->DeliveryRenderFrames || timestamp == nullptr || (timestamp->mFlags & kAudioTimeStampSampleTimeValid) == 0 || !std::isfinite(timestamp->mSampleTime) || timestamp->mSampleTime != static_cast<double>(state->DeliverySampleOrigin)) {
+					throw std::runtime_error("Movie delivery requires the actual contiguous same-rate manual source callback timeline");
+				}
+				++state->DeliveryCallbacks;
 			}
 			for (std::size_t channel = 0; channel < kMovieMasterChannels; ++channel) {
 				if (output->mBuffers[channel].mNumberChannels != 1 || output->mBuffers[channel].mData == nullptr || output->mBuffers[channel].mDataByteSize < frames * sizeof(float)) {
@@ -259,8 +306,8 @@ namespace sgre::media {
 						Buffer = [[AVAudioPCMBuffer alloc] initWithPCMFormat:Format frameCapacity:kMovieRenderMaximum];
 						const std::weak_ptr<MovieSilentState> weak = State;
 						Source = [[AVAudioSourceNode alloc] initWithFormat:Format
-						                                       renderBlock:^OSStatus(BOOL* silence, const AudioTimeStamp*, AVAudioFrameCount frames, AudioBufferList* output) {
-							                                     return RenderMovieSources(weak.lock(), silence, frames, output);
+						                                       renderBlock:^OSStatus(BOOL* silence, const AudioTimeStamp* timestamp, AVAudioFrameCount frames, AudioBufferList* output) {
+							                                     return RenderMovieSources(weak.lock(), silence, timestamp, frames, output);
 						                                       }];
 						if (Buffer == nil || Source == nil) {
 							throw std::runtime_error("movie silent source/output buffer allocation failed");
@@ -285,6 +332,9 @@ namespace sgre::media {
 		}
 
 		void Close() noexcept {
+			if (State->DeliveryOwner != nullptr) {
+				std::terminate();
+			}
 			if (State->Closed.load()) {
 				return;
 			}
@@ -376,15 +426,17 @@ namespace sgre::media {
 		result.Progress.InputEnded = voice.InputEnded;
 		result.Progress.AssembledBlocks = voice.AssembledBlocks;
 		result.AssembledBlocks = voice.AssembledBlocks;
-		result.CompletedFrames = voice.CompletedFrames;
+		const auto delivery_mode = registry->DeliveryOwner != nullptr || registry->DeliveryStopped;
+		result.CompletedFrames = delivery_mode ? voice.DeliveredFrames : voice.CompletedFrames;
 		result.AppliedGain = voice.Gain;
-		result.OutputDrained = voice.InputEnded && voice.PendingCount == 0 && voice.SubmittedCount == 0;
-		if (voice.BlockClock100ns && voice.SampleEpoch100ns) {
-			if (voice.CompletedFrames > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / 10000000 || now100ns < *voice.BlockClock100ns) {
+		result.OutputDrained = voice.InputEnded && voice.PendingCount == 0 && voice.SubmittedCount == 0 && (!delivery_mode || voice.DeliveredFrames == voice.CompletedFrames);
+		const auto clock = delivery_mode ? voice.DeliveryClock100ns : voice.BlockClock100ns;
+		if (clock && voice.SampleEpoch100ns) {
+			if (result.CompletedFrames > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) / 10000000 || now100ns < *clock) {
 				throw std::runtime_error("movie actual completed-buffer clock exceeds its supported monotonic range");
 			}
-			const auto completed_time = static_cast<std::int64_t>(voice.CompletedFrames * 10000000 / voice.Description.SamplesPerSecond);
-			const auto elapsed = now100ns - *voice.BlockClock100ns;
+			const auto completed_time = static_cast<std::int64_t>(result.CompletedFrames * 10000000 / voice.Description.SamplesPerSecond);
+			const auto elapsed = now100ns - *clock;
 			if (completed_time > std::numeric_limits<std::int64_t>::max() - elapsed || *voice.SampleEpoch100ns > std::numeric_limits<std::int64_t>::max() - (completed_time + elapsed)) {
 				throw std::runtime_error("movie actual output position exceeds signed 100ns range");
 			}
@@ -426,6 +478,9 @@ namespace sgre::media {
 	std::unique_ptr<MovieAudioOutput> MovieSilentAudioRegistry::Open(const MoviePcmDescription& description) {
 		auto& registry = *m_Implementation->State;
 		RequireMovieAudioOwner(registry);
+		if (registry.DeliveryStopped) {
+			throw std::runtime_error("Movie source cannot open after its containing delivery output retired");
+		}
 		if (description.SamplesPerSecond != kMovieMasterRate || description.Channels != kMovieMasterChannels) {
 			throw std::runtime_error("movie silent output requires the actual measured 48kHz stereo source/mastering domain");
 		}
@@ -458,6 +513,9 @@ namespace sgre::media {
 	void MovieSilentAudioRegistry::RenderFrames(std::uint32_t frames, std::span<float> output) {
 		auto& state = *m_Implementation;
 		RequireMovieAudioOwner(*state.State);
+		if (state.State->DeliveryStopped || (state.State->DeliveryOwner != nullptr && !state.State->DeliveryRendering)) {
+			throw std::runtime_error("Movie manual render must use its exact containing delivery/submit phase");
+		}
 		if (frames > kMovieRenderMaximum) {
 			throw std::runtime_error("movie silent render exceeds its preallocated actual manual chunk");
 		}
@@ -469,7 +527,17 @@ namespace sgre::media {
 			@autoreleasepool {
 				state.Boundary.Invoke(audio::OfflineSoundSystemOperation::Render, [&] {
 					NSError* error = nil;
+					if (state.State->DeliveryOwner != nullptr) {
+						const auto before = state.Engine.manualRenderingSampleTime;
+						if (before < 0 || before > 9007199254740991LL - frames) {
+							throw std::runtime_error("Movie delivery manual sample timeline exceeds exact admitted integer range");
+						}
+						state.State->DeliverySampleOrigin = before;
+					}
 					const auto status = [state.Engine renderOffline:frames toBuffer:state.Buffer error:&error];
+					if (state.State->DeliveryOwner != nullptr && (state.State->DeliveryCallbacks != 1 || state.Engine.manualRenderingSampleTime != state.State->DeliverySampleOrigin + frames)) {
+						throw std::runtime_error("Movie delivery output did not retain the actual source-to-manual timeline extent");
+					}
 					if (state.State->CallbackFailure) {
 						std::rethrow_exception(state.State->CallbackFailure);
 					}
@@ -508,6 +576,303 @@ namespace sgre::media {
 
 	void MovieSilentAudioRegistry::Close() noexcept {
 		m_Implementation->Close();
+	}
+
+	class MoviePcmDelivery::Implementation {
+	public:
+		struct PendingEvent {
+			std::weak_ptr<MovieVoiceState> Voice;
+			std::uint64_t MasterFrame = 0;
+			std::uint32_t CompletedBlockFrames = 0;
+		};
+
+		Implementation(const MoviePcmDelivery* claim, MovieSilentAudioRegistry& movies, audio::OfflineBufferedSoundPool& sound, platform::MacPcmOutput* hardware, audio::PcmOutputSubmissionOwner* software)
+		    : Claim(claim), Movies(movies), Sound(sound), Hardware(hardware), Software(software) {
+			auto& registry = *Movies.m_Implementation->State;
+			RequireMovieAudioOwner(registry);
+			if (registry.DeliveryOwner != nullptr || registry.DeliveryStopped || registry.RenderedFrames != 0 || std::any_of(registry.Voices.begin(), registry.Voices.end(), [](const auto& voice) {
+				    return voice != nullptr;
+			    })) {
+				throw std::runtime_error("Movie delivery binding requires its actual fresh unbound manual registry");
+			}
+			const auto sound_description = Sound.Description();
+			if (sound_description.SamplesPerSecond != kMovieMasterRate || sound_description.Channels != kMovieMasterChannels || sound_description.MaximumFrames == 0) {
+				throw std::runtime_error("Movie delivery requires its actual48k stereo Sound master");
+			}
+			std::size_t capacity = 0;
+			std::size_t maximum = 0;
+			if (Hardware != nullptr) {
+				Hardware->RequireMovieAdmission(Claim);
+				const auto description = Hardware->Description();
+				capacity = description.CapacityFrames;
+				maximum = description.MaximumCallbackFrames;
+			} else {
+				Software->RequireMovieAdmission(Claim);
+				const auto description = Software->m_Ring.Description();
+				if (description.Channels != kMovieMasterChannels) {
+					throw std::runtime_error("software Movie delivery requires explicit real stereo master storage");
+				}
+				capacity = description.CapacityFrames;
+				maximum = description.MaximumTransferFrames;
+			}
+			if (capacity == 0 || capacity > 65536) {
+				throw std::runtime_error("Movie delivery output exceeds the bounded preallocated block-event domain");
+			}
+			MaximumFrames = std::min({static_cast<std::size_t>(kMovieRenderMaximum), static_cast<std::size_t>(sound_description.MaximumFrames), maximum});
+			// A one-frame block may start and end for every voice in each queued master frame.
+			// The extra phase reserve covers the synchronous render before its actual ring write commits.
+			Events.resize(capacity * kMovieVoiceCapacity * 2 + registry.PhaseEvents.size());
+			if (Hardware != nullptr) {
+				Hardware->BindMovie(Claim);
+			} else {
+				Software->BindMovie(Claim);
+			}
+			registry.DeliveryOwner = Claim;
+		}
+
+		void RequireOwner() const {
+			if (Closed || Operating || Thread != std::this_thread::get_id()) {
+				throw std::runtime_error("Movie delivery requires its actual live idle serialized containing owner");
+			}
+			if (Failure) {
+				std::rethrow_exception(Failure);
+			}
+			const auto& state = *Movies.m_Implementation->State;
+			RequireMovieAudioOwner(state);
+			if (state.DeliveryOwner != Claim) {
+				throw std::runtime_error("Movie delivery lost its exact actual registry binding");
+			}
+		}
+		void RetainFailure() noexcept {
+			if (!Failure) {
+				Failure = std::current_exception();
+			}
+			auto& state = *Movies.m_Implementation->State;
+			if (!state.CallbackFailure) {
+				state.CallbackFailure = Failure;
+			}
+		}
+		std::optional<audio::PcmOutputDeliveryReceipt> ReadDelivery() {
+			return Hardware != nullptr ? Hardware->ReadMovieDelivery(Claim) : Software->ReadMovieDelivery(Claim);
+		}
+		void ApplyDelivery(const audio::PcmOutputDeliveryReceipt& receipt) {
+			const auto& observation = receipt.Observation();
+			const auto end = observation.FirstMasterFrame + observation.CopiedFrames;
+			if (observation.FirstMasterFrame != DeliveredMaster || end > SubmittedMaster) {
+				throw std::runtime_error("Movie delivery receipt left its actual successful submission intervals");
+			}
+			while (EventCount != 0 && observation.CopiedFrames != 0) {
+				auto& event = Events[EventRead];
+				const auto reached = event.CompletedBlockFrames != 0 ? event.MasterFrame <= end : event.MasterFrame < end;
+				if (!reached) {
+					break;
+				}
+				if (const auto voice = event.Voice.lock(); voice && !voice->Closed) {
+					if (voice->DeliveredFrames > voice->CompletedFrames || event.CompletedBlockFrames > voice->CompletedFrames - voice->DeliveredFrames) {
+						throw std::runtime_error("Movie delivered block completion exceeds its actual rendered source owner");
+					}
+					voice->DeliveredFrames += event.CompletedBlockFrames;
+					voice->DeliveryClock100ns = receipt.CallbackContinuous100ns();
+				}
+				event = {};
+				EventRead = (EventRead + 1) % Events.size();
+				--EventCount;
+			}
+			DeliveredMaster = end;
+		}
+		std::size_t PollActual() {
+			std::size_t count = 0;
+			// One owner visit has a fixed bound even when the device keeps producing receipts.
+			for (; count != 65536; ++count) {
+				const auto receipt = ReadDelivery();
+				if (!receipt) {
+					break;
+				}
+				ApplyDelivery(*receipt);
+			}
+			return count;
+		}
+		std::size_t Poll() {
+			RequireOwner();
+			Operating = true;
+			try {
+				const auto count = PollActual();
+				Operating = false;
+				return count;
+			} catch (...) {
+				RetainFailure();
+				Operating = false;
+				throw;
+			}
+		}
+		audio::PcmOutputSubmission Submit(std::span<const float> mixed) {
+			return Hardware != nullptr ? Hardware->SubmitMovie(Claim, mixed) : Software->SubmitMovie(Claim, mixed);
+		}
+		void CommitEvents(const audio::PcmOutputSubmission& submission) {
+			auto& state = *Movies.m_Implementation->State;
+			if (submission.FirstMasterFrame() != SubmittedMaster || submission.Sequence() != SubmissionSequence + 1 || submission.Frames() != state.DeliveryRenderFrames) {
+				throw std::runtime_error("Movie render did not commit its one actual contiguous output submission");
+			}
+			std::array<std::size_t, kMovieVoiceCapacity * 10> order{};
+			for (std::size_t index = 0; index < state.PhaseEventCount; ++index) {
+				order[index] = index;
+			}
+			std::sort(order.begin(), order.begin() + static_cast<std::ptrdiff_t>(state.PhaseEventCount), [&](std::size_t left, std::size_t right) {
+				const auto l = state.PhaseEvents[left].MasterOffset;
+				const auto r = state.PhaseEvents[right].MasterOffset;
+				return l < r || (l == r && left < right);
+			});
+			for (std::size_t index = 0; index < state.PhaseEventCount; ++index) {
+				const auto& actual = state.PhaseEvents[order[index]];
+				const auto voice = std::find_if(state.Voices.begin(), state.Voices.end(), [&](const auto& candidate) {
+					return candidate.get() == actual.Voice;
+				});
+				if (voice == state.Voices.end() || !*voice || (*voice)->Closed) {
+					throw std::runtime_error("Movie block event lost its exact enclosing source before submission commit");
+				}
+				auto& event = Events[EventWrite];
+				event.Voice = *voice;
+				event.MasterFrame = submission.FirstMasterFrame() + actual.MasterOffset;
+				event.CompletedBlockFrames = actual.CompletedBlockFrames;
+				EventWrite = (EventWrite + 1) % Events.size();
+				++EventCount;
+			}
+			SubmittedMaster += submission.Frames();
+			SubmissionSequence = submission.Sequence();
+		}
+		audio::OfflineSoundRenderResult RenderAndSubmit(std::uint32_t frames) {
+			RequireOwner();
+			if (frames == 0 || frames > MaximumFrames) {
+				throw std::runtime_error("Movie delivery render requires a nonempty actual bounded master chunk");
+			}
+			Operating = true;
+			auto& state = *Movies.m_Implementation->State;
+			try {
+				static_cast<void>(PollActual());
+				if (state.PhaseEvents.size() > Events.size() - EventCount) {
+					throw std::runtime_error("Movie delivery must retire actual callback block receipts before another render");
+				}
+				auto mixed = std::span(Mixed).first(static_cast<std::size_t>(frames) * kMovieMasterChannels);
+				auto movie = std::span(Movie).first(mixed.size());
+				const auto sound = Sound.RenderTyped(mixed);
+				if (sound.MasterFrames != frames || sound.SourceCount > sound.Sources.size() || sound.Status == audio::OfflineSoundRenderStatus::SourceFailed) {
+					throw std::runtime_error("Movie delivery received an actual failed/different Sound master extent");
+				}
+				state.PhaseEventCount = 0;
+				state.DeliveryRenderFrames = frames;
+				state.DeliveryCallbacks = 0;
+				state.DeliveryRendering = true;
+				Movies.RenderPcm(movie);
+				state.DeliveryRendering = false;
+				for (std::size_t index = 0; index != mixed.size(); ++index) {
+					mixed[index] += movie[index];
+					if (!std::isfinite(mixed[index])) {
+						throw std::runtime_error("Movie/Sound actual mixed sample exceeds the finite output domain");
+					}
+				}
+				const auto submission = Submit(mixed);
+				CommitEvents(submission);
+				Operating = false;
+				return sound;
+			} catch (...) {
+				state.DeliveryRendering = false;
+				RetainFailure();
+				Operating = false;
+				throw;
+			}
+		}
+		void Close() {
+			if (Closed) {
+				return;
+			}
+			if (Operating || Thread != std::this_thread::get_id()) {
+				throw std::runtime_error("Movie delivery retirement requires its actual idle serialized owner");
+			}
+			std::exception_ptr cleanup;
+			try {
+				if (Hardware != nullptr) {
+					Hardware->CloseMovie(Claim);
+				} else {
+					Software->CloseMovie(Claim);
+				}
+			} catch (...) {
+				cleanup = std::current_exception();
+			}
+			const auto retired = Hardware != nullptr ? Hardware->MovieRetired() : Software->m_Closed;
+			if (retired) {
+				if (Hardware != nullptr) {
+					Hardware->ReleaseMovie(Claim);
+				} else {
+					Software->ReleaseMovie(Claim);
+				}
+				auto& state = *Movies.m_Implementation->State;
+				state.DeliveryOwner = nullptr;
+				state.DeliveryStopped = true;
+				for (auto& event : Events) {
+					event = {};
+				}
+				EventCount = 0;
+				Closed = true;
+			}
+			if (Failure) {
+				std::rethrow_exception(Failure);
+			}
+			if (cleanup) {
+				std::rethrow_exception(cleanup);
+			}
+		}
+
+		const MoviePcmDelivery* Claim;
+		MovieSilentAudioRegistry& Movies;
+		audio::OfflineBufferedSoundPool& Sound;
+		platform::MacPcmOutput* Hardware;
+		audio::PcmOutputSubmissionOwner* Software;
+		const std::thread::id Thread = std::this_thread::get_id();
+		std::vector<PendingEvent> Events;
+		std::array<float, kMovieRenderMaximum * kMovieMasterChannels> Mixed{};
+		std::array<float, kMovieRenderMaximum * kMovieMasterChannels> Movie{};
+		std::exception_ptr Failure;
+		std::size_t MaximumFrames = 0;
+		std::size_t EventRead = 0;
+		std::size_t EventWrite = 0;
+		std::size_t EventCount = 0;
+		std::uint64_t SubmittedMaster = 0;
+		std::uint64_t DeliveredMaster = 0;
+		std::uint64_t SubmissionSequence = 0;
+		bool Operating = false;
+		bool Closed = false;
+	};
+
+	MoviePcmDelivery::MoviePcmDelivery(MovieSilentAudioRegistry& movies, audio::OfflineBufferedSoundPool& sound, platform::MacPcmOutput& output)
+	    : m_Implementation(std::make_unique<Implementation>(this, movies, sound, &output, nullptr)) {
+	}
+	MoviePcmDelivery::MoviePcmDelivery(MoviePcmSoftwareOnly, MovieSilentAudioRegistry& movies, audio::OfflineBufferedSoundPool& sound, audio::PcmOutputSubmissionOwner& output)
+	    : m_Implementation(std::make_unique<Implementation>(this, movies, sound, nullptr, &output)) {
+	}
+	MoviePcmDelivery::~MoviePcmDelivery() noexcept {
+		try {
+			m_Implementation->Close();
+		} catch (...) {
+			if (!m_Implementation->Closed) {
+				std::terminate();
+			}
+		}
+	}
+	audio::OfflineSoundRenderResult MoviePcmDelivery::RenderAndSubmit(std::uint32_t master_frames) {
+		return m_Implementation->RenderAndSubmit(master_frames);
+	}
+	std::size_t MoviePcmDelivery::Poll() {
+		return m_Implementation->Poll();
+	}
+	std::size_t MoviePcmDelivery::PendingBlockEvents() const {
+		m_Implementation->RequireOwner();
+		return m_Implementation->EventCount;
+	}
+	void MoviePcmDelivery::Close() {
+		m_Implementation->Close();
+	}
+	bool MoviePcmDelivery::IsClosed() const noexcept {
+		return m_Implementation->Closed;
 	}
 
 } // namespace sgre::media

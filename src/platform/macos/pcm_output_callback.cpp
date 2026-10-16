@@ -1,7 +1,9 @@
 #include "pcm_output_callback.hpp"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
+#include <mach/mach_time.h>
 #include <span>
 
 namespace sgre::platform {
@@ -14,7 +16,7 @@ namespace sgre::platform {
 		return kAudio_ParamError;
 	}
 
-	OSStatus RenderPcmDeviceOutput(void* refcon, AudioUnitRenderActionFlags* flags, const AudioTimeStamp*, UInt32 bus, UInt32 frames, AudioBufferList* output) noexcept {
+	OSStatus RenderPcmDeviceOutput(void* refcon, AudioUnitRenderActionFlags* flags, const AudioTimeStamp* timestamp, UInt32 bus, UInt32 frames, AudioBufferList* output) noexcept {
 		if (refcon == nullptr) {
 			return kAudio_ParamError;
 		}
@@ -40,6 +42,12 @@ namespace sgre::platform {
 			*flags |= kAudioUnitRenderAction_OutputIsSilence;
 			return finish(FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::ConcurrentCallback));
 		}
+		if (state.Deliveries && (state.DeliverySequence == std::numeric_limits<std::uint64_t>::max() || state.Deliveries->RequirePublishSpace() != audio::PcmDeliveryPublishStatus::Ready)) {
+			std::fill(samples.begin(), samples.end(), 0.0f);
+			*flags |= kAudioUnitRenderAction_OutputIsSilence;
+			state.Rendering.clear(std::memory_order_release);
+			return finish(FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::DeliveryQueue));
+		}
 		const auto read = state.Ring.Read(samples);
 		OSStatus status = noErr;
 		const auto requested = state.RequestedFrames.load(std::memory_order_relaxed);
@@ -53,6 +61,37 @@ namespace sgre::platform {
 			state.RequestedFrames.store(requested + frames, std::memory_order_relaxed);
 			state.CopiedFrames.store(copied + read.CopiedFrames, std::memory_order_relaxed);
 			state.SilentFrames.store(silent + read.SilentFrames, std::memory_order_relaxed);
+			if (state.Deliveries) {
+				audio::PcmOutputDelivery delivery;
+				delivery.Sequence = state.DeliverySequence + 1;
+				delivery.FirstMasterFrame = copied;
+				delivery.RequestedFrames = frames;
+				delivery.CopiedFrames = static_cast<std::uint32_t>(read.CopiedFrames);
+				delivery.SilentFrames = static_cast<std::uint32_t>(read.SilentFrames);
+				// Native movie source callbacks sample QPC inside the event. This separate clock advances through sleep;
+				// AudioTimeStamp.mHostTime is mach_absolute_time and must never be substituted for these ticks.
+				delivery.CallbackObserved.Value = mach_continuous_time();
+				if (timestamp != nullptr) {
+					auto& render = delivery.RenderTimestamp;
+					render.HostTimeValid = (timestamp->mFlags & kAudioTimeStampHostTimeValid) != 0;
+					render.SampleTimeValid = (timestamp->mFlags & kAudioTimeStampSampleTimeValid) != 0;
+					render.RateScalarValid = (timestamp->mFlags & kAudioTimeStampRateScalarValid) != 0;
+					if (render.HostTimeValid) {
+						render.HostTime.Value = timestamp->mHostTime;
+					}
+					if (render.SampleTimeValid) {
+						render.SampleFrameBits = std::bit_cast<std::uint64_t>(timestamp->mSampleTime);
+					}
+					if (render.RateScalarValid) {
+						render.RateScalarBits = std::bit_cast<std::uint64_t>(timestamp->mRateScalar);
+					}
+				}
+				if (state.Deliveries->Publish(delivery) != audio::PcmDeliveryPublishStatus::Ready) {
+					status = FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::DeliveryQueue);
+				} else {
+					state.DeliverySequence = delivery.Sequence;
+				}
+			}
 		}
 		if (read.CopiedFrames == 0) {
 			*flags |= kAudioUnitRenderAction_OutputIsSilence;

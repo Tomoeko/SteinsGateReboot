@@ -455,8 +455,92 @@ static void TestAnimatingContainingGuardAndThread() {
 	Require(rejected && !scheduler.Animating(), "foreign-thread queries reject while retaining genuine owner state");
 }
 
+static void TestPassFiniteActiveOrderAndLoopExclusion() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("A", Definition({Track("instant", {Key(0, 1), Key(2, 7), Hidden(6)})})), Labeled("loop", Definition({Track("instant", {Key(0, 2), Key(2, 100), Hidden(6)})}, 0, 6, 6)), Labeled("B", Definition({Track("instant", {Key(0, 3), Key(2, 9), Hidden(6)})}))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	scheduler.Play("A");
+	scheduler.Play("loop", 1);
+	scheduler.Play("B", 1);
+	const auto plain_tick = actual.Parent.ClockState().TickCount;
+	scheduler.Pass();
+	Require(scheduler.ActiveCount() == 1 && scheduler.IsPlaying("loop") && !scheduler.IsPlaying("A") && !scheduler.IsPlaying("B"), "pass removes finite ordinary entries while retaining the actual looping occurrence");
+	Require(controls->Read("instant") == 9 && scheduler.State("A")->Position == 0 && scheduler.State("B")->Position == 0, "remaining keys dispatch in actual active order without seeking retired entries");
+	Require(actual.Parent.ClockState().TickCount == plain_tick && actual.Parent.ParameterValues().LocalValueCount() == 0, "pass does not run the containing clock or plain publication phase");
+	scheduler.Pass();
+	Require(controls->Read("instant") == 9 && scheduler.State("loop")->Position == 0 && !scheduler.Animating(), "repeated pass does not dispatch or advance a steady loop");
+}
+
+static void TestPassDifferenceFadeAndAlreadyPassedState() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("difference", Definition({Track("continuous", {Key(0, 12), Key(2, 24), Hidden(40)}), Track("instant", {Key(0, 1), Key(2, 9), Hidden(40)})}, -1, -1, 40))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	scheduler.Play("difference", 2);
+	scheduler.Update(1);
+	scheduler.Pass();
+	Require(scheduler.State("difference")->Flags == 6 && scheduler.State("difference")->Position == 1 && controls->Read("instant") == 9 && scheduler.BlendRatio("difference") == 1, "first difference pass marks its actual playback, retains time/cached blend and dispatches remaining instant keys");
+	scheduler.Update(5);
+	Require(scheduler.BlendRatio("difference") == .75f && scheduler.IsPlaying(), "native pass uses an actual 20-tick fade from the current blend");
+	controls->Set("instant", 33);
+	scheduler.Pass();
+	Require(controls->Read("instant") == 33 && scheduler.State("difference")->Position == 6 && scheduler.BlendRatio("difference") == .75f, "already-passed difference neither redispatches nor restarts its fade");
+	scheduler.Update(15);
+	Require(!scheduler.IsPlaying() && scheduler.BlendRatio("difference") == 0 && !scheduler.Animating(), "normal difference advancement completes the original stop-after-fade policy");
+}
+
+static void TestPassRetainedPlainFlagFourAndCoverageInvalidation() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("ordinary", Definition({Track("continuous", {Hidden(0), Key(2, 16), Hidden(6)})})), Labeled("retained", Definition({Track("instant", {Key(0, 1), Key(2, 9), Hidden(6)})}))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	scheduler.Play("ordinary");
+	controls->Set("continuous", 20, 8);
+	Require(scheduler.Animating(), "finite actual playback contributes before pass");
+	scheduler.Pass();
+	Require(!scheduler.IsPlaying() && scheduler.Animating(), "pass removes its coverage while retaining the actual newly dispatched scalar transition");
+	controls->Update(2);
+	Require(!scheduler.Animating(), "genuine control completion removes the uncovered transition contribution");
+	scheduler.Play("retained", 4);
+	scheduler.Pass();
+	Require(scheduler.IsPlaying("retained") && scheduler.State("retained")->Flags == 4 && scheduler.State("retained")->Position == 0 && controls->Read("instant") == 9, "plain flags4 retains playback but still dispatches future instant keys");
+	controls->Set("instant", 33);
+	scheduler.Pass();
+	Require(controls->Read("instant") == 9 && scheduler.Animating(), "retained ordinary pass remains repeatable and finite playback still counts as animation");
+}
+
+static void TestPassActualDispatchReentryFailsTheScheduler() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto document = Document({Labeled("finite", Definition({Track("instant", {Key(0, 1), Key(2, 9), Hidden(6)})}))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	scheduler.Play("finite");
+	actual.Guard = [&] {
+		scheduler.Pass();
+	};
+	RequireFailure([&] {
+		scheduler.Pass();
+	},
+	    "idle valid");
+	actual.Guard = {};
+	Require(controls->Read("instant") == 1, "rejected pass callback must not report a successful future-key dispatch");
+	RequireFailure([&] {
+		scheduler.Pass();
+	},
+	    "idle valid");
+}
+
 int main() {
 	try {
+		TestPassFiniteActiveOrderAndLoopExclusion();
+		TestPassDifferenceFadeAndAlreadyPassedState();
+		TestPassRetainedPlainFlagFourAndCoverageInvalidation();
+		TestPassActualDispatchReentryFailsTheScheduler();
 		TestAnimatingTimelineLifetimeAndBlend();
 		TestAnimatingExactTrackCoverageAndMembership();
 		TestAnimatingInstantPolicyAndAssignmentCoverage();

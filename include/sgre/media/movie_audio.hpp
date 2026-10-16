@@ -54,6 +54,7 @@ namespace sgre::media {
 	};
 
 	class MovieSilentAudioRegistry;
+	class MoviePcmDelivery;
 
 	// Main-thread producer plus the registry's synchronous manual-render callback. No device output.
 	class MovieAudioOutput {
@@ -100,6 +101,7 @@ namespace sgre::media {
 		void Close() noexcept;
 
 	private:
+		friend class MoviePcmDelivery;
 		void RenderFrames(std::uint32_t frames, std::span<float> output);
 		class Implementation;
 		std::unique_ptr<Implementation> m_Implementation;
