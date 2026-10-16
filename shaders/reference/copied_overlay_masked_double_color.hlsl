@@ -1,0 +1,35 @@
+// Recovered runtime PS1302; actual copied RGBA source with doubled vertex RGB.
+float2 screenMul;
+float4 screenMulOffset;
+Texture2D<float4> colorTexture : register(t0);
+Texture2D<float4> alphaTexture : register(t1);
+Texture2D<float4> cDestTexTexture : register(t2);
+SamplerState colorSampler : register(s0);
+SamplerState alphaSampler : register(s1);
+SamplerState cDestTexSampler : register(s2);
+
+struct CopiedPixelInput {
+	float4 Position : SV_Position;
+	float4 Color : COLOR;
+	float2 TextureCoordinates : TEXCOORD0;
+};
+
+float4 main(CopiedPixelInput input) : SV_Target {
+	float4 source_color = colorTexture.Sample(colorSampler, input.TextureCoordinates);
+	source_color = source_color * input.Color;
+	const float3 inverse_source = float3(1.0f, 1.0f, 1.0f) - source_color.rgb * 2.0f;
+	source_color = source_color * float4(2.0f, 2.0f, 2.0f, 1.0f);
+	const float2 destination_coordinates = input.Position.xy * screenMulOffset.xy + screenMulOffset.zw;
+	const float4 destination_color = cDestTexTexture.Sample(cDestTexSampler, destination_coordinates);
+	const float3 inverse_destination = float3(1.0f, 1.0f, 1.0f) - destination_color.rgb;
+	const float3 upper = float3(1.0f, 1.0f, 1.0f) - (inverse_source * inverse_destination) * 2.0f;
+	const float3 product = source_color.rgb * destination_color.rgb;
+	const float3 lower = product + product;
+	const float3 combined_color = destination_color.rgb < 0.5f ? lower : upper;
+	const float3 difference = combined_color - destination_color.rgb;
+	const float2 mask_coordinates = input.Position.xy * screenMul.xy;
+	const float opacity = source_color.a * alphaTexture.Sample(alphaSampler, mask_coordinates).a;
+	const float3 result = opacity * difference + destination_color.rgb;
+
+	return float4(result, opacity);
+}

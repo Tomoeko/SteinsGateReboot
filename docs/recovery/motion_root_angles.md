@@ -1,0 +1,13 @@
+# Motion root angle controls
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; explicit Binary Ninja view `candidate:view:1:UEU`.
+
+Registration `0x140278cf0` exposes `setAngleRad` → `0x14027fad0`, `setAngleDeg` → `0x14027fa30`, `getAngleRad` → `0x140275a00`, and `getAngleDeg` → `0x140275960`. The setters use the existing `0x140056d70` typed bridge: physical numeric slot 2, one captured 16-byte descriptor, ignored extra operands and no returned value. Getters use `0x1400580c0`. Actual detached wrappers return positive float zero or skip the setter after numeric conversion.
+
+For the recovered ordinary wrapper/player modes, the stored root value `+0x394` is **degrees**. Setter `0x14051eac0` writes and dirties root `+0x380` when the previous and new float32 values differ or compare unordered; ordered equal signed zeros preserve the previous word. There is no normalization. `setAngleRad` performs separate `radians * 360.0f`, then `/ 6.28318548f`. `getAngleRad` performs `degrees * 3.14159274f`, adds that rounded product to itself, then divides by `360.0f`. Folding either conversion into one factor would change overflow and rounding behavior.
+
+Ordinary player construction `0x14051a400` initializes angle-mode `+0x160` false. Original kind3 construction probes also preserve false for three real children across independent inheritance settings and depths 1/2; `+0x419` remains the distinct parent-supplied-matrix flag. Borrowed child wrappers therefore address their actual retained child root; the normal subsequent parent pose binding may replace those overrides. No new task, resource pin or implicit update is created. Existing containing task guards reject mutation while actual rows borrow the player and reject expired child identities.
+
+The unchanged-original wrapper witness covers 52 cases, 4,173 instructions and 86 byte-verified PE sites. It records 156 float words and 52 dirty flags, including raw NaNs, infinities, subnormals, signed zeros, overflow, large unnormalized degrees and detached controls. `native-angle.json` retains those expected words; the independent C++ fixtures consume them and exercise real VM/task/child/queue lifetimes. C++ compilation and replay are pending parent validation at source freeze.
+
+Wrapper reversed-angle `+0x100=true` and player normalized-angle `+0x160=true`/`+0x164`/`0x14051bb30` remain separate unsupported producer domains. The admitted root constructors do not create either mode. Raw nonfinite controls are preserved for observation, while existing finite numeric-composition checks remain unchanged.

@@ -1,0 +1,11 @@
+# Emote emission groups
+
+`EmoteEmissionOwner` recovers the portable force-producing part of native `2e8340` / `2e9280` / `2f4190` / `2f0280` / `2f0dd0` from supplied `sgre_steam.exe` SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+The real PSB catalogue owns actual cel weights, names, animation modes, source sizes and origin offsets. It preserves the native last-height-bound overwrite. Groups are lazy UID-anchored owners; `auto` keeps genuine acquisition pins. Physical leases retire before the containing owner. The separate emission random stream is seeded from the actual `2e9280` entropy word, never an eye stream or an invented default.
+
+After plain Progress and common source/collider poses, `Prepare` advances groups in native key order. Actual scalar speed values multiply elapsed ticks. Active referenced sources may generate; existing pools always age. The first activation optionally performs native one-tick prewarm. Completed pools expose native bounds selection and point/ellipse force queries. The UID depth accessor reads actual completed hierarchy Z (`519b20`), without applying global depth scale. Emitted Motion names are retained data; this module does not manufacture visual players.
+
+Validation: existing native pool/emitter captures cover arithmetic and weighted source selection. A new original-instruction witness covers 16 mixed zero/positive-step cases (128 phases, 219,134 instructions), plus the zero-emitter constructor/query/retirement case (5,865 instructions). The independent C++ pool comparison is exact for those captures. Zero ticks execute the genuine integration/lifetime phase rather than returning early. The connected fixture uses actual resource registration, selected task, global frame, UID replacement, live scalar publication, auto/prewarm, force query and lease retirement. Native group-wide metadata/UID orchestration is statically recovered and component-tested; it is not an end-to-end native group differential.
+
+Still open: Bezier emitters, follow-mesh particle IO, trigger-variable/event birth routing, particle collider response, and emitted visual Motion-player publication. Those inputs retain precise admission gates. Nonempty physical-family emission references must consume these actual leases in the containing phase before whole-owner acceptance.

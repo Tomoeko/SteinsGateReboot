@@ -1,0 +1,11 @@
+# Adventure backup files
+
+Target `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; read-only view `candidate:view:1:UEU`.
+
+Segment autoload (`0793a0 → 076570 → 075330`) and autosave (`0794f0 → 076640 → 075a40`) enqueue genuine BelowNormal jobs. Selected operations alter only that segment's result state; manager batch loading resets every segment. The authored worker owns a Struct snapshot and publishes completion after join on the owner thread. Concurrent native Struct mutation timing is not claimed.
+
+Native075a40 zero-aligns secure plaintext to16 bytes before zero-IV AES-CBC/PKCS7 Final.075d50 emits FileVersion0x10200, signed64 Unix TimeStamp, written FileSize, original Struct size, key-presence CryptMagic0xca2b7fb4, and binary16-byte MD5 of the written payload. The first-party compact PSB3 encoder preserves this schema; byte-identical native PSB layout remains unverified. Crypted is a load result, not a save-key predicate.
+
+Data writing077630 directly truncates the selected data file;0777e0 writes optional metadata afterward. Every open/write/short/close failure sets NoSpace. Failed opened data is removed; failed metadata open removes data; metadata write/close failure removes both. No transaction rename is introduced. These operations receive only the rewrite's separate state directory.
+
+Focused sanitizer fixtures cover real VM/Layer/Struct/task ownership, two-segment result isolation, submitted snapshot lifetime, cancellation, worker exceptions, physical open failure/cleanup, independent MD5/AES vectors and writer/reader compatibility. Original hidden startup reports system save done:true and advances to Motion JOIN. Embedded header/icon (+A9), ordinary dialogs, remaining backup methods and native whole-save fidelity remain open.

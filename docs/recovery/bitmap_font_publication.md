@@ -1,0 +1,15 @@
+# Typed bitmap font publication
+
+The receiving owner in [bitmap_font_receiving.md](bitmap_font_receiving.md) provides real ordered texture wrappers and retains metadata after pixel purge. This tranche carries that concrete owner through the actual resource reader, manager and returned script PSB objects.
+
+`BitmapFontPreparationService` owns the actual TextureCache and enforces one preparation thread. A resource worker submits decoded font bytes and waits for real upload/purge completion. Startup or transition orchestration calls `PreparePending()` outside ordinary frames. Off-thread final document release queues disposal; `RetirePending()` performs actual cache release on the preparation owner. This queue is an authored portable thread handoff, not recovered native scheduling or a performance claim. `Stop()` rejects further jobs and fails queued jobs before workers are joined; existing returned document/provider pins remain valid. `Close()` requires those pins to expire first.
+
+ResourceFileRead retains the derived-production guard. Only exact root id `font`, spec `win`, and a supplied real preparation service select bitmap font production. Unrecognized derived targets remain unsupported. Completion is published after actual uploads and pixel purge, including failure diagnostics. ResourceCache stores this typed output separately from ordinary PublishedPsbFile and binary bytes.
+
+Native constructor `0x1404c9130` stores original supplied PSB length at `+0x28`, and getter `0x1404d04a0` returns it. Purge retains that field. Initializer `0x1404cd530` separately computes stream-entity length at `+0xa0` from original length minus DataOffset. Font cache charge therefore retains original serialized bytes; owned storage accounting uses metadata bytes. These are static observations from the original executable, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+Each Resource.find acquires one actual manager reference through PinBitmapFontFile. WrapFontDocument and its nested values retain that same immutable owner; they expose metadata and original logical stream size without fabricating complete backing. Ordinary PsbFile, PinBytes and WrapDocument do not admit a purged font. Bitmap FontInfo and Indicator select fresh real source wrappers in the same cache through the typed receiving owner.
+
+Public integration, actual macOS upload/release services, original startup execution, native lifetime differentials and displayed pixel fidelity remain separate acceptance checks. A synthetic CPU upload token is fixture evidence and cannot certify Metal rendering.
+
+Private direct-source ASan/UBSan validation passed four preparation-owner groups, raw and wrapped font publication groups, and an ordinary complete-backing PSB regression. Three unchanged PSB, Resource and FileService fixture programs also passed against the exact private runtime source closure. These checks use synthetic PSB/VM inputs and CPU upload tokens, and do not execute original scripts or certify GPU output. Verified executable/object products were retired after source/header and artifact hash checks.

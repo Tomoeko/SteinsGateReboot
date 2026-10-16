@@ -1,0 +1,13 @@
+# Motion copied-region preparation
+
+`PrepareMotionCopyRegion` recovers the portable rectangle decision in `0x1404c4bd0`. The reference is `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+The masked blend family `0x100` requires a copied region. Other families disable the bound copied texture while preserving its owner, UV affine values and accumulated bounds. An ordered accumulated rectangle uses the original affine transform (`0x1404c2a70`) and then an ordered physical clip rectangle. Absent accumulated bounds copy the entire target and ignore the clip. The transformed path preserves the original integer half-height convention for odd viewport dimensions; whole-target extents use floating halves.
+
+Pixelation (`0x10c`) snaps outward to cells: positive amounts use `ceil(maximum target extent / amount)`, while negative amounts specify a fixed cell width through their absolute value. Blur (`0x10d`) truncates the finite step, uses offsets `[1,2,2,4,6]`, and expands horizontally for steps 0–4 or vertically for 5–9. Final minima are floored and clamped to zero; maxima are ceiled and clamped to the target. An empty result preserves previous copy state.
+
+A successful nonempty copy applies the separate copied-target size policy, submits the original source box into destination origin zero, selects the copied texture with filter/address modes `(0,0)`, writes reciprocal dimensions and translated UV origins, then resets accumulated bounds. This module returns the decision and rectangle. The caller must preserve those phases and reset bounds only after device success.
+
+The unchanged-instruction oracle ran 1,000 cases / 3,000 operations / 1,714,550 original instructions. Trace SHA-256: `fad6bf61d9582d0e3e2ab5a27c02fde97e0d09eec3817f41c4a1da917b8ee9f5`. The strict ASan/UBSan C++ comparison matched all actions and rectangles. Composition with the public copied-target decision also matched every target dimension, UV affine word and bounds reset. Independent fixtures cover odd extents, outward intersection, fixed/relative pixelation, both blur axes, empty regions and disabling modes.
+
+Deletion, allocation, physical target preparation, source-region copying and physical sampler operations are explicit native observer boundaries. No physical GPU-copy, pixel, whole-owner ABI or allocation-failure parity is claimed. Zero/nonfinite pixelation, blur steps outside `[0,10)`, nonpositive target extents and nonfinite transforms are rejected as unsupported domains. A negative amount uses absolute cell width here but signed quantization in the separately verified [alternate shader constants](motion_alternate_program.md).

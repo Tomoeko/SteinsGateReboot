@@ -1,0 +1,31 @@
+# Live VectorFont CFF metric services
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. This tranche uses retained static facts and existing numeric/initialized-owner captures from explicit `candidate:view:1:UEU`. No new binary analysis, emulation, instruction probes, game process, hook or original script execution occurred.
+
+`VectorFont` owns one admitted `VectorFontMetricServices` after its actual CFF reader and before its normalization binding. The service borrows that same immovable VectorFont, CFF programs and mutable SizeState; the normalization binding borrows the service. Destruction releases buffer and normalization before metric/CFF readers and the original resource pin. The binding adds no self/resource root and produces values or owned no-hint geometry rather than views into temporary loading storage.
+
+## Installed capabilities and numeric path
+
+The retained executed installation receipt has eleven actual callbacks from `0x1403a6f50`: horizontal advance `0x1403a73d0` at function slot `+0x140`, vertical advance `0x1403a74b0` at `+0x148`, and vertical origin `0x1403a7500` at `+0x158`. No horizontal-origin callback is installed at `+0x150`. `HasHorizontalOrigin()` therefore reports capability absence; it does not supply a returned zero origin or imply a default phase should subtract one. Other installed services remain outside this module.
+
+The advance callbacks use live FT userdata flags2, with bit `0x10` added vertically. `FT_Get_Advance` at `0x14039af80` checks glyph range, uses actual admitted driver fast advances and `0x1403a1080` scale publication, or a separate glyph-loading fallback for driver error7. Existing SFNT readers supply the actual hmtx/vmtx advances. The recovered fast numeric path publishes 16.16 first, applies the HB axis sign, then rounds horizontally `(advance16 + 512) >> 10` or vertically `(512 - advance16) >> 10`. Sign must apply before rounding; negating a rounded half value differs. Invalid glyphs return zero advance, matching the installed callback error gate. Unsupported size/profile/overflow is rejected explicitly rather than silently mapped to native success or error.
+
+`CffGlyphFont::PrepareUnhintedGlyph` uses the same parsed programs, raw Type2 outline, integer design builder, real table advances and native no-hint scale/control metrics. Its output owns points and contours. Vertical origin is horizontal-bearing X minus vertical-bearing X, and horizontal-bearing Y plus the original unscaled vmtx side bearing; each axis flips only for its corresponding negative HB sign. Invalid glyph origin returns no value. This path preserves distinct flag-8 hinted `PrepareGlyph` geometry/raster metrics.
+
+## Admission and live size
+
+`BindMetricServices` requires two explicit `VectorFontMetricScaleSign` arguments and a current applied positive supported normalized CFF size. It can bind only once. The actual HB sign state is immutable after admission, including zero/nonnegative signs; raw magnitudes are not inferred or exposed. `NormalizationFont().MetricServices()` returns that exact same owner. Standalone metric service objects borrow their supplied actual VectorFont and may not outlive it.
+
+The source domain uses existing normalized 1000-unit CFF/default matrices and real vertical tables, with current positive requested size words 1..2000. Queries reread that same SizeState and use the existing 72-dpi numeric scale. `SetSize` retains every accepted raw conversion, unchanged-word skip, sentinel, overflow, getter and hinted clamp behavior. It does not update HB scales: setter `0x140087ee0` calls only `0x14039f5a0`, while HB scale setter `0x1403a5620` independently guards its `+0x38` immutable word.
+
+Initial active FT size and default HB scale construction are unresolved. Generic size `0x14039ee50` and dispatcher `0x14039f100` have driver overrides, bitmap-only and error domains. This prepared admission does not reproduce that whole dispatcher or infer how arbitrary failed requests preserve a previous size. Current sentinel/zero/overflow/out-of-range requests are rejected by metric queries until a supported positive request is supplied. No automatic binding is added to ScriptVectorFont construction, text measurement or application bootstrap.
+
+## Validation and remaining consumer
+
+Independent synthetic fixtures check owned raw programs/contours/table metrics, empty glyph origins, resource retirement, actual same-reader identity without a new pin, live size mutation, independent font sizes, immutable signs before half-unit rounding, per-axis origin flips, invalid glyph gates and admission failures. Existing hinted CFF and VectorFont owner/input/size regressions preserve their contracts.
+
+The optional retained comparison reads the existing SourceHanSansTC sample (SHA-256 `44af35f7ecf9947a02ae24eb6c254bdb9f1b91c8fa7c801d701ff8a5a6bbeb3c`) and compact initialized-owner records. It supplies the retained shaped glyph ids and the observed nonnegative sign profile; it does not shape them. Ordinary callback advances and CFF origin values are compared independently. Three native vertical glyph substitutions and three zeroed mark advances remain separate shaping boundaries. Existing ten-thousand raw size vectors verify that the overlay preserves all sixty-thousand setter/getter projection words. This is a replay of retained witnesses, not new native provenance or proof of initial native construction.
+
+The next consumer needs the actual native initialized-size/sign admission, prepared plan lifecycle and glyph-position storage, then full guard-checked GSUB/GPOS/mark/fallback execution. TrueType origins, missing-vmtx synthesis, other metric callbacks, nondefault driver/matrix behavior and complete text pixels remain open. Nominal or raw metric values must not replace lookup application or shaped mark advances.
+
+The 350/324 checkpoint passes coherent integrated sanitizer and portable Release checks, scoped actual owners, retained compatibility and the documented independent GPU fixtures. Initial/static/projection/ownership scopes and all unsupported whole-game behavior above remain distinct from native gameplay/frame acceptance.

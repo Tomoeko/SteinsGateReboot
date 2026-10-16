@@ -1,0 +1,21 @@
+# TextRender font selection caches
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are virtual addresses in the exact read-only PE view.
+
+MTextRenderImpl's vtable at `0x1405be330` supplies normal font selection through slot `+0x80` (`0x140043030`) and ruby through `+0x88` (`0x140042d70`). The TextRender normal bridge `0x140036b40` supplies the current requested size, face index, style 0/1/2 for regular/bold/italic and filtering byte. The ruby bridge `0x140036bc0` supplies ruby size, ruby face and filtering, with style key zero in the later `findFont` callback.
+
+Normal retained FontInfo pointers are in owner `+0x448..+0x458`, with current pointer `+0x478`; ruby uses `+0x460..+0x470` and current `+0x480`. Selection first tests the current entry, then scans retained entries in construction order. Both compare the stored requested float size with an ordered comparison and exact face index. Positive/negative zero match; NaN never matches itself. FontInfo byte `+0x38` bypasses size comparison when nonzero. Constructor `0x140039860` clears it, and its later producer remains unresolved; the value module does not invent one.
+
+Normal requested style zero is a wildcard, rather than an exact regular-style match. Thus a regular request may reuse the current bold/italic entry; otherwise it picks the earliest compatible entry. Nonzero requested styles require exact stored style equality. Ruby omits style matching and stores zero for new entries. Normal and ruby identities remain separate.
+
+On a miss, the original obtains the face name from the real text owner and calls its script `findFont(requested_size,name,style)`. The prior current entry remains visible during that callback. A negative callback status clears current selection without removing retained entries. A successful callback constructs a new retained FontInfo, configures its provider, appends it and selects it, even if that FontInfo has no recognized provider. `TextFontSelectionCache` implements these value operations with visible `Find`, `Append` and `ResolveFailed` phases. It does not execute a replacement callback, choose a fallback asset, retain a script source or construct a font provider. A real owner must construct and retain the actual FontInfo before committing its entry.
+
+Native cache hits select size before filtering; newly constructed entries configure filtering before size. The MyPSBFont filtering wrapper `0x14003a4b0` zero-extends its byte into both minification/magnification words before calling MPSBFont `0x1404c1570`. The vector interface's corresponding slot is a no-op. These are provider orchestration facts for subsequent owner integration, not sampler or rendered-pixel acceptance for this selector module.
+
+## Validation
+
+A bounded prepared CPU oracle executes the unchanged normal/ruby selectors for 1,000 cases and 10,000 operations, including cache hits/misses, current precedence, insertion order, unordered/boundary float values, regular-style wildcard, successful/failed dynamic callback results and construction of 3,443 additional entries. All 70,000 projected current/count/callback-phase/request-key words match the portable value operations. The trace SHA-256 is `9e626ecf2c6b409da2b97c1290e26c599967a4ff5c2f382040790c500c311149`; 3,281,063 original instructions execute.
+
+Existing bounded FontInfo keys and logging provider virtuals are prepared inputs. Face-name lookup, actual script callback result, FontInfo allocation/constructor and the Win32 UTF-16-to-UTF-8 service for prepared literal `F` are explicit observation/preparation boundaries. Original SSO machinery and pointer-vector append execute unchanged. This comparison proves native selection and phase behavior; it does not claim executing the original findFont script, full FontInfo/provider lifetime, shaping, rasterization, GPU state or game frames.
+
+Strict-warning ASan/UBSan fixtures cover both families, current and first-entry precedence, wildcard style matching, failed-resolution state, signed-zero/NaN behavior, ignore-size branch bounds, independent cache identity and allocation-limit failure without changing prior state. Keep full retained-root/interface construction and script ownership as the next integration step.

@@ -1,0 +1,15 @@
+# Cloning a pending assigned tick
+
+The reference is `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`, explicit Binary Ninja view `candidate:view:1:UEU`.
+
+Original `51F270` assigns TickCount (`+198`), EvaluationTime (`+19C`), TickAssigned (`+191`) and initial tag dispatch (`+193`). `512450` still appends the source's previously completed global rows. Whole `504CF0` copies physical controls, clocks and owned geometry, clears the new player's global collection, then calls `50AD30`. That function returns immediately while this actual player's `+191` remains set. Recursive child constructors perform their own publication independently.
+
+Six bounded original-instruction cases measured ordinary and selected-kind3 roots in the same or a distinct manager. Root-pending sources retain two/one drawing rows; the clones initially append zero. With only a nested child pending, the ordinary sibling remains drawable: two source rows become one cloned row. After source-first destruction, genuine `50EB80 Progress(0)` consumes the assignment at tick five and restores the full row collection; the next Progress(1) advances from there. All cases preserve copied geometry, read no freed source allocation and retire independent graphs exactly once. The witness executed 947,332 unchanged instructions at 9,667 byte-verified PE sites.
+
+The portable implementation keeps a clone-only pending-publication receipt per actual Context. It preserves independently copied completed packet inputs and geometry while leaving that pending player's collection empty. A real successful publication clears the receipt. Ordinary SetTickCount on the source does not suppress its existing Draw. Unpublished/failed source publication does not gain a completed packet receipt.
+
+The ignored witness manifest is `motion-clone-pending-tick-native-stage/source-preparation.json`, SHA-256 `2a274f2b7d721e5cbf927a297eb6d7caac040653a0205147ff318703af487452`. Its historical JSON key `initial_boundary` records raw `+193`; that key means InitialTagDispatchPending. The distinct `+194` endpoint/boundary flag is not assigned by this setter. The measured addresses and numeric observations are unchanged.
+
+The accepted receiving fixture uses real Task clones for root assignment, and directly owned registered Selected/Context phases for mutable nested-player assignment. It covers same/cross-manager aliases, source-first retirement, unchanged copied vertices, the ordinary sibling and genuine Progress. Native scope is finite tick five inside the timeline. Packed streams, uncompleted-source cloning and pending owning-JOIN clone safety remain separate boundaries; no GPU fidelity is established here.
+
+The connected scene-clone and task suites pass with the original source-first closure assertion unchanged. An independent ownership fixture exposed moved-from callback retention in the task container; explicitly emptying callbacks at ownership transfers resolves that separate lifetime defect. All eight actual SubWindow reverse/re-entry/copy histories and the coherent 616-suite sanitizer checkpoint pass.

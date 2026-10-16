@@ -1,0 +1,9 @@
+# Native Image coordinate scalars
+
+Reference executable SHA-256: `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; explicit view `candidate:view:1:UEU` read without mutation.
+
+The actual bg_black image passes texture preload/purge but selected Image construction rejected its first tile.left at serialized offset0x20f: PSB tag0x1d, implicit float0. Other tile coordinates use tag0x1e floats, while logical image width/height use integer atoms. This is a scalar receiving gap, separate from Resource loading or texture production.
+
+Whole MImage constructor `0x1404f78c0` calls `0x1404ca8a0` for logical width/height and tile left/top/width/height. That converter preserves bool and integer paths, truncates tag0x1d/+0 or tag0x1e through CVTTSS2SI, and tag0x1f doubles through `0x1404cf6f0` then CVTTSD2SI. Double atoms do not round through float. Null/string/object atoms reach native conversion failure. The portable selected Image path now admits finite reals whose truncated coordinate fits its existing0..16384 safety domain; integer wrapping/bool handling are unchanged.
+
+A bounded original-instruction witness runs64 whole constructor/destructor cases, six input fields and384 resulting words. It includes implicit and explicit float zero, signed zero, fractional float, direct-double precision discriminators, bool, int32 and int64 low-word behavior. Every executed PE instruction matches original bytes. PSB key resolution, MTexture/cache acquisition, allocator, GPU retirement and critical sections remain explicit boundaries; no native pixels or timing comparison is claimed. The C++ word replay and serialized receiving fixture with actual implicit-float-zero coordinates are independent acceptance checks, not yet compiled in this source checkpoint. Unsupported atom and nonfinite/out-of-bound failures remain tested.

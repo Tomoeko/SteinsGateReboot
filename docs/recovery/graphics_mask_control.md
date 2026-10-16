@@ -1,0 +1,9 @@
+# Ordinary graphics mask-control state
+
+`SpriteGraphicsTargets` owns the actual scalar control leaf reached by renderer callback `55ab20` and display `4c6100`. Native stores the minimum word at `+164`, maximum word at `+168`, then operation byte at `+160`; it performs no arithmetic or conversion. The new ordinary setter admits operation zero and preserves each binary32 argument word. Values persist independently of selected target changes. This is control state, not a replacement stencil, mask shader, copy pass or GPU callback.
+
+The constructor initializes these fields to positive zero. Original factory `4c4540` clears EBX at `4c45c3`, then stores BL at `4c4712` and RBX at `4c4718`. That conclusion comes from exact static bytes and the Windows nonvolatile-register contract; the complete native factory and its OS/GPU allocations were not executed by this witness.
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Sixteen bounded cases execute unchanged `55ab20` through the complete `4c6100` leaf: 96 instruction dispatches, six PE-exact instruction sites, all neighboring receiver bytes retained. Inputs include signed zeros, infinities and NaN payloads; expected output is captured from original stores, not calculated by replacement math. Direct sanitizer validation of the actual graphics owner compares those words, constructor state and foreign-thread rejection. It submits zero frames.
+
+The first proof-helper attempt stopped before compilation because it used the wrong accepted-manifest filename. Its script, dependency query and failure record are retained. The corrected helper pins accepted447 source/libraries, runtime shader, actual dependency closure and native inputs before/after; generated products are retired. Active mask operations, physical device mask state, whole frame/root construction and original character rendering remain open.

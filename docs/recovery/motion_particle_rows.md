@@ -1,0 +1,11 @@
+# Motion particle row graph
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; explicit Binary Ninja view `candidate:view:1:UEU`.
+
+`0x14050ad30` handles kind4 before testing ordinary node Active: `0x14050ae1f` iterates actual owner `+0x410` children `+0x60..+0x68` in forward order and recursively publishes each child. The emitter contributes no own drawing row. Kind3 keeps its distinct Active gate and structural mask row. Repeated priority entries therefore repeat that emitter's entire forward child contribution, while each selected child's persistent row identity and coefficients remain owned once.
+
+The row owner now binds exact per-layer particle vectors alongside existing kind3 edges. Construction locates the real containing emitter through selected ownership; refresh and publication check the exact occurrence index, selected tree and containing preparation serial. Capacities sum actual child collection capacities at each serialized priority occurrence. Invalidation drops derived pointers before child retirement without resetting persistent local row coefficients. Particle child publication bypasses only the emitter Active gate; ordinary child gates and genuine numeric/source/ancestry checks remain.
+
+Both mesh and retained quad mask packet graph checks use the complete validated kind3/particle edge set. They cannot omit an emitted selected owner or substitute another context with matching row counts. External stencil-row resolution reads the real particle player's retained inherited-stencil borrow; it does not derive an ancestor from labels or fabricate a row for the emitter.
+
+The connected fixture uses actual registered tasks and two emitters, one omitted from current priority and the other repeated twice. It checks four repeated row occurrences over three distinct child packet owners, retained output after the emitter becomes hidden, a real containing kind12 stencil, ordinary manager frame publication, queued-row mutation rejection and complete selected/context/identifier retirement. Native traversal is executable-derived; full C++/compound scene replay is pending parent validation. No new shader or particle geometry replacement is introduced.

@@ -1,0 +1,21 @@
+# Shared Layer scale view
+
+The target is `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`, analyzed read-only through `candidate:view:2:UEU`.
+
+`LayerScaleView` recovers the native shared `SQLayerScaleObject` owner used by LayerRawTex and TextRender. It registers the actual supplied task in `MotionLayerTasks::First` (Layer +0x168). Initial task status is Active, and drawing is paused. The wrapper borrows task ownership; the parent group owns the concrete callbacks and their resources.
+
+Offset, scale, primary scale and rotation follow setters 04fa60, 04fba0, 04fad0 and 04fb40. Default offset/rotation zero and scale one avoid creating a camera. Unordered NaN comparisons create it. Once present, later default values update the existing camera. Rotation uses the original float32 multiplication by `0.0174532924`. Visibility controls the actual child task's pause byte, leaving camera drawing unpaused.
+
+Lazy creation 04f9c0 calls the actual M2DCameraLocator constructor 4f4c60, unlinks the raw task through 4c0510, appends the camera to First through 4bfd20, then appends the original task to the camera. `ParallelTaskLease` and `Extract`/`AppendLease` preserve the concrete payload and status/pause fields across this transfer. Old registration handles expire; payload identity is unchanged. Abandoned leases retire the payload once. A capacity rejection leaves the lease owned. Transfer currently rejects active traversal before changing ownership: exact intrusive reparenting during a running callback remains an open parity domain.
+
+Wrapper destructor 04f860 marks the attached task and optional camera Retire without deleting them. First update or parent teardown owns actual disposal. Parent teardown retires camera children before camera storage, then detaches borrowed wrappers. `DetachParent` removes wrapper borrows; guarded setters subsequently do nothing. The script adapter must separately retain its BorrowMotionView token and reset it before wrapper storage disappears.
+
+The four original Layer group initializer fragments zero auto-retirement at +0x1f. A bounded unchanged-instruction check covered 256 group cases, 1,280 ordinary empty updates and 256 enabled positive controls, 53,504 instructions. All ordinary statuses stayed Active; controls became Retire. Encoded trace SHA-256: `4bd5f6c058a35557d28c17c0a08db9cc4bb9573d73314e44c5ce55f0f1b5eb2e`.
+
+The native scale/transfer control corpus covers 1,000 prepared parent lists and 8,000 setter operations, 728,931 original instructions. First order, exact cached/camera float words, pause state and concrete leaf disposal order match the portable owner with zero differences. Encoded trace SHA-256: `d2453bafb383980635b3a1af473a357d63becdf2940f73e205a9716f47117870`; binary comparison projection: `06dbf87113bcfa411df0fcbf2cffe381e50695aefdfa7f6463e59fa9a6169c1b`. Native camera allocation/free, concrete leaf destructors and the borrowed-view/Object tail are explicit observer boundaries; this is not a Windows heap/VM or GPU comparison.
+
+Independent fixtures cover head/middle/tail transfer, generation expiry, full destination retry, abandonment after cleanup failure, traversal rejection before mutation, lazy creation in a full First group, NaN preservation, parent-first and wrapper-first teardown, detached behavior and real callback update/draw forwarding. Strict Apple Clang ASan/UBSan validation passes.
+
+Camera drawing 4f59f0 couples a native matrix stack and optional scissor restoration to child drawing. This owner passes its measured camera fields to an explicit `DrawWithCamera` scope. A populated Draw callback without that scope fails clearly; it never draws an unscaled replacement. Empty text tasks need no drawing scope. Full native matrix/scissor stack and pixels remain open, as do LayerRawTex/TextRender script method capture/status integration.
+
+DrawingProxy constructor `0x14005ed80..0x14005edb1` explicitly sets draw pause to false before attachment. `LayerScaleTaskCallbacks::InitiallyDrawPaused` supplies this recovered payload policy; its default true preserves the established RawTex/TextRender initial state. Task transfer preserves whichever initial pause the concrete owner supplied. See [genuine LayerDraw](layer_draw_bindings.md).

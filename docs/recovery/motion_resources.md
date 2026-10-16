@@ -1,0 +1,17 @@
+# Motion resource ownership
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. All referenced executable instructions and analysis metadata remain unchanged.
+
+## Source preparation and project lifetime
+
+Registration `0x14051cbf0` compares the loaded document pointer before preparing another source map. A matching project increments its signed reference count without importing textures again. For a new project, the source keys come from the serialized PSB table enumeration `0x1404cf040`. Each source's texture imports through the manager callback before its source-map entry is created; the project is published in the registration vector after preparation. Lookups and final release use the separate ordered byte-key map.
+
+`MotionResourceManager` connects the immutable first-party motion model, [project registry](motion_projects.md), [wrapper slots](motion_textures.md) and shared cache. It imports sources in the preserved `MotionResource.Sources` order, then publishes the project. Lookup names retain native C-string termination. Duplicate registration preserves the first model, source slots and character map. Independent managers own separate wrappers but share the physical GPU texture when their loaded document/value identities match. This component does not assign document identities from files, resource names, byte equality or script wrapper handles.
+
+Final unregistration `0x140524990` invokes the texture-release callback in ascending source-map order while the project remains live, then removes and compacts its 64-byte registration through `0x140525e60`. Intermediate release keeps every source texture. The portable owner preserves that ordering and immutable-model lifetime. Resource mutation during a disposal callback is rejected explicitly. Bounded preparation, duplicate-name rejection, rollback and attempting all owners after a platform cleanup exception are authored safety behavior. Explicit safety `Close` retires slots and models without claiming the complete native task/destructor ordering.
+
+## Validation and remaining integration
+
+One thousand private fixtures execute unchanged populated source-map traversal, intermediate/final reference handling, map-node retirement and project compaction: 157,137 instructions and zero differences. Only source texture disposal, short in-place name destruction and private heap free are isolated; texture slot/cache disposal has its own measured contracts. Portable ASan/UBSan replay matches all callback indices, surviving project IDs and reference counts. Native and authored outputs share SHA-256 `0c1203951feb3afbd6265521592b50972eb1c1393df8374d2ec96ce6386b2fad`.
+
+Independent fixtures distinguish serialized import order from sorted lookup/release, duplicate registration without decoding, publication after upload, model retention through GPU disposal, two-manager cache sharing, per-manager character maps, failed preparation, cleanup failure and monotonic IDs. Source callback pixels are still covered separately by the actual Metal wrapper fixture. Full registration instruction replay, script PSB ownership, both managers in a real Layer, alias/reference-project lookup, source overrides, task evaluation, clipping/batching and complete scene output remain open. Recover these owner boundaries before promoting this component to a drawable Layer implementation.

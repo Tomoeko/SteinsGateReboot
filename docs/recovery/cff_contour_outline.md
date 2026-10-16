@@ -1,0 +1,13 @@
+# Fixed CFF callback outlines
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are executable virtual addresses.
+
+`BuildCffContourOutline` consumes typed move/line/cubic device callbacks and reproduces native point/tag/contour construction. The callback owner is documented in [cff_contour_owner.md](cff_contour_owner.md). The result owns signed 26.6 points and inclusive contour ends, without pretending to supply glyph metrics.
+
+Native line callback `0x1403c4fe0` begins a not-yet-started contour from its supplied device from-point through `0x1403c9ed0`, then appends the endpoint through `0x1403c9d80`. Cubic callback `0x1403c4ea0` preserves its two controls and endpoint. Point conversion uses arithmetic signed fixed >>10, including negative fractions; on-curve and cubic-control tags are 1 and 2. Move callback `0x1403c5040` finalizes the preceding contour and resets builder-start state without allocating a move point. Finalization `0x1403c9e10` removes one repeated closing on-curve endpoint and discards a resulting single-point contour. A closing cubic may retain its two controls and use the first point as its implicit endpoint.
+
+The helper finalizes its last contour and bounds input work and signed 16-bit point storage. It borrows callbacks only for the call. The geometry-only `PrepareCffGlyphPath(points, contour_ends)` overload consumes those owned points directly; existing glyph-based calls retain the same validated path/bounds algorithm. This avoids rescaling already hinted pixel geometry or supplying fabricated metrics.
+
+One thousand independent prepared line/cubic/closure fixtures match all 38,628 native point, tag, contour-end, and count values. They include negative fractional callback coordinates, repeated closure, coincident endpoints, multiple contours, and implicit closing-cubic endpoints. The original callbacks and builder ran unchanged in bounded preallocated CPU storage. Native vector SHA-256: `0a22ab5dedbe73b9ad4cccd0e5a7d6f80ab0cc8a248ac6432569db3ddebc9c5f`. Focused tests connect converted points to the original pixel-path and bitmap-extent algorithms and reject unknown kinds/excessive counts. Conversion/sign-conversion warnings, ASAN/UBSAN, existing path tests, and formatting pass.
+
+Inputs must use the intended native device scale. Unhinted/raw-design loader modes require their separate scaling phase. Whole FT glyph loading, post-font-matrix transformations, hinted metric publication, stroke/fill raster coverage, atlas upload/cache ownership, and screen pixels remain separate acceptance checks. This phase performs no game launch, GPU work, rasterization, or imported callback substitution.

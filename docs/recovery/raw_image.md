@@ -1,0 +1,15 @@
+# RawImage pixel owner
+
+Reference: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+`0x1402388c0` registers genuine RawImage derived from Object. Its width/height constructor `0x140235d10` requires exactly two arguments, allocates the native pixel owner through `0x1400601d0`, zeroes every four-byte pixel, and marks wrapper update byte `+0x58`. Native storage contains packed top-to-bottom BGRA rows. Destructor `0x140235c80` retires the owned pixel vector/data before Object cleanup. The portable `RawImage` is an exclusive bounded CPU pixel owner; script construction/registration remains a separate integration check.
+
+Fill `0x140238210` accepts a positive in-bounds rectangle and packed **RRGGBBAA** word. Normal fill writes all four BGRA bytes. Its optional boolean mode writes RGB only where existing alpha is nonzero, preserving alpha and transparent pixels. Successful fill marks updated even when every selected pixel is transparent and skipped.
+
+Restore `0x1402396c0` requires a character array of exactly width × height × 3 or × 4 bytes. It snapshots input before writing, expands RGB with alpha 255 or swizzles RGBA into BGRA, then marks updated. Store `0x140239950` writes the inverse RGB/RGBA representation into a matching character array without changing update state. The portable store returns those bytes by value; Binary output mutation belongs to its future adapter. Tiny clear-update entry `0x140236950` clears the flag. `0x14005d130` recognizes RawImage's native class tag (including valid derived image classes); the RawTex image path copies its already prepared BGRA rows rather than decoding PSB directly.
+
+The original-instruction oracle runs 1,000 constructor/restore/fill/store/clear/destructor sequences, 9,256,772 instructions, 6,000 pixel/serialized-byte hashes and update snapshots. Native trace SHA-256: `ad865c3639d06425542863b4416f4b5fdd347496bbb42bed6517b853196ed61c`. Strict ASan/UBSan C++ matches all snapshots exactly. Actual zeroing, byte conversions, rectangle branches, update writes and vector teardown execute; VM argument/ref attachment, Object initialization/tail, caller-owned allocation/free and Binary output mutation are explicit observers. This is not full native VM/heap or GPU equality.
+
+Three independent fixture groups cover zero initialization and partial rectangles; arbitrary alpha, opaque-only no-op updates, RGB/RGBA serialization; and aliased input snapshots with failure-before-mutation. Positive dimensions and full storage are capped at 64 MiB before allocation. Empty/out-of-bounds rectangles, arithmetic overflow and invalid input lengths are authored safety rejections; no native unsafe overflow/invalid-pointer claim follows. Restore/store allocate bounded temporary bytes as the original preparation operations do, outside ordinary frames.
+
+Script attachment, native Image subclass/resource decoding, other RawImage editing/filtering methods, mutable Binary output, RawTex ownership/restoration, background processing and complete scene pixels remain open. Native image assets and private vectors stay ignored.

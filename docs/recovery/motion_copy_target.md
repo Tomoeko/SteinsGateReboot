@@ -1,0 +1,15 @@
+# Copied motion target size policy
+
+Target `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Unchanged virtual addresses were inspected in the explicit PE view.
+
+The special-blend region preparation `0x1404c4bd0` calls `0x1404c6ac0` after producing a rounded/clamped rectangle. The latter compares requested float extents against signed copied-target dimensions at graphics +0x138/+0x13c. It keeps the owner when both extents lie inclusively between half and full current dimensions. A strictly smaller extent on either axis or a strictly larger extent on either axis triggers replacement. Exact half/full boundaries keep the current size.
+
+Replacement is destructive: the old owner at graphics +0x130 receives its deleting virtual callback with flag 1; the pointer clears; original float ceiling `0x1405810c0` supplies new signed dimensions; `0x14056e40c` allocates **0x48 bytes (72 decimal)**; inline construction copies dimensions and current-target format (+0x2c); `0x1404c34a0` prepares the physical target; only then does the new owner install at graphics +0x130. The source does not allocate a replacement first and retain the old owner until success.
+
+The inline constructor initializes DWORD +8 to UINT32_MAX, dimensions at +0xc/+0x10, DWORD +0x18 to 1, QWORD +0x20 to 0, DWORD +0x28 to 1, format at +0x2c, and three zero QWORDs at +0x30..0x40. Padding remains untouched. These are original assembly observations, not a portable struct layout or C++ ABI comparison. In particular +0x18 is a DWORD, despite a wider decompiler inference.
+
+`PrepareMotionCopiedTargetUpdate` recovers the keep/replace decision and resulting dimensions without allocating or touching a device. The eventual platform owner must preserve the measured deletion/publication order. Its allocation failure handling, device preparation, target-region copy and GPU lifetime remain separate recovery work.
+
+A bounded hash-gated oracle executes the full original `0x1404c6ac0`, original ceiling paths and inline construction in private CPU memory. The previous owner deleting callback, allocator and platform preparation are explicit observer boundaries. Across 1,000 cases and 3,000 sequential operations, 325,966 original instructions produce trace SHA-256 `0b609a846a014159633336b6a3cdf6aed2211878c3c9ce945f668c76dc4e45dd`. Strict ARM64 ASan/UBSan C++ tests match every keep/replace/dimension decision exactly. Native observed delete/allocate/prepare order and cloned format are checked independently; no authored heap or byte-layout parity is claimed.
+
+The corpus covers initial zero dimensions, exact half/full thresholds, fractional offsets/extents and repeated resizing, with nonnegative current dimensions through 32,767 and positive finite rectangles. Negative/nonfinite/zero extents and overflowing signed dimensions are explicit authored safety errors. Native exceptional arithmetic and allocation failures remain open. No original game, OS, speaker, input or GPU API runs.

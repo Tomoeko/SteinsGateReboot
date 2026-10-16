@@ -1,0 +1,15 @@
+# Vector glyph rectangle projection
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are executable virtual addresses. No executable bytes or analysis metadata were changed.
+
+After [vector glyph cache lookup](vector_glyph_cache.md) selects an existing positive-extent glyph, `0x140086a40` reads the borrowed text context's atlas texture at `+0x428`. If absent it returns without processing coordinates or appending a command. Otherwise it copies that atlas identity into a 48-byte command record and calculates source/destination pixel rectangles plus the unchanged RGBA color. Cache payloads and these commands borrow the actual text owner; neither owns or retains the atlas independently.
+
+Source left/top are separate signed integer-to-float conversions of atlas X/Y. Source right is converted width plus source left; source bottom is converted height plus source top. Destination left is converted glyph left bearing plus the cache-prepared X position. Destination top is `floorf(positionY - float(topTranslation))`. Destination right is converted width plus destination left; destination bottom is `floorf(float(height) + destinationTop)`. X remains fractional; Y rounds down, including negative fractional values. Original helper `0x1405824a0` implements floor through SSE4.1 round-down with suppressed exceptions, or its software branch. Separate conversions/additions matter for large signed coordinate/extent words; integer endpoint addition before conversion would differ.
+
+`PrepareVectorGlyphDrawRectangle` returns these pixel-coordinate values and the exact color. It does not normalize texture coordinates, apply scene transforms, choose shaders/state, upload an atlas, allocate a texture or submit GPU work. Its caller already decides drawable extents through the cache. The authored boundary rejects nonfinite draw positions when an atlas exists; an absent atlas preserves the native early skip.
+
+## Validation and next integration
+
+A bounded prepared CPU oracle executes unchanged `0x140086a40`, including both real `0x1405824a0` floor branches and the original in-capacity packet write, for 10,000 cases. It varies borrowed atlas presence, signed coordinate/bearing/extent boundaries, fractional/negative positions, positive/negative zero, finite float extremes/subnormals and RGBA words. All 100,000 projected presence/rectangle/color words match. Trace SHA-256: `db7dc2658fa655a6f14a6f8b1098066f355b94ed78d8413a7daca0a17ab9c1f2`; 676,230 original instructions execute. Atlas identity, region/position/color inputs and preallocated output storage are prepared boundaries. No renderer or math routine was replaced in this comparison.
+
+Strict-warning ASan/UBSan fixtures check real bearing/source projection, negative vertical floor, integer-to-float-before-addition behavior, missing-atlas early return and nonfinite-position safety rejection. These checks establish rectangle values; final atlas texture/context ownership and source normalization/scene/GPU command integration remain open. No original game launch or screen/audio capture was required.

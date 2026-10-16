@@ -1,1 +1,4 @@
-/Files
+/Files/
+/ROADMAP.md
+.DS_Store
+*.pyc

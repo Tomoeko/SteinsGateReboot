@@ -1,0 +1,15 @@
+# Text glyph atlas and record receiving
+
+Reference: `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; explicit Binary Ninja view `candidate:view:1:UEU`. Original bytes and analysis metadata remain unchanged.
+
+Native task finalization `0x1400360c0→0x140035e40` prepares captured glyph runs through the actual retained FontInfo interfaces: outlined entries first, then base entries. The supported unstroked CFF path uses the existing private size/edge/glyph cache and task-owned 1024-square BGRA atlas. Font-cache retirement invalidates prepared drawing; another `done()` repopulates those real interfaces against the retained atlas.
+
+Draw `0x140035aa0→0x1400362a0` uses `(offset + coordinate) + scroll`, the actual shown count and captured element styles. `0x140088100→0x140086a40` resolves cached glyph bearings and vertically floored rectangles. Flush `0x140086870` emits the edge queue before the ordinary queue. Primitive `0x140086c50` supplies format4 XY/color/UV vertices and triangle groups `0,1,2,1,3,2`, with blend0 and texture attributes0. The existing native VS1/PS240 receiving programs apply ordinary texture-times-color shading and blend row0; no replacement white texture or new shader is used.
+
+Color has two distinct swaps: element draw swaps stored ARGB into the rectangle queue, then the vector primitive swaps it back. Original COLOR descriptor `0x14096c610` is DXGI87/BGRA8_UNORM. For example, stored `0xff40a0ff` produces RGBA `(64,160,255,255)`. The host adapter compensates its existing ROR8 packing explicitly. Actual atlas coverage occupies every BGRA channel; source-alpha blending applies that coverage again to RGB. Bitmap vertex packing is a separate route.
+
+Populated clipping `0x140036cc0` uses measured left/top/right and fixed-view height in mode1, or fixed-view size in mode2. The live receiver transforms/intersects this clip under the genuine camera/model, then restores the prior raw scissor. Actual host-input borrows remain until the outer frame ends or aborts.
+
+Bounded unchanged-original witnesses cover 16 flush batches/31 rectangles (620 vertex words plus indices; 6,920 instructions) and 64 clip cases (2,512 instructions). Portable ownership/cache/retirement tests and the real Metal fixture pass under ASan/UBSan and Metal validation. The physical fixture checks 3,072 pixels across tint, shown count, clipping, camera scale, shadow, alpha and abort/replay, using actual CPU atlas coverage and the native blend equation with a preselected one-byte UNORM bound. It requests no drawable, presentation, activation or audio. The original hidden script run passes the former text-draw boundary; this alone does not establish full game-frame pixel parity.
+
+Integration prepares `GraphicsFrameCycle::PrepareTextGlyphs()` while idle and configures `ScriptTextRenderBindings::ConfigureGlyphDrawing` to call that cycle's `DrawTextGlyphs`, alongside the existing genuine font and camera services. Stroked CFF, bitmap Text run receiving, ruby, vertical layout and unsupported content/markup remain explicit boundaries. Native cross-API font-image parity remains open.

@@ -1,0 +1,11 @@
+# AffineLayer matrix roots
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+The actual constructor `0x140057a90` creates three identity matrices through `0x140054af0` and the genuine wrap-owned factory `0x140055560`. Composite, local and image ObjectInfo roots occupy offsets `0x238`, `0x250`, `0x268`; their separately borrowed raw matrix pointers occupy `0x280`, `0x288`, `0x290`. Construction does not invoke the script matrix constructor. The deleting destructor `0x140057f40` first unlinks affine relationships and manager membership, then retires children/link roots, then image, local and composite roots before common SQLayer destruction.
+
+`ScriptAffineLayerMatrices` recovers the three-root lifetime portion through actual `ScriptAffineMatrixBindings` instances and external VM roots. Each slot owns one root and borrows its genuine matrix. Script copies retain the wrapper separately; retiring the layer roots does not invalidate a surviving script copy. Explicit closure is idempotent, and partial construction unwinds acquired roots in reverse order. Runtime reclamation retains its existing opt-in fidelity gate.
+
+A 1,000-case original-instruction graph replay uses 425,000 unchanged instructions. It executes the outer constructor/destructor, native identity initialization and actual intrusive manager append/unlink. Common SQLayer services, VM wrapping/root assignment/push/pop/typed lookup, empty links/children and allocators are prepared observer boundaries. Measured projection SHA-256: `a6f5ac66442d9f00c8e23a316a2a4259cf311259cc939f3e3bbad46d7e8fb9bb`. All cases produce three distinct identity matrices, their exact corresponding borrowed pointers and image/local/composite release order. The constructor retains the preexisting dirty byte; this module does not invent its initialization.
+
+Three independent sanitizer groups cover separate roots and matrices, retained wrappers after root retirement, real matrix/member disposal order, partial bounded construction, and VM Close with retained owner roots. This module does not create an AffineLayer alias or recover its complete task, parent/link registry, sort manager, calc/onScale callbacks, picking or rendering. Those owners must integrate around the measured release phases before playable acceptance.

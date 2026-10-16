@@ -1,0 +1,29 @@
+# Empty TextRender context controls
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are executable virtual addresses; Binary Ninja used `candidate:view:2:UEU`, read-only.
+
+`TextRenderContext` recovers the actual empty text task's scalar, coordinate and clipping contract and owns its genuine lazy [glyph atlas](glyph_atlas_owner.md). It supplies no replacement text, fonts, gameplay or assets. Its finalized-list population and rich text application remain separate open operations. Constructed text is horizontal, time/font scale 1, shown count zero, clip mode zero, coordinate/offset pairs zero and fixed view size zero. No texture exists until a real supported glyph is prepared.
+
+## Native fields and update distinction
+
+`0x1400356c0` constructs MFixedSizeView and embedded TextRender `0x14002c040`, then initializes the atlas/pens and two draw vectors. Vertical byte is task `+0xc4`; time/font scale words are `+0x110/+0x114`; shown count and clip mode are `+0x3cc/+0x3d0`. Setters `0x140042cc0`, `0x140042c30`, `0x140041410`, `0x140036ca0` and `0x14003f460` store these values without inferred clamping. Coordinate, manual offset, clip offset and scroll offset occupy `+0x3a8`, `+0x3b0`, `+0x3b8` and `+0x3c0` as independent float pairs.
+
+Coordinate setter `0x140035da0` and clip-offset setter `0x140035d70` invoke `0x140036cc0`. Clip-mode setter only stores its word. Native assembly proves clipping first adds clip offset to coordinate. Mode 1 adds the text's computed bounds; mode 2 uses the fixed view extent; other numeric modes select `{1,1,-1,-1}`. The empty supported owner has zero finalized text bounds/extent. Signed-zero addition order is preserved; no fast-math is enabled. Portable transient clipping state is safely initialized; the comparison's caller arena is explicitly zero-prepared, not evidence of the original allocator's uninitialized bytes.
+
+Ordinary First-group update calls the generic MProcess entry `0x1404c0500` and traverses its empty inner groups. It does **not** finalize the text core or reset shown count. Native `done()` at `0x14003a8b0` explicitly invokes task virtual `+0x68` → `0x1400360c0`. That entry finalizes embedded TextRender `0x14002f280`, copies its element count into shown count, updates measured/fixed extent, recomputes clipping, then clears manual/clip/scroll offsets before glyph preparation. `FinalizeEmpty` reproduces only this established empty-list case. Rich histories, wrapping, reveal/link application, font lookup and glyph-run preparation are not substituted by an empty implementation.
+
+## Proof and remaining work
+
+A bounded dormant replay executes the unchanged full factory, core constructor/default normal/ruby intern structures, scalar controls, ordinary process update, explicit done finalization and empty deleting destructors for 250 constructors and 6,000 operations. The authored context and actual script/task adapter match 143,750 comparable words from 150,000 retained native words. Native borrowed-vector rows are retained separately; no public count API is invented. Native state SHA-256: `4f2a945d7f56f9915a09b6939b2324a4fcc31a2238a28fd4dbfef806a3ffb29a`.
+
+Private arena allocation, VM type/stack/self-weak APIs, Object tails and bounded stack probing are explicit observers. Core intern-tree/string helpers execute normally and all task-owned allocations retire, but the authored scalar owner is not a replica of those binary containers or a populated rich-text renderer. Independent strict-warning ASan/UBSan fixtures verify word preservation, clipping timing and order, empty done behavior and zero asset creation. Native OS/GPU callbacks and the original game were not launched.
+
+Populated TextRender owner/application, native default/options/style reset, actual findFont callbacks, bitmap/vector shaping, wrapping/reveal/link assembly, true clipped/stroked/TrueType pixels, common camera draw-stack coupling, GPU batching/shader coupling and final text frames remain open. This component does not complete those acceptance checks.
+
+## Requested render size
+
+Registration `0x14003d9c5` binds `setRenderSize` through two-float bridge `0x140038bb0` to `0x1400425d0`. The bridge reads allocated physical height cell3 before width cell2; failed numeric conversion leaves0, extras are ignored. Detached wrappers do nothing. The live callback reaches core `0x1400352a0`, which stores both raw float words at embedded core `+A8/+AC` and always invokes virtual `+8` (`0x140036030` clear), including equal requests. Thus requested size is visible during actual font callbacks and survives callback failure before later clear phases.
+
+`TextRenderContextState.RenderSize` owns those request words separately from `Size`, the actual fixed-view extent returned by script width/height getters. Native `0x1400360c0` done selects each requested axis unless it is ordered-equal to0; an ordered zero uses measured text bounds (0 in this genuine empty-content domain). It installs that fixed extent before clipping, then clears offsets. Negative and unordered requests are not normalized. Resize does not allocate a texture or populate text.
+
+A bounded64-case original `0425d0→22d3d0→0352a0` witness executes1,592 byte-verified instructions at26 PE sites, covering detachment, equal values, signed zeros, negatives, NaNs and infinities. Its virtual clear is an explicit observation boundary verifying store-before-dispatch, not a new full-clear differential. Connected fixtures retain the real font reset/measurement callbacks, equal-request clear, delayed width/height publication, physical missing cells, callback partial writes and parent retirement. The trace and target hashes are pinned in the private source-preparation manifest; whole populated-text behavior remains open.

@@ -1,0 +1,13 @@
+# String zero-time comparison transaction
+
+Target `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`, explicit Binary Ninja view `candidate:view:1:UEU`.
+
+The actual driver `2f2e30` gates each UID with `519b00`, then reads posture, initializes on reactivation, collects forces, calls `30da60`, prepares `30c760` output and calls `51b5b0(mode=1,compare=true)`. `30da60` multiplies the actual Speed, keeps the configured substeps at zero scaled ticks, and dispatches every real tress step with zero seconds. There is no zero-time solver bypass.
+
+A bounded original-instruction witness executes complete `309af0` construction, `30e000` posture, `30e320` reset, force phase, three `30da60` updates and full `30c760` output for eight synthetic definitions. Initial constructor/reset output is finite. The cases cover rigid sides0/1/2, horizontal bones, roughness0/1, fixes0/1/2, custom split0.3/two tresses, and nonempty rigid constraints. The custom/two-tress case produces finite near-identity output on its first zero update and unordered output thereafter. The remaining cases produce unordered output. Measured: 852,107 original instructions, 9,084 byte-checked PE sites. Only bounded allocation/free OS services are supplied; numeric callables execute original bytes and writes stay in the fixture heap/stack.
+
+Twenty-four separate original `51b5b0`→`526df0` witnesses consume those observed outputs: 13,406 instructions,255 sites. Native `554e80` unordered comparison can leave an empty override unchanged or clear an existing finite override. A finite-difference discriminator reaches the actual copy branch. Authored code admits that branch only for fully finite controls; mixed nonfinite copies remain rejected.
+
+The implementation lends private transient state through Soft→Tress→Spline→String samples/custom inverse/fix correction, then the actual selected UID comparison. It never replaces the solver with identity or skips a substep. Public positive-time simulation, ordinary finite output, structural bounds, actual pose/target validation and collider/adhoc zero-time gates remain strict. A positive-time update after transient unordered state still requires genuine Initialize; that continuation is not claimed. Native NaN payload bits and general positive-time whole-String numeric parity are not claimed.
+
+The connected fixture uses actual registered assets, Commands, selected scene/UID, global posture, scalar-speed owner, hidden/reactivation and FORCE retirement. It distinguishes held completed geometry from pending native clears. Expected-only native vectors additionally cover the finite custom-knot result and the rejected mixed-copy domain.

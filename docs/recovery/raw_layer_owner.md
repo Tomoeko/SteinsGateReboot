@@ -1,0 +1,15 @@
+# RawTex common layer ownership
+
+Target `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. `SQRawTex` retirement `0x140290d90` first writes status 2 to its driver-owned background group, then enters common `SQLayerBase` retirement `0x14022c9f0`.
+
+`RawLayerOwner` owns the actual [RawTextureTask](raw_texture_task.md), two common parallel groups and the common serial group. Its LayerTree record has distinct `RawTexture` kind and can attach to a genuine Folder or Screen manager. The background task remains owned by the supplied real driver; retirement marks it for the driver's later dispatch. The tree, driver and script bridges must outlive this owner, including explicit Close. Callbacks must retain the owner storage through retirement.
+
+Native common retirement unlinks manager membership before dropping its weak parent. It then clears the common parallel root: first and second groups, clip/camera, and the camera-owned RawTex. RawTex releases its texture before its inner parallel and serial groups. The common serial root follows, then the Object tail. The authored owner preserves those observable phases and keeps the typed tree identity through the Object bridge before releasing the record. `LayerTree::Detach` clears membership and parent identity while retaining a live typed record. Reattachment and eventual generation reuse remain checked independently.
+
+This order applies to RawTex. Motion retirement `0x14022c760` clears its common serial root before parallel/source cleanup and only subsequently enters the common unlink/parent/Object tail. Folder cleanup has its own manager order. Existing Motion behavior is not generalized from RawTex.
+
+A bounded original-instruction corpus executes the actual common/process/camera/group teardown for 1,000 populated cases: 1,444,231 instructions, 12,974 ordered events and 51,896 comparable state words, trace SHA-256 `62c33f75031248493ff0702ae30283ac018058003d30dc396386624b367d6a8e`. All authored projections match. Native manager dirty state is retained separately from the public projection. Concrete leaf destructors, weak-parent/Object tails, mutable texture factory/release and bounded heap are declared observers; this verifies the ownership graph at those boundaries, not full native VM reference counts or GPU behavior.
+
+Four independent sanitizer fixture groups cover genuine raw identity and inherited transforms, complete populated retirement and deferred driver release, callback preflight rejection before any unlink/resource change, cleanup after bridge failure, Screen membership, detach/reattach and stale generations. All groups are preflighted before Close. Valid cleanup continues after a callback failure and explicit Close reports the first exception; destruction remains nonthrowing.
+
+ScriptRawTex registration and constructors, actual driver/background creation, worker cancellation and borrowed image lifetime, common task traversal, animation handlers and full native scene frames remain open. This owner supplies recovered lifetime behavior without claiming those integrations.

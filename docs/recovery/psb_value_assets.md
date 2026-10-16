@@ -1,0 +1,5 @@
+# Immutable PSB value assets
+
+`ScriptPsbBindings::ValueAsset` validates the generation and actual registered PSBValue wrapper, then returns its immutable document, backing buffer and original node identity. The node pointer borrows the returned document; keeping the complete asset alive keeps both node and bytes valid. Equal chunk references retain distinct node identities. PSBObject, uninitialized PSBValue, scalar and stale receivers are rejected by the existing native registry checks.
+
+This is an authored bridge for recovered synchronous resource adapters, not a new game-script method. It adds no VM host root and does not flatten PSB containers, copy payloads, expose mutable source bytes or alter script wrapper retirement. Chunk users must still validate chunk kind/index/offset/size against the retained backing before reading. Existing PSB fixture coverage now checks exact document/backing/node identities, unchanged script root counts, invalid receivers, ownership through VM Close and final C++ asset disposal. It does not by itself certify a new restore/decoder path; each consumer requires its native comparison.

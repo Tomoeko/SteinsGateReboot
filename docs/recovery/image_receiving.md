@@ -1,0 +1,13 @@
+# Image receiving and native Resource.loading
+
+The reference `sgre_steam.exe` SHA-256 is `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Explicit Binary Ninja view `candidate:view:1:UEU` was read without mutations.
+
+The original utility `loadData` constructs Resource, invokes load, polls its loading property, then finds the named PSB. `loadImageData` catches that error and prints an image-load failure. The actual hidden run proved getLoading failed because image/win MTex production was unsupported; the final missing loading message came from the native Object getter-failure fallback. No property registration or fallback change is required.
+
+Native `0x1404d6510` dispatches exact image at `0x1404d6d53`. For the outer derived owner it copies/rebases metadata through `0x1404cfb10` at `0x1404d6d68`, traverses imageList then each texture array in serialized order, and constructs one `0x140547ef0` MTexture for every tile.image at `0x1404d6e3a`. Every wrapper enters the owning vector at +0x108. Only after the complete traversal does `0x1404d6e9a` call `0x1404cfba0` to retire pixels. Generic derived destruction `0x1404d3dd0` retires those wrappers before PSB metadata.
+
+Later Image construction `0x1404f78c0` selects the first matching exact label (empty selects first), constructs separate MTexture wrappers for selected tiles, and applies mirror address2/2. These wrappers acquire the same document/value cache entries. The receiving document therefore retains the original metadata, logical supplied length and ordered preloads; Image catalog adoption shares its real cache identity and resource pin. It never presents metadata as complete pixel backing.
+
+ImagePreparationService uses the accepted bounded Motion preparation protocol: workers queue and wait, the real cache owner uploads through PreparePending, Stop cancels pending jobs before worker joins, and off-thread final pins queue owner-thread retirement. Resource loading remains pending through that preparation. Typed Resource.find and PSB/Image owners retain independent native manager pins through unload and facade retirement.
+
+Synthetic tests cover all-entry preload versus selected-entry wrappers, raw/wrapped actual file workers, loading/waiting, cache hits after purge, ordered release, partial upload rollback, foreign-cache rejection, missing producer and cancellation. These are source-level acceptance checks until compiled; no new original-instruction image-production or GPU pixel comparison is claimed. Existing source cache and Image constructor native witnesses remain separate evidence. Other PSB producer kinds remain guarded.

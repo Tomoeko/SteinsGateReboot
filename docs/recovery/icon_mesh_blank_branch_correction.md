@@ -1,0 +1,9 @@
+# Icon mesh inspection after actual source validation
+
+The registered icon mesh retention gate belongs only to the ordinary source branch, after its actual Binding, Texture, Source and Icon validation. A genuine ready blank descriptor has no atlas binding and must never inspect icon metadata. The frozen four-case icon-only stage is preserved and blocked because it moved this inspection ahead of the blank branch.
+
+This additive correction retains every blank and ordinary source row and preserves the existing unsupported direct/polygon geometry gate. A shared direct-source sanitizer proof exercises the retained eight original blank/retained-geometry cases and four original non-null icon-mesh cases against the same corrected ancestry object. The two native corpora remain immutable expected-value oracles. No new native run, texture upload or GPU output is part of this correction.
+
+Whole Kurisu acceptance, descriptor controllers, parameterized selection, alternate sync modes and unrecovered polygon/direct mesh ownership remain open.
+
+The subsequent kind12 check targets `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Original `0x140520d80` includes kind12 in its rectangle geometry mask. Eight complete parent/child cases execute 1,227,148 unchanged instructions across 8,888 verified sites through source lookup, metadata, clock, numeric composition, geometry and row publication. Four pairs differ only in the retained mask icon mesh atom; their geometry and rows match byte for byte. The lazy source helper and polygon decoder are never entered. The C++ receiving path matches 32 rows, 16 mask members and 736 vertex words; six related checks pass. Admission therefore includes ordinary and kind12 rectangle owners; other direct/polygon variants remain guarded. This is geometry evidence, with no whole-frame pixel or timing claim.

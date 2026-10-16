@@ -1,0 +1,31 @@
+# Neutral normalization combining order
+
+`ReorderNeutralUnicodeCombiningGlyphs` recovers the native neutral shaper's combining-order phase after its decomposition/output buffer swap. It borrows the current 20-byte glyph records and the retained previous-input records. Supported storage is separate buffers or spans with the same starting address, including different logical counts. It returns updated scratch flags. It owns no font or shaping buffer and performs no recursive normalization.
+
+Target: `STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are original executable virtual addresses. Explicit original PE Binary Ninja analysis was read-only.
+
+## Recovered phase
+
+Unicode preparation `0x1403f4440` calls normalizer `0x14040bf50` at `0x1403f451d`. After its decomposition phase, `0x14040c0f1` calls buffer swap `0x1403a69b0`. A successful swap exchanges distinct current/output pointers and retains the previous input pointer at buffer offsets `0xa0` and `0xa8`; aliased pointers stay unchanged. It swaps input/output counts, clears output-active byte `0x81`, and resets input cursor `0x84` to zero. The previous-input count remains at `0x8c`; it is not assumed to be zero.
+
+The recovered slice `0x14040c0f6` through `0x14040c1bd` scans current input records. A record qualifies only when its category, `CharacterState & 0x1f`, is 10, 11, or 12 and the low word's modified combining-class byte is nonzero. Other categories and zero classes split runs even when other property bits are set. Only contiguous qualifying runs of 2 through 32 records are sorted. Longer runs stay in their original order. The native scanner then skips the separating record.
+
+Insertion helper `0x1403a6850` uses comparator `0x14040c5a0`, which orders the modified combining-class bytes ascending and treats other categories as class zero. Equal classes preserve record order. Before each insertion, the helper merges or marks the affected cluster range, then moves complete records with original CRT `0x1405ac650` and restores the selected record at its insertion position. The first-party code preserves that sequence with bounded value copies.
+
+For cluster levels zero and one, merge helper `0x1403a5db0` computes the unsigned minimum of the affected clusters, extends both input boundaries through adjacent equal clusters, and writes that minimum to the expanded range. A changed cluster clears mask bit zero; unchanged clusters keep it. If the expanded first index reaches input cursor zero, the helper also backfills contiguous matching clusters at the end of the retained previous-input span. The boundary cluster is reloaded for each comparison because these buffers can alias.
+
+For cluster level two, `0x1403a6b50` retains clusters, sets mask bit zero on affected records whose cluster differs from the unsigned minimum, and sets scratch bit `0x10` if any such record exists. It does not expand boundaries or backfill previous input. Other mask bits, codepoint/glyph identities, glyph properties, private state, and character-state words are preserved as complete permuted records.
+
+The original neutral descriptor `0x140623700` has a null post-reorder callback at offset `0x58`. Its 104-byte observed prefix has SHA-256 `59d8d1d5dee371edeb516afb2f26e0054e36d895ce70a2e42a11f064df90abba`. Native selector `0x1403f3950` selects this descriptor for the already supported Latin, Cyrillic, and Han profiles; see [feature collection](text_shaping_features.md). Other descriptors' reorder hooks remain unsupported. The query requires the actual category/modified-class preprocessing and the successful post-swap cursor-zero state. Both borrowed spans are bounded to 4,096 records, and invalid cluster levels reject before mutation; those are authored safety limits.
+
+## Native proof
+
+Four strict C++20 ASan/UBSan groups verify stable order of complete records, both monotone levels' cluster/mask changes, previous-input backfill with separate and shared storage, character-level unsafe flags, category/class boundaries, run lengths 1/2/32/33/64, and preflight rejection.
+
+A bounded replay executes the unchanged normalizer slice, comparator, insertion helper, merge/unsafe helpers, and original CRT small-copy/backward-overlap paths. Code and the actual neutral descriptor are mapped read-only in Unicorn 2.1.4; all executed blocks are whitelisted. It checks buffer metadata, cursor/count preservation, return stack, record permutation, owner/descriptor immutability, retained identity/state fields, and both buffers' fences. No callback, guard, or memory operation was stubbed or patched.
+
+All 3,406 cases match C++ exactly: 178,755 current records and 125,171 retained records, totaling 1,523,036 compared words including scratch flags. The corpus covers all 32 category codes with boundary class values, run lengths through 4,096, stable equal-class permutations, 1,024 deterministic mixed cases, all three cluster levels, and both alias states. Its 768 prepared cases consume 4,240 records produced by the actual native Unicode preprocessing callback chain. Output SHA-256: `f9faf59b3fd713ef0534d1778f3cb623ab23fd603b7ab84a3deb7d8cdaa604c8`. Eight complete samples occupy 3,136 bytes and were replayed. Large comparison streams and original data dumps were not retained.
+
+## Integration prerequisites
+
+The full `0x14040bf50` normalizer remains open. Before using this stage in a shaping run, recover the nominal glyph callback at font-function offset `0x130`, variation glyph callback at `0x138`, recursive decomposition helper `0x14040c630`, emission helper `0x14040cef0`, and the allocation/error behavior behind buffer helpers. Default normalization wrappers `0x14040cae0` and `0x14040c5f0` initialize their outputs before dispatching the already recovered Unicode decomposition/composition callbacks; those wrappers and font acceptance must be integrated in original order. Recomposition after this phase must preserve modified-class blocking, font acceptance, cluster merging, and buffer publication. Script-specific hooks, general buffer ownership, nominal font mapping, final glyph positions, and full-run/frame fidelity are not established here.

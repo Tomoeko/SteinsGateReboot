@@ -1,0 +1,9 @@
+# TextRender rendered count getter
+
+Original `sgre_steam.exe` SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; explicit Binary Ninja view `candidate:view:1:UEU`.
+
+The `getRenderCount` registration is TextRender, not Motion: string `0x1405BE980`, registration `0x14003E457` inside `03CE90`, typed callback `03C7F0`, generic VM bridge `039FB0`. Callback checks actual wrapper detachment through `22D3D0`; detached returns zero. A live task is wrapper+80, its text core at task+B0. Actual leaf `030E30` is `mov eax,[rcx+254]; ret`. Generic bridge invokes the callback and `2240C0` publishes the low32 bits as the signed SQInteger value. The portable getter uses `bit_cast<int32_t>` on the actual existing content owner's RenderedElementCount, keeping every bit and requiring no added snapshot/counter.
+
+The retained core+254 parser count already has a genuine producer: per-unit append increments before actual append/overflow outcome, clear resets it, and done copies it into reveal state separately. This getter must not return stored element count, line count, shown count or draw-row count. The exact source owner stays with the real Text task; the getter borrows without mutating, preparing fonts or retaining any new owner.
+
+The original compiled motionpanel wrapper at census line13535 calls its actual `render.getRenderCount()`; the different MotionTextInfo branch is separate. The receiving fixture renders two actual VectorFont/CFF units, reads before done while shown count remains zero, after done, while shown count is zero, during real glyph callback, after clear/reuse, after parent-first task retirement and after native wrapper retirement. Existing Text method-capture/receiver checks remain unchanged. Native getter/bridge raw-word oracle is supplied independently by root; this package was not built by its author.

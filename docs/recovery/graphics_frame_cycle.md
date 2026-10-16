@@ -1,0 +1,13 @@
+# Ordinary graphics frame owner
+
+Reference: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+Original Display Pre `0x1404c4a90` resets statistics/bindings, begins the physical pool, unbinds/selects the backsurface, and resets models/default camera/raster. Post `0x1404c4930` publishes the physical pool entry byte after optional stereo/debug paths. Constructor `0x1404c36c0` initializes clear enabled, RGB DWORDs zero and alpha255; clear `0x1404c5fd0` normalizes those words. The retained executable byte audits distinguish constructor stores from executed native observations.
+
+`GraphicsFrameCycle` owns the actual model stack, shared frame/camera state, statistics, render records, descriptor-backed pool, stable packet receiver and camera/clip traversal scope. It borrows the concrete graphics, surface, workers and texture cache for its complete lifetime. Texture/pipeline preparation occurs before ordinary iteration. `PreFrame` performs the recovered CPU phases; `BeginDrawing` opens the actual primary Metal encoder after updates and writer completion. Packets use live camera/model/scissor state and stable exact pool inputs. `PostFrame` ends actual encoding, retires input borrows and ends the physical pool before publishing the real submission identity. Draw-paused frames still encode the actual opaque-black clear.
+
+Exact bound writer rows guard encoder Begin, packet admission and commit. Actual camera/clip traversal, including disabled Clip forwarding, guards root transitions and retirement. A nested failure leaves the cycle in cleanup-only state until the genuine traversal unwinds and an explicit quiescent Abort completes. Cleanup preserves the first error; it does not cancel or drain game worker queues. The startup scope borrow permits actual Layer registrations, while its draw admission requires the exact live active cycle.
+
+The focused fixture uses real selected-player numeric/source/geometry rows and packets from a bounded authored resource, verifies contrasting Metal pixels and the paused clear, and exercises pending writer and nested failure barriers. These are implementation checks, not native whole-frame comparisons. It requests no drawable or Present and never activates its hidden surface or produces audio.
+
+Open: concrete native Display clock registration/root/Present join; D3D backsurface/depth identity and depth/stencil clear; stereo/debug/copy/filter/mask branches; deferred Metal clear timing versus native Pre; update-time render effects; original startup and full character/shader frame fidelity. No milestone is closed by this component.

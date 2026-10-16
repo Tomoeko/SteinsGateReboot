@@ -1,0 +1,13 @@
+# CFF contour junctions
+
+Target: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses are executable virtual addresses.
+
+`FindCffContourJunction` reconstructs prepared logical join calculation from `0x1403c6010`. The caller supplies the previous and next segment endpoint pairs plus path thresholds. A nonparallel pair retains its candidate even when distance checks reject joining; a zero determinant produces no candidate. That distinction follows actual output writes and is useful to the pending-path owner.
+
+Native vectors first add 16 and reduce by arithmetic >>5. Separate `0x14039cda0` fixed multiplies produce the two cross products; `0x14039aa80` divides them to obtain the intersection parameter. The parameter maps back onto the full previous segment. The native uses fixed multiply rounding and low 32 wrapping at these stages; authored unsigned bit operations retain those defined results without C++ signed overflow.
+
+For each original axis-aligned segment, the candidate snaps to that axis only when its signed absolute difference is strictly below path+0x4914 tolerance. The prior pair snaps first, then the next pair. The midpoint is the signed truncating half of the wrapped sum of previous-end and next-start. Joining requires both coordinate distances to be at most path+0x4910; its equality boundary is inclusive. Negative prepared thresholds are rejected by the authored boundary. Native path preparation supplies 0x199a axis tolerance and twice the largest absolute darkening amount as the ordinary midpoint limit; choosing that glyph context remains separate from this helper.
+
+Two thousand unchanged native junction fixtures produced 1,640 candidates and 694 accepted joins. Authored C++ matched all 7,280 meaningful candidate-existence, acceptance and coordinate values, including retained candidates after rejection. Result SHA-256 `1148d224572215128713f480011eae3f4f38802675f72416c7512c66e4147f77`. Fixtures include parallel/axis-aligned/general segments, varying tolerances and full signed 32 coordinate boundaries. Candidate-memory write observation was passive; it changed no instruction, input or callback. All calls used preallocated private CPU storage without imports, GPU work or game launch.
+
+Focused tests preserve reduced-vector precision, strict axis-snap/inclusive-distance boundaries, rejected candidate retention, parallel absence and invalid limits. Project conversion/sign-conversion warnings, ASAN/UBSAN and formatting pass. The helper establishes prepared join geometry only. Native pending segment flush, closing-contour map snapshots, line/cubic callback emission, whole hinted contours and final raster pixels remain open.

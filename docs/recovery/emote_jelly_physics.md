@@ -1,0 +1,9 @@
+# Owning Jelly physical entity
+
+`EmoteJellyPhysics` recovers native `310740`, `316770`, `316b10`, `316230`, `316c00`, and `315c30`. It owns actual profile/model/ring/binding state for each authored tress and one common priority-ordered fitting pass, followed by both Bezier axis inverses. Substeps operate in native part order and use the six actual posture words. The constructor does not activate the entity; the containing driver must call `Initialize` on actual activation.
+
+The reference executable SHA-256 is `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. The full private original-instruction capture uses 12 bounded definitions, 20 actual models, and 96 reset/update/output phases, with only bounded allocation/free host services. It includes nonzero reference rotations, coordinate scales, auto/manual mass, both sample orders, multiple tresses, and partial rigid ranges. Tests derive all state from definition inputs; captured particles, rings, targets, and controls are expected observations only.
+
+The genuine constructor corrects two assumptions from older manually initialized solver fixtures: `324440` sums free inverse mass for spring scaling; the coordinate-scale conjugation in `323ed0` uses the reference rotation at definition `+8`. Old numerical step traces remain evidence for their captured state, not the complete constructor. No compatibility runtime policy preserves those assumptions.
+
+The containing metadata parser, UID lifecycle, shared force/collider attachment, prediction scheduling, replica/PartsTree dispatch, and actual resource driver integration remain separate. Correct-fix/scale use existing native-derived alignment helpers but are not enabled in this 96-phase capture. No whole-character physics or native pixel-fidelity acceptance is implied by this component.

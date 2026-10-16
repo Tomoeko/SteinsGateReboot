@@ -1,0 +1,19 @@
+# Emote point and rectangle particle producers
+
+Reference executable: `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; read-only analysis explicitly targeted `candidate:view:1:UEU`.
+
+The owner reconstructs point constructor `31c6d0`, rectangle constructor `31c720`, source posture `31df10`, automatic cadence `31dbb0`, generation count `31d200`, geometry `31d000`/`31d0a0`, and common sampled birth `31d2e0` into the actual `EmoteEmissionPool`. It advances actual countdown seconds, samples authored frequency on each crossing, multiplies the floored generation count, and publishes real particles. It does not insert captured numerical particle state.
+
+Native `2e4530` supplies an actual shared MEmote+190 PCG stream; this is separate from the eye-setup stream. The typed state is borrowed from its containing owner. The emitter preserves the 64-bit multiply/increment and 24-bit float draw, Y-before-X rectangle sampling, an unconditional angular draw even at zero angular drift, and the original particle-property draw order. `31cb30` returns the unmodified base without drawing when drift is zero; `31ca90` wraps its sampled angle by the authored maximum. Native range parser `2e48c0` reads `value`, `drift`, `minValue`, `maxValue`.
+
+Original-instruction comparison ran eight actual point/rectangle constructors, 64 timed emitter/pool phases, deterministic and varied property ranges, actual shared RNG state, wave/gravity, facing travel and real source origins. It executed 176 calls, 322,824 original instructions and 2,393 exact PE sites, with all native allocations freed. ASan/UBSan C++ comparison passes four embedded cases and the full eight: maximum absolute numeric error zero; shared RNG state is exactly equal after every phase.
+
+This is the automatic, world-space point/rectangle producer domain. The containing resource parser, MEmote+190 entropy consumption, trigger-variable/event routing, Bezier emitters, followMesh particle IO, collider reflection and emitted visual Motion players remain open. Nonpositive automatic frequency and work beyond bounded births/wraps reject explicitly. Physical control emission-reference gates must remain until their actual group leases and pre-physics update phase are joined.
+
+## Weighted cel records
+
+The `31c2c0` constructor owns all Motion records and expands positive weights into the actual selection-index table. Common birth `31d2e0` performs the native multiply/rejection bounded integer draw before radius and angular sampling, copies the selected Motion identity/frame count, derives radius from its source size, and selects the authored interval or `lifespan / particleLoopCount`. Zero-weight records remain owned but are never selected. No renderer or visual player is substituted for this selection.
+
+The additive original probe retains the first eight cases unchanged and adds four actual weighted constructors with different sizes, frame counts, zero/nonzero weights, owned short/long strings and both motion-step branches. Full C++ replay passes all12/96 phases with exact RNG states and Motion identities and maximum absolute numeric error `4.76837e-7`; two weighted cases are embedded. Source shape/temporal tolerances remain `8e-6` times the expected magnitude or one, as before.
+
+The remaining containing RNG producer is now directly recovered: `2ddf80` has a temporary seed0 default, but actual emission-map setup `2e9280` immediately reads a separate genuine `rand_s` word. It sets `increment=(~uint64(entropy)*2)|1`, then `state=(increment+entropy)*0x5851f42d4c957f2d+increment` before acquiring `emissionMap.auto` groups. The final containing owner must use that actual word rather than the eye RNG or a fixed diagnostic seed. `2e8340` constructs real cel records from `metadata.celGroup.groups`; its parser/UID/visual publication join remains open.

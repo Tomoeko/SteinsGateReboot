@@ -1,0 +1,9 @@
+# Template scanner and name expressions
+
+Target: `STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Explicit read-only Binary Ninja view: `candidate:view:1:UEU`.
+
+Registry callback `2a0dd0` delegates to scanner `225350`. The scanner preserves source bytes through the first NUL, collapses `$$`, recognizes ASCII identifiers and braced expressions, accepts a missing final brace, removes empty expressions, and uses the actual fallback for bodies exceeding200 bytes. Converted values use explicit-length strncpy semantics, including zero padding after an embedded NUL.
+
+The first-party compiler currently supports unqualified ASCII names and `this`. Native factor `25fb6c` searches local, outer and shared constant scopes before implicit-this lookup; absent-name instructions at `25fe3f–25fe9b` fold Load/Get into GetK9 through `2a59ef–2a5a2a`. The emitted name program uses stack2, GetK R1/this0 and Return R1. `this` returns local0 with stack1. Main varparams is one (`25dda4`, prototype copy `2a6130`). The exact38-word lexer table comes from `2a7290`. Constant-table values, broader syntax and complete compiler/debug metadata remain explicitly unsupported. These opcode facts are static executable derivation, not a new native compiler execution differential.
+
+Evaluator `2227f0` creates a real closure, optionally binds the supplied environment and calls with the original callback receiver in the executing context. Known runtime lookup failures select the actual fallback; string conversion runs through the real VM. Tests cover bound/ordinary receivers, current-context root fallback, scalar conversion, missing names, original string lengths and compiler metadata. This advances the original getSystemText name substitution while leaving full source compilation and complete template fidelity open.

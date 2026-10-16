@@ -1,0 +1,15 @@
+# Jelly constructor surface bindings
+
+The supplied `sgre_steam.exe` SHA-256 is `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8` (Binary Ninja `candidate:view:1:UEU`).
+
+`310740..3137e6` builds each real tress surface from its initial physical `N+1` sixteen-point rings. `314e90` produces the original ordered hull. Positive signed-area adjacent ring cells receive an edge-aligned/sheared trapezoid inverse. `315450` registers four exact bounding entries per cell; `30e6c0` queries the depth-four Morton leaf followed by ancestors, retaining reverse insertion order and strict bounds/polygon predicates (`314cb0`). The wide-cell branch uses the first Y bound in its X quarter cuts; the rewrite preserves that executable behavior.
+
+The constructor aligns the sampling plane with the actual post-TipTilt tress direction. Its triangular lattice advances X by `sqrt(3)*step/2`, advances Y by `step`, and shifts odd X rows by `-step/2`. A selected `(row=0,column=0)` binds the actual last section to the additional collapsed tip. Other points use the genuine selected cell inverse. Normalized rest coordinates, signed priority and float secondary ordering are preserved; no UV/fraction clamp or ellipse substitute is introduced.
+
+The retained full native constructor family executes all original numerical, container, polygon and tree instructions. Only allocator/free are explicit bounded host services; allocations start poisoned, every other executed PC is matched to original PE bytes, and writes remain in owned heap/stack. Twelve distinct definitions (33/34/43, N2/3/5/8, one/two tresses, zero/one/two fixes, tip/normal tilt, auto/manual mass, density2/3 and both ordering modes) were repeated with identical final observations. A passive successor captures the exact projection-direction arguments, hulls, cell inverses and final bindings without changing those observations. All1,422 cell inverses and176 final bindings match a separate float32 reconstruction exactly.
+
+The C++ expected-only fixture passes actual initial ring clouds plus physical sampling inputs, then compares the complete independently generated sample count/order/cell/fractions/rest coordinates. Default vectors cover five tresses/all three degrees; the optional ignored EJC1 vector covers all20 tresses/176 bindings. C++ compilation and numerical acceptance are separate root-owned checks.
+
+This component performs constructor-only sample binding. The containing metadata/tress constructor, rigid preservation constraints, solver scheduling, colliders and final Jelly UID mesh-output driver remain separate recovery work. The measured initial ring inputs are not a claim that the complete Jelly owner is already recovered.
+
+The actual C++ producer matches all20 retained native tresses and176 bindings with zero numeric difference, including selected cells, order and all scalar words. A one-operand matrix-composition translation correction uses the actual YX coefficient for the Y translation; original vectors and bounds are unchanged. Complete Jelly ownership and its containing driver remain separate recovery requirements.

@@ -1,0 +1,46 @@
+# Same-face shape-plan metadata and cache
+
+The genuine normalization font's `BlobFontFace` and prepared layout cache connect to the first-party feature-map and lookup-schedule compilers. This implements metadata ownership and caching. The 363/337 checkpoint validates eleven cache fixtures, three ownership groups and 64 native acquisitions across 16 controlled full-SFNT families. Glyph mutation, GSUB/GPOS execution, positions, rasterization and text GPU draws remain open.
+
+## Actual table provenance and lifetime
+
+`BlobFontFace::ShapePlans(actual_font)` verifies every SFNT table view against this face's exact immutable allocation and rejects nonzero face indices before preparation. Equal bytes in another allocation do not pass. Only a face construction key can create the cache. Only the cache can construct an admitted-table reader; arbitrary caller-created spans cannot acquire that admission. The cache reads the actual prepared `BlobFontLayoutCache`, checks its ready state, uses the repaired or rejected-effective GSUB/GPOS bytes and effective suppressed GDEF view, and verifies lookup counts against that cache's genuine accelerator arrays. It borrows these views for the face's serialized lifetime. No layout decoder, sanitizer or accelerator implementation is copied.
+
+The new reader mode keeps null root lists empty and retains counted null Script, Feature and Lookup slots without renumbering later records. The existing feature-schedule append helper continues to ignore indices beyond the actual cached lookup count. Payload single-substitution validation is skipped only for this provenance-restricted metadata mode because it would reinterpret repaired coverage offsets as unadmitted raw input. `ApplySingleSubstitution` explicitly rejects the admitted metadata reader. Existing raw-SFNT constructors, their validation order and payload behavior remain intact.
+
+This is deliberately still a supported metadata domain. Existing checks for script/language order, lookup type/reserved flags, GDEF classes, language feature indices, nonnull counted language records and supported table versions remain. A sanitizer-accepted variant outside these checks fails explicitly; it is not silently converted to an empty plan. Nonzero feature variations fail before plan publication. A nonempty coordinate vector retains the exact requested words and yields an uncached base-table metadata schedule; variable feature selection or coordinate effects are not claimed.
+
+The face owns the lazy plan cache after its layout cache member, so plan references and the cache's borrowed readers retire before layout tables, accelerators and parent bytes. Cache and caller references share only owned plan metadata. Each returned plan has a weak face-lifetime record and all metadata queries check it before use. Retaining a plan cannot keep a face, normalization font, SFNT reader or resource alive. An explicitly copied snapshot contains only values and can outlive the face. It cannot execute a lookup. References to the cache itself retain the ordinary documented borrow contract; using such a reference after face destruction is invalid. Preparation, plan access and face teardown are serialized, matching the existing face contract rather than inventing concurrent mutation semantics.
+
+## Exact key and native policy
+
+The logical property fields preserve the native DWORD direction and script plus all three QWORD language/user identities. Field equality accounts for all 32 native bytes without depending on C++ padding, host endianness or serialized object layout. User identities remain zero-only for the recovered engine-clear profile. Nonzero identities are rejected, not erased. The source accepts only the existing neutral Latin/Cyrillic/Han and direction 4/5/6 domain, checks the original native script word against the explicit configuration, and accepts either a genuinely absent language with identity zero or explicit canonical `en` with a supplied nonzero opaque identity. It does not intern, hash, fabricate or dereference a language token. There is no engine language binding or guessed startup configuration in this stage. Fixtures label their nonzero identity as synthetic input.
+
+Every feature tag, value, start and end word remains owned in original order, including duplicate tags and zero values. Every coordinate word remains owned. The existing collectors receive a separate exact tag conversion, preserving their established supported ASCII domain and feature behavior. This input preservation is distinct from the existing native feature-map consolidation operation.
+
+Matching uses the complete properties and feature vectors. Cached publication prepends the new entry and later search starts at the newest entry, matching the native head insertion. A request is cache eligible only when all feature ranges are start zero/end `ffffffff` and coordinate count is zero. Any nonempty coordinate vector, including an all-zero vector, bypasses cache search and publication. Every ranged request also stays uncached. Same-key cached acquisitions share metadata; different faces never share a cache entry.
+
+The capacity of 64 cached entries, 262144 retained metadata records, 4096 input feature records and 1024 coordinate words is authored safety policy. These limits are not native capacity or eviction measurements. The existing collector's 4096 total collected-record limit can reject fewer input features after adding neutral defaults. Exceeding a bound throws without publishing the candidate or evicting an existing plan. No native allocation-failure, concurrent head retry or user-data callback semantics are claimed by this portable metadata stage.
+
+## Retained executable evidence
+
+Logical target `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; all addresses are image virtual addresses. The immutable source proposal `vector-font-shape-call-connection-staging/ready-manifest.json` (`77a16978abcca9f5954b26056c310b42c5358cc595528446c2b9dbab7cd70b26`) contains the explicitly targeted `candidate:view:1:UEU` read-only observations reused here. This stage adds no analysis queries or analysis mutations.
+
+| Native owner | Recovered connection |
+| --- | --- |
+| `0x140088320`, `0x1400884a0`, `0x140088630`, `0x1403a6e80` | Actual unit/run/core calls reach the plan acquire, execute and release boundary. Seven cache-create arguments come from assembly rather than decompiler extra parameters. |
+| `0x1403f5580`, `0x1403a4db0`, `0x1403f5c80` | Plan owns feature/coordinate/OT allocations, freezes but borrows its face, and releases its own allocations without a face destroy. |
+| `0x1403a6e40`, `0x1403f5850` | All 32 property bytes and every feature/coordinate word participate in original comparison; nonzero coordinate count bypasses the cache. |
+| `0x1403f5b03`, `0x1403f5b0d`, `0x1403f5b43`, `0x1403f5b46`, `0x1403f5c37` | Full-range eligibility and new cache node's old-head link, then face-head publication. Serialized proposal preserves this newest-first order; native concurrent retry is outside this owner contract. |
+| `0x1403f2840`, `0x1403f28e7`, `0x1403ff200` | Cached plans retire before face layout-cache destruction and then parent callback storage. |
+| `0x1403a58d0`, `0x1403a6e20` | Engine clear zeros 32 property bytes; language setter preserves the actual opaque token. |
+| `0x1403f3d80`, `0x14040a2a0`, `0x1403fabc0`, `0x1404050b0`, `0x1403fa800` | Actual shape execution consumes the effective same-face cache/accelerators and stage/options drivers; that execution remains open. |
+| `0x1403a5970`, `0x1403a6d90`, `0x1403f35a0`, `0x1403f33a0` | Separate auxiliary position clearing and advance/origin/positioning order remains open. |
+
+## Validation and next gate
+
+The coherent shared core passes all 363 integrated sanitizer checks and 337 portable Release checks. Both controlled C++ profiles match the 64 retained native acquisitions: exact sanitized GDEF/GSUB/GPOS bytes and accelerator counts, complete32-byte property keys, ordered feature/coordinate words, compiled feature records, required stages and full lookup schedules. Real A,A,B,A acquisition/cache behavior and uncached face-expiry rejection pass. The diagnostic profile additionally compares actual newest-first cache order and metadata strong-reference relationships without adding observed owners.
+
+The native witness executes original blob/face/layout/plan acquisition and release instructions with modeled Windows heap/TLS services and a retained static guard environment. It uses explicit controlled full-SFNT inputs and canonical language identities; this does not establish original application-selected fonts/features or native allocator/control-block layout and heap-free timing. Fourteen fixture groups use genuine first-party BlobFaces and their caches rather than synthesized owner fields.
+
+Next: recover actual GSUB/GPOS execution, position storage and advance/origin initialization, marks/attachments, fallback/default ignorables, complete glyph runs, selected original startup/dialogue font and features, raster admission and text Metal packet/state/color semantics. Existing CFF metric admission and the explicit FontInfo vector-unit shaping rejection remain. Full game and original text-frame fidelity are open.

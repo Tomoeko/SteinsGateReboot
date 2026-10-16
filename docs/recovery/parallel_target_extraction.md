@@ -1,0 +1,7 @@
+# Exact target extraction
+
+Original `sgre_steam.exe` SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`, function `0x1404c0510`, walks the physical list and splices only the matching clock pointer, updating the tail when needed. It does not ask unrelated hook parents to retire. The inherited complete executable window and PE verification retain that byte provenance; no new native execution was performed.
+
+`ParallelTaskSet::CanExtract` now observes the exact live target's generation and optional borrow preflight after rejecting active traversal/release. A throwing target preflight returns false. Foreign/stale targets cannot invoke a preflight. `Extract` retains the existing ownership-preserving lease, and actual release still consults that detached target's own lifetime guard. The containing mutation scope may therefore retire its exact Post/Pre clocks while an unrelated parent remains live.
+
+Whole-set `Clear` and lease insertion keep their previous all-parent admission policy. No traversal or Release reentry is admitted. The two-unit stdlib-only sanitizer fixture discriminates one ready target from an unrelated nonready parent, then checks actual extraction/release, unchanged Clear rejection, active Update/Draw/Release barriers and throw/stale/foreign safety. It links no engine library, OS or GPU service; accepted447 is only a source/library guard. Frozen mutation0092 and phase26d remain unchanged.

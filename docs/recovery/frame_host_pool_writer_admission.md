@@ -1,0 +1,7 @@
+# Exact completed-writer admission
+
+`FrameHostPool::RequireCompletedWriters` observes the existing actual owner/controller and only this pool's bound `ThreadTaskReceiver` objects. It rejects queued/executing Updates and duplicate pending Posts before containing code begins encoding, appends packets or commits a command. Idle controller phase alone is insufficient: actual pending rows can remain after a root exception. The containing cycle must call this guard before each corresponding mutation.
+
+The guard is read-only. It permits a genuine active record frame and retained input cells, queries no layer/device/target metadata, and neither runs nor cancels work. Unrelated unbound pending receivers are accepted. This is an authored containing admission over recovered receiver state; it adds no native wait, audio/device readiness or exception recovery policy.
+
+The immutable parent pool remains unchanged. A focused real-owner fixture observes the guard before and during actual hidden encoding, then queues a bound writer that constructs actual pool inputs. Both real Post callbacks reject admission while their delivery phase is active even though their logical flag has cleared. After the actual worker/Post fence, admission succeeds while encoding and the exact input borrow remain live. Foreign/closed owner calls reject. No command is submitted and no drawable or Present is requested. Earlier native pending-bit/row provenance remains in the parent pool evidence.

@@ -1,0 +1,17 @@
+# Bracket ruby and whole text runs
+
+Target `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Addresses below are virtual addresses in that executable.
+
+Original `[text,n]` markup buffers n+1 base units, shapes bases separately and distributes annotation unit owners. `[text]` attaches a whole annotation run to one base. Incomplete bases remain pending; line feed clears pending annotations. IgnoreRuby consumes the operand while retaining ordinary base behavior. Annotation storage owns text, glyph runs and geometry. Reveal order/count/timing belong to base entries; bounds include annotations. Native draw dispatch0362a0/0367b0 emits base edge/shadow/main passes before annotation passes with the parent style and actual ruby font.
+
+The single-base annotation calls the whole UTF-16 provider through030fa0→03c940→03ccf0→0884a0→088630. Concatenating independent code-unit runs is incorrect: native fi/ffi ligatures and canonical kana normalization discriminate that shortcut. The first-party provider now owns the complete input through neutral normalization, scheduled direct single substitution, consecutive ligature substitution and checked pair positioning before owned-run publication. Native GDEF classification and ligature attachment state are retained. The admitted fresh CFF layout scale is measured; it is not inferred from a later FreeType size change.
+
+Coherent receiving freshly compiled441 portable runtime translation units with sanitizers; all7 changed/new runtime units and3 fixtures used strict warnings as errors. Three lifecycle/contextual fixtures passed, including an actual VM→FontInfo→Content→atlas two-input-to-one-glyph substitution. Six original CFF fonts yielded192 whole-run cases/1,584 retained words; twenty original ruby cases plus four whole-parser contexts yielded5,177 words, with zero differences and unchanged expected outputs. Prepared font/native parser services remain explicitly qualified in the private evidence.
+
+This does not establish general shaping or pixel parity. Retained marks, contextual/filter/device lookup programs, repaired layout tables, foreign layout direction/scale and bitmap whole-run providers still reject unsupported domains. Native base reveal, storage and pass order are validated separately from whole-game text, every annotation/font combination and final pixels.
+
+## Original scenario resource coverage
+
+A streamed strict ASan/UBSan receiving run visits all 187 scenario entries and processes all 840 populated Ruby-bearing language slots through the actual first-party FontOwner, FontInfo, VectorFont whole-run provider and Content owner. All 3,041 bracket operands match the earlier structural census, with zero rejected slots and empty sanitizer stderr. Original config selects the Japanese font for Ruby and the configured Japanese, traditional Chinese or simplified Chinese base face for its physical locale slot. Font constructor mode 0 and shaping language en come from those entries; the UI locale remains a separate choice.
+
+This uses the explicitly measured 24/10 font-size diagnostic profile without a render-width constraint, with a checked host findFont adapter. Original FontInfo script dispatch, each scene's actual styling/layout, runtime-generated strings, atlas pixels and per-string native equality remain outside this coverage. The private complete-census SHA-256 is `1946879d1959c177b4871ca0106137e5dbe44ea9680aa724c6a8f4cd1cb8a872`. No runtime correction was needed.

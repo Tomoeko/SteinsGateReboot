@@ -1,0 +1,13 @@
+# Emote timeline CPU coverage
+
+Reference installation: `Files/STEINS.GATE.REBOOT/`; executable `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+The completed successor sweep attempts all 137 motion entries. Forty contain the common Emote base; 97 have no such base and are counted separately. Every actual catalog label receives a fresh `MotionManagerRuntime`, constructor seed/clock and `EmoteScenePlayer`: 1,348 main labels plus 1,935 difference labels, totaling 3,283 cases. Actual `PlayTimeline` and six subsequent Progress/Draw/CPU-consumption phases complete for every case: 19,698 phases, zero resource/timeline rejections and zero unsupported-blend diagnostics.
+
+The inputs are deliberately finite diagnostic controls: explicit visibility true, play flags zero, fixed constructor entropy/counter and elapsed ticks `0,1,1,3,1,8`. They exercise the accepted queued-selector, named-easing, physical-math, zero-time and blend receiving behavior through the actual containing player. Each CPU phase validates frame event pairing, finite published fields and bounded batch indices. Each label closes its actual player with zero live physical players/UIDs, then closes its runtime. Each resource closes its manager and prunes the catalog; zero cached textures is required before the next resource.
+
+The observer source is byte-identical to its baseline. Copied coherent core/render libraries and headers are hash-sealed; no selective old/new runtime substitution is used. Frozen receiving manifest `Files/research/runtime/emote-containing-recovered-formatted-timelines-stage/receiving-ready-manifest.json` has SHA-256 `b799b7a38d78c861ad6cde974ab7507dac50187e70957e0c5c99a8f2c2f7d2d7`. The complete log hash is `0b85ee1193d3c329329b8baed9e20d181a1846724200c82f98632a811e260029`; the run exits zero after 4,964.03 seconds.
+
+This is sampled CPU and ownership coverage. Actual Metal texture allocation/upload/cache paths execute, but no GPU encoder frame, drawable/Present, readback, window activation or audio is exercised. Full animation duration, variable combinations, original visibility/timing and native whole-pose/pixel comparison remain open. No whole-game or all-model fidelity milestone is closed.
+
+Historical provenance is narrower than a complete hermetic replay: the retained input manifest seals the copied receiving dependencies, but not pre/post hashes of original motion body/index, seed or shader bytes. The original compile command is retained; a compiler-generated minimal dependency/link map was not retained. The later audit explicitly records these gaps rather than reconstructing missing historical evidence.
