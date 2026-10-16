@@ -550,6 +550,38 @@ static void TestSelectedLayerSetterControls() {
 	    "retired");
 }
 
+static void TestChainIntoShorterSelectedScene() {
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	auto& object = FixtureField(FixtureField(document->Root, "object"), "outer");
+	auto& motions = FixtureField(object, "motion");
+	auto shorter = FixtureField(motions, "main");
+	FixtureField(shorter, "lastTime") = Atom(4.0);
+	for (auto& layer : std::get<sgre::resource::PsbArray>(FixtureField(shorter, "layer").Data)) {
+		auto& frames = std::get<sgre::resource::PsbArray>(FixtureField(layer, "frameList").Data);
+		FixtureField(frames.back(), "time") = Atom(4.0);
+	}
+	auto& priority = std::get<sgre::resource::PsbArray>(FixtureField(shorter, "priority").Data);
+	FixtureField(priority.back(), "time") = Atom(4.0);
+	std::get<sgre::resource::PsbObject>(motions.Data).emplace_back("shorter", std::move(shorter));
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	static_cast<void>(fixture.Call(motion, "progress", {8.0f}));
+	auto task = fixture.Bindings->NativeOwners().Task(motion);
+	Require(task.Commands().ClockState().EvaluationTime == 8 && !task.Commands().ClockState().Playing, "first selected scene must reach its real old terminal time");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("shorter"), std::int32_t{2}}));
+	Require(task.Commands().ClockState().EvaluationTime == 8 && task.Commands().ClockState().LastTime == 4, "CHAIN must preserve the actual old evaluation word until the native update clips it");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(task.Commands().ClockState().TickCount == 8 && task.Commands().ClockState().EvaluationTime == 4 && !task.Commands().ClockState().Playing && !task.Commands().ClockState().InitialTagDispatchPending, "shorter CHAIN must traverse retained time then clip through the real clock without a replacement seek or tick rewrite");
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{20.0f} && fixture.Read(getter, "top") == sgre::script::SquirrelValue{40.0f}, "actual local/child cursors must complete the shorter CHAIN and retain the authored final pose");
+}
+
 static void TestActualScriptProgress() {
 	Fixture fixture;
 	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
@@ -1466,6 +1498,7 @@ int main() {
 		TestRetainedNumericPosition();
 		TestRetainedLayerVisibility();
 		TestSelectedLayerSetterControls();
+		TestChainIntoShorterSelectedScene();
 		TestActualScriptProgress();
 		TestNativeConstructorsAndArgumentGuards();
 		std::cout << "Motion layer getter: real recursive map, weak generation borrow and independent shape snapshots PASS\n";

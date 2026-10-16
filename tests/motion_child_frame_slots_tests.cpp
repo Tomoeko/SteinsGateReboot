@@ -332,8 +332,10 @@ static void TestSlotReuseAndOrder() {
 	slots.Select(sgre::scene::MotionFrameTraversal::Reverse, 1);
 	Require(actions == std::vector<std::string>{""} && slots.State().CurrentSlot == 0 && slots.State().FrameIndices == std::array<std::size_t, 2>{2, 3} && Words(child.Control(0))[0] == 4 && Words(child.Control(1))[0] == 2, "reverse crosses only below current time, prepares final reused slot and retains following absent control");
 	Require(action_controls[0][0][0] == 1, "reverse action precedes final control preparation");
+	slots.Select(sgre::scene::MotionFrameTraversal::Seek, 4);
+	Require(slots.State().CurrentSlot == 0 && slots.State().FrameIndices == std::array<std::size_t, 2>{0, 1}, "native initial seek beyond all child keys starts from the first frame pair without rewriting the supplied time");
 	RequireFailure([&] {
-		slots.Select(sgre::scene::MotionFrameTraversal::Seek, 4);
+		slots.Select(sgre::scene::MotionFrameTraversal::Seek, -1);
 	},
 	    "domain");
 	RequireFailure([&] {

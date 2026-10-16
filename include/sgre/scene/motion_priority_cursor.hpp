@@ -19,6 +19,10 @@ namespace sgre::scene {
 	public:
 		// Prepared timeline and its priority orders remain immutable and outlive this cursor.
 		explicit MotionPriorityCursor(const PreparedMotionTimeline& timeline);
+		// The actual physical player retains this word across selected timeline replacement.
+		MotionPriorityCursor(const PreparedMotionTimeline& timeline, std::uint32_t& retained_index);
+		MotionPriorityCursor(const MotionPriorityCursor&) = delete;
+		MotionPriorityCursor& operator=(const MotionPriorityCursor&) = delete;
 		void Seek(float position);
 		void Forward(float position);
 		void Reverse(float position);
@@ -33,6 +37,7 @@ namespace sgre::scene {
 		void Select(std::size_t index) noexcept;
 		const PreparedMotionTimeline& m_Timeline;
 		MotionPriorityCursorState m_State;
+		std::uint32_t* m_RetainedIndex = nullptr;
 	};
 
 } // namespace sgre::scene

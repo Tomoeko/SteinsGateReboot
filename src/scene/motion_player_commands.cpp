@@ -98,6 +98,7 @@ namespace sgre::scene {
 		m_SelectedLayersCleared = source.m_SelectedLayersCleared;
 		m_SelectionSerial = source.m_SelectionSerial;
 		m_MeshDivisionRatio = source.m_MeshDivisionRatio;
+		m_PriorityFrameIndex = source.m_PriorityFrameIndex;
 		m_TimelineVariables = std::move(variables);
 	}
 

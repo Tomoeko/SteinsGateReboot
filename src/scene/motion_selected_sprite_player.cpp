@@ -75,7 +75,7 @@ namespace sgre::scene {
 		}
 
 		Selection(MotionSelectedSpritePlayer& owner, const resource::MotionResource& resource, const resource::MotionTimeline& timeline, const PreparedMotionTimeline& preparation, const PreparedMotionSourceRegistry& sources, const ResolvedMotionTimeline& selected, MotionPreparationLease preparation_owner)
-		    : PreparationOwner(std::move(preparation_owner)), Resource(resource), Timeline(timeline), Preparation(preparation), Project(selected.Project), Identity(selected.Identity), Nodes(owner.m_Commands, owner.m_Root, owner.m_Render, timeline, preparation, owner.m_Identifiers, owner.m_Services.Construction, MakeSlotServices(owner)), Priority(preparation), Geometries(preparation.Layers.size()), Frames(timeline, preparation, resource, MakeFrameServices(owner, *this)), Composition(preparation, owner.m_Root, !owner.m_Services.IndependentLayerInherit) {
+		    : PreparationOwner(std::move(preparation_owner)), Resource(resource), Timeline(timeline), Preparation(preparation), Project(selected.Project), Identity(selected.Identity), Nodes(owner.m_Commands, owner.m_Root, owner.m_Render, timeline, preparation, owner.m_Identifiers, owner.m_Services.Construction, MakeSlotServices(owner)), Priority(preparation, owner.m_Commands.m_PriorityFrameIndex), Geometries(preparation.Layers.size()), Frames(timeline, preparation, resource, MakeFrameServices(owner, *this)), Composition(preparation, owner.m_Root, !owner.m_Services.IndependentLayerInherit) {
 			if (preparation.Layers.size() > 65536 || Nodes.ChildOrdinals().size() != 0) {
 				throw std::runtime_error("motion sprite selected owner requires bounded real sprite/hierarchy nodes; kind3 needs its enclosing child producer");
 			}

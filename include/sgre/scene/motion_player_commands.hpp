@@ -134,6 +134,8 @@ namespace sgre::scene {
 		const resource::MotionTimeline* m_CachedTimeline = nullptr;
 		std::function<void(const ResolvedMotionTimeline&, MotionPlayFlags)> m_InstallSelection;
 		std::function<void()> m_CaptureJoin;
+		// Native player+210 survives selected-tree replacement, including CHAIN into a shorter track.
+		std::uint32_t m_PriorityFrameIndex = 0;
 	};
 
 } // namespace sgre::scene

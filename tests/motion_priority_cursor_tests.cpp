@@ -62,9 +62,15 @@ static void TestCursor() {
 	Require(cursor.State().Index == 2 && cursor.State().FollowingTime == 4 && cursor.DrawOrder().front() == 2, "exact terminal seek must clamp to count minus two");
 	cursor.Forward(4);
 	Require(cursor.State().Index == 2, "forward must never activate terminal content");
-	RequireFailure([&] {
-		cursor.Seek(5);
-	});
+	cursor.Seek(5);
+	Require(cursor.State().Index == 2 && cursor.State().CurrentTime == 2 && cursor.DrawOrder().front() == 2, "native seek beyond every key retains the prior index before the count-minus-two cap");
+	std::uint32_t retained_index = 1;
+	sgre::scene::MotionPriorityCursor chained(timeline, retained_index);
+	Require(!chained.State().Initialized && chained.DrawOrder().empty(), "retained physical index must not publish a new selected track before its first seek");
+	chained.Seek(48);
+	Require(chained.State().Index == 1 && retained_index == 1 && chained.State().CurrentTime == 2 && chained.State().FollowingTime == 2 && chained.DrawOrder().front() == 1, "CHAIN initial seek beyond the new duration must retain the physical player's prior index");
+	chained.Forward(4);
+	Require(chained.State().Index == 2 && retained_index == 2, "subsequent native forward traversal publishes the final real interval without activating the marker");
 	RequireFailure([&] {
 		cursor.Seek(-1);
 	});

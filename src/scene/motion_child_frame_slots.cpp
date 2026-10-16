@@ -198,7 +198,7 @@ namespace sgre::scene {
 		MotionChildSlotSelectionScope scope(m_Selecting);
 		const auto previous_frame = m_State.Initialized ? std::optional<std::size_t>(m_State.FrameIndices[m_State.CurrentSlot]) : std::nullopt;
 		m_Published = false;
-		if (!std::isfinite(position) || position < 0 || (!parameter && position > m_LastTime) || (traversal != MotionFrameTraversal::Seek && traversal != MotionFrameTraversal::Forward && traversal != MotionFrameTraversal::Reverse && !(parameter && traversal == MotionFrameTraversal::ParameterOnly))) {
+		if (!std::isfinite(position) || position < 0 || (traversal != MotionFrameTraversal::Seek && traversal != MotionFrameTraversal::Forward && traversal != MotionFrameTraversal::Reverse && !(parameter && traversal == MotionFrameTraversal::ParameterOnly))) {
 			throw std::runtime_error("motion child frame traversal is outside its ordinary domain");
 		}
 

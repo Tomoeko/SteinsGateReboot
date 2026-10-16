@@ -93,7 +93,7 @@ namespace sgre::scene {
 				Stencil = std::make_unique<MotionLayerStencilAncestry>(selected);
 				Clips = std::make_unique<MotionLayerClipRectangles>(Local->Preparation());
 				Rows = std::make_unique<MotionStencilRowPolicies>(selected, *Stencil, containing == nullptr ? nullptr : containing->Rows.get());
-				Priority = std::make_unique<MotionPriorityCursor>(Local->Preparation());
+				Priority = std::make_unique<MotionPriorityCursor>(Local->Preparation(), commands.m_PriorityFrameIndex);
 				CurrentIndices.resize(selected.Nodes().size());
 				CurrentSources.resize(selected.Nodes().size());
 				Children.resize(selected.Nodes().size());

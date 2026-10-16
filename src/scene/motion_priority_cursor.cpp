@@ -21,13 +21,18 @@ namespace sgre::scene {
 		}
 	}
 
+	MotionPriorityCursor::MotionPriorityCursor(const PreparedMotionTimeline& timeline, std::uint32_t& retained_index) : MotionPriorityCursor(timeline) {
+		m_RetainedIndex = &retained_index;
+		m_State.Index = retained_index;
+	}
+
 	const PreparedMotionTimeline& MotionPriorityCursor::Preparation() const noexcept {
 		return m_Timeline;
 	}
 
 	void MotionPriorityCursor::RequirePosition(float position) const {
-		if (!std::isfinite(position) || position < 0 || position > m_Timeline.LastTime) {
-			throw std::runtime_error("motion priority cursor position is outside its ordinary evaluation domain");
+		if (!std::isfinite(position) || position < 0) {
+			throw std::runtime_error("motion priority cursor requires a finite nonnegative evaluation position");
 		}
 	}
 
@@ -36,6 +41,9 @@ namespace sgre::scene {
 		m_State.CurrentTime = m_Timeline.Priority[index].Time;
 		m_State.FollowingTime = m_Timeline.Priority[index + 1].Time;
 		m_State.Initialized = true;
+		if (m_RetainedIndex != nullptr) {
+			*m_RetainedIndex = static_cast<std::uint32_t>(index);
+		}
 	}
 
 	void MotionPriorityCursor::Seek(float position) {

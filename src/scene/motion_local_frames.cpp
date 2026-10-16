@@ -347,7 +347,7 @@ namespace sgre::scene {
 			throw std::runtime_error("motion local selection serial exhausted its owner lifetime");
 		}
 		++m_SelectionSerial;
-		if (!std::isfinite(position) || position < 0 || position > m_Timeline.LastTime || (traversal != MotionFrameTraversal::Seek && traversal != MotionFrameTraversal::Forward && traversal != MotionFrameTraversal::Reverse && traversal != MotionFrameTraversal::ParameterOnly)) {
+		if (!std::isfinite(position) || position < 0 || (traversal != MotionFrameTraversal::Seek && traversal != MotionFrameTraversal::Forward && traversal != MotionFrameTraversal::Reverse && traversal != MotionFrameTraversal::ParameterOnly)) {
 			throw std::runtime_error("motion local frame traversal is outside its ordinary domain");
 		}
 
