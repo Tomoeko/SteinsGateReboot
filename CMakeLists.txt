@@ -748,6 +748,7 @@ if(SGRE_BUILD_TESTS)
 		image_bindings
 		layer_picture_bindings
 		layer_proxy_bindings
+		layer_proxy_target_family
 		fill_rectangle_bindings
 		capture_bindings
 		captured_bindings
@@ -1940,9 +1941,9 @@ if(SGRE_BUILD_TESTS AND SGRE_BUILD_MACOS_RENDERER)
 		endif()
 	endforeach()
 
-	set(SGRE_GRAPHICS_POOL_TESTS presentation_capacity frame_host_pool frame_host_pool_writer graphics_frame_cycle graphics_display_frame)
+	set(SGRE_GRAPHICS_POOL_TESTS presentation_capacity frame_host_pool frame_host_pool_writer graphics_frame_cycle graphics_display_frame motion_scene_repeat_draw)
 	foreach(test_name IN LISTS SGRE_GRAPHICS_POOL_TESTS)
-		if(test_name STREQUAL "graphics_frame_cycle" OR test_name STREQUAL "graphics_display_frame")
+		if(test_name STREQUAL "graphics_frame_cycle" OR test_name STREQUAL "graphics_display_frame" OR test_name STREQUAL "motion_scene_repeat_draw")
 			add_executable(${test_name}_tests tests/${test_name}_tests.mm)
 		else()
 			add_executable(${test_name}_tests src/platform/macos/tests/${test_name}_tests.mm)

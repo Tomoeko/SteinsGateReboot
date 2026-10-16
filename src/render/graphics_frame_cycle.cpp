@@ -589,6 +589,10 @@ namespace sgre::render {
 			const auto globals = m_Records.SceneFrameGlobals(sizes);
 			const auto prepared = actual_context.Prepare(globals);
 			m_Receiver.DrawActualFrame(prepared, actual_local_slots, scratch);
+			// Native512443 consumes this manager queue after synchronous encoding, before the outer End.
+			actual_context.Clear();
+			// Keep the bounded occurrence slot; copied inputs and GPU owners still retire at End/Abort.
+			m_SceneContexts[occurrence] = nullptr;
 		} catch (...) {
 			const auto first = std::current_exception();
 			try {
@@ -602,6 +606,9 @@ namespace sgre::render {
 	void GraphicsFrameCycle::ReleaseSceneContexts() {
 		std::exception_ptr first;
 		for (auto* context : m_SceneContexts) {
+			if (context == nullptr) {
+				continue;
+			}
 			try {
 				context->Clear();
 			} catch (...) {

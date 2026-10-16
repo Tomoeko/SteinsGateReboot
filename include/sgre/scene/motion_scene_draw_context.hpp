@@ -12,7 +12,8 @@ namespace sgre::scene {
 	class MotionSceneDrawContext {
 	public:
 		// Real task Draw appends its actual scene once per source-manager draw occurrence.
-		// Scene, selected/prepared/resource owners and all publication spans remain live until Clear after End/Abort.
+		// Scene, selected/prepared/resource owners and publication spans remain live until Clear.
+		// A synchronous manager flush consumes them after encoding; outer copied inputs retire at End/Abort.
 		explicit MotionSceneDrawContext(const MotionManagerRuntime& actual_runtime, std::size_t maximum_scenes = 1024, std::size_t maximum_rows = 65536);
 		~MotionSceneDrawContext();
 		MotionSceneDrawContext(const MotionSceneDrawContext&) = delete;

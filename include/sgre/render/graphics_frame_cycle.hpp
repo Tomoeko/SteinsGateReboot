@@ -62,7 +62,8 @@ namespace sgre::render {
 		[[nodiscard]] const scene::LayerCameraFrameState& FrameState() const;
 		// Actual selected-player contexts feed this contained receiver; no external frame globals are accepted.
 		void Draw(scene::MotionSpriteDrawContext& actual_context, const scene::MotionFrameScratch& actual_scratch);
-		// Consume the single actual manager Draw publication at its current camera/model scope.
+		// Consume the actual manager Draw publication synchronously at its current camera/model scope.
+		// A completed queue may be reused in this outer frame; copied GPU inputs remain owned through End/Abort.
 		void DrawScene(scene::MotionSceneDrawContext& actual_context, std::span<const scene::CachedTextureHandle> actual_local_slots, const scene::MotionFrameScratch& scratch);
 		// Construct script RawTex owners against this exact backend before ordinary drawing.
 		[[nodiscard]] scene::MutableTextureBackend& RawTextureBackend();
@@ -127,6 +128,7 @@ namespace sgre::render {
 		MotionSpriteRecordReceiver m_Receiver;
 		BitmapFontRecordReceiver m_BitmapReceiver;
 		ScreenProjectionRecordReceiver m_ProjectionReceiver;
+		// Completed occurrences retain a null slot until End/Abort; only unfinished queues remain borrowed.
 		std::vector<scene::MotionSceneDrawContext*> m_SceneContexts;
 		std::vector<std::vector<resource::MotionPoint>> m_SceneTextureSizes;
 		std::size_t m_MaximumTextureSlots = 0;

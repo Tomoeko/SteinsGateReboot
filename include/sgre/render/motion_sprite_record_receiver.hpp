@@ -42,8 +42,9 @@ namespace sgre::render {
 		// Replays that exact deterministic publication against the current camera/target and real mask phases.
 		void DrawPreparedFrame(const scene::MotionFrameScratch& scratch);
 		// One real manager flush: each element is its actual local slot, not a cache index or another manager's slot.
-		// Dense table and frame.TextureSizes must agree; source/cache owners enclose outer Post/Abort.
-		// Earlier occurrence inputs and copied owners remain retained until ReleaseFrameInputs.
+		// The actual local table and frame.TextureSizes must agree; cache owners enclose outer Post/Abort.
+		// Borrowed publication spans are retired before a successful return, allowing manager queue consumption.
+		// Earlier occurrence inputs and copied GPU owners remain retained until ReleaseFrameInputs.
 		void DrawActualFrame(const scene::MotionPreparedFrame& actual_frame, std::span<const scene::CachedTextureHandle> actual_local_slots, const scene::MotionFrameScratch& scratch);
 		// Call only at genuine outer frame quiescence, before recycling the real heap's physical frame.
 		void ReleaseFrameInputs();
