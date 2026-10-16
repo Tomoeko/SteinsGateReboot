@@ -180,7 +180,7 @@ static void TestNestedEmittedPlayers() {
 	Require(fixture.Runtime->Identifiers().LiveCount() == 7 && fixture.Events.size() == 4, "each actual emitted ordinary player must construct its own kind4 emitter, source rows and independent child vector");
 	task.Progress(1);
 	RequireParticleRows(task, 4);
-	Require(fixture.Runtime->Identifiers().LiveCount() == 7 && fixture.Events.size() == 8, "native transferred color dirties the emitted root even when its retained modulation already matches, so nested bursts follow actual numeric Changed");
+	Require(fixture.Runtime->Identifiers().LiveCount() == 7 && fixture.Events.size() == 4, "native523252 requires a physical frame change; transferred color must not repeat nested births or their actions");
 	fixture.Tasks.Clear();
 	Require(fixture.Runtime->Identifiers().LiveCount() == 0, "nested actual particle trees must retire all selected owners and row borrows");
 }

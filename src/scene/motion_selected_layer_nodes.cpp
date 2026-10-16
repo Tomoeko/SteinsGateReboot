@@ -295,8 +295,12 @@ namespace sgre::scene {
 			auto& node = m_Nodes[index];
 			auto& actual = *m_Owners[index];
 			const auto& old = *source.m_Owners[index];
-			if (old.Particles && !old.Particles->m_Particles.empty()) {
-				throw std::runtime_error("motion clone retained kind4 players require the original full lifecycle copy witness");
+			if (old.Particles) {
+				for (const auto& particle : old.Particles->m_Particles) {
+					if (!particle || !particle->Player || !particle->Selected || particle->Player->m_UpdateOwner == nullptr || particle->Selected->m_EnclosingParticle != particle->Player.get() || particle->Selected->m_ContainingSelected != &source || &particle->Player->ImmediateParentCommands() != &source.m_Commands || !particle->Player->m_PreparationOwner.Owns(source.m_Commands.Manager(), particle->Selected->m_Timeline, &particle->Selected->m_Preparation)) {
+						throw std::runtime_error("motion retained particle clone requires its actual completed selected player, containing owner and preparation lease");
+					}
+				}
 			}
 			if (!old.IdentifierLive || node.Raw == nullptr || node.Prepared != &m_Preparation.Layers[index]) {
 				throw std::runtime_error("motion selected clone encountered a retired or mismatched source node");
@@ -340,6 +344,16 @@ namespace sgre::scene {
 			}
 			if (old.Particles) {
 				actual.Particles = std::make_unique<MotionParticleLayerState>(*old.Particles, *node.Prepared);
+				// Native505d9e recursively copies every retained player in birth order, including stopped children awaiting pruning.
+				for (const auto& source_particle : old.Particles->m_Particles) {
+					auto particle = std::make_unique<MotionParticleInstance>();
+					particle->Player = std::make_unique<MotionParticlePlayerState>(*source_particle->Player, m_Commands, ultimate);
+					// Native510e36 retains the outside-screen entry latch; copying is not a new birth.
+					particle->Screen = source_particle->Screen;
+					particle->Selected = std::make_unique<MotionSelectedLayerNodes>(*particle->Player, *source_particle->Selected, m_Identifiers, m_Construction, MotionChildFrameSlotServices{});
+					particle->Selected->m_ContainingSelected = this;
+					actual.Particles->m_Particles.push_back(std::move(particle));
+				}
 			}
 		}
 	}

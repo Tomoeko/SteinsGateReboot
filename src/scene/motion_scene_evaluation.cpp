@@ -250,7 +250,16 @@ namespace sgre::scene {
 					throw std::runtime_error("motion scene composition differs from its actual timeline");
 				}
 				if (ClonedRootTransferPending) {
-					if (Child == nullptr || Containing == nullptr || Child->m_DeformationTransferOwner != Containing->Ancestry.get() || Child->m_DeformationTransferSerial != Containing->Ancestry->m_AncestrySerial || Child->m_DeformationTransferSerial == ClonedContainingSerial) {
+					const MotionSelectedMeshAncestry* transfer_owner = nullptr;
+					std::uint64_t transfer_serial = 0;
+					if (Child != nullptr) {
+						transfer_owner = Child->m_DeformationTransferOwner;
+						transfer_serial = Child->m_DeformationTransferSerial;
+					} else if (Particle != nullptr) {
+						transfer_owner = Particle->m_DeformationTransferOwner;
+						transfer_serial = Particle->m_DeformationTransferSerial;
+					}
+					if (Containing == nullptr || transfer_owner != Containing->Ancestry.get() || transfer_serial != Containing->Ancestry->m_AncestrySerial || transfer_serial == ClonedContainingSerial) {
 						throw std::runtime_error("motion copied child root requires a fresh genuine parent transfer before its next numeric composition");
 					}
 					ClonedRootTransferPending = false;
@@ -548,7 +557,7 @@ namespace sgre::scene {
 				const auto& numeric = emitter.Frames().Numeric();
 				MotionParticleEmissionInput input;
 				input.Active = Composition->Layers()[layer].Active;
-				input.FrameChanged = Composition->Changed(layer);
+				input.FrameChanged = frame.FrameDirty;
 				input.Trigger = emitter.Frames().Control(frame.CurrentSlot).Trigger;
 				input.FrequencyMin = numeric.FrequencyMin;
 				input.FrequencyMax = numeric.FrequencyMax;
@@ -802,14 +811,18 @@ namespace sgre::scene {
 					destination.UnselectedUpdates[layer]->CopyForClone(*source.UnselectedUpdates[layer], Runtime);
 				}
 				const auto& original = source.ParticleContexts[layer];
+				if (source.Selected.Nodes()[layer].Prepared->Type == 4 && source.Selected.Particles(static_cast<std::uint32_t>(layer)).Size() != original.size()) {
+					throw std::runtime_error("motion retained particle clone requires its exact completed selected/context vector pair");
+				}
 				auto& copied = destination.ParticleContexts[layer];
 				copied.resize(original.size());
 				if (!original.empty() && destination.Selected.Particles(static_cast<std::uint32_t>(layer)).Size() != original.size()) {
 					throw std::runtime_error("motion clone lost an actual particle occurrence");
 				}
 				for (std::size_t occurrence = 0; occurrence < original.size(); ++occurrence) {
-					if (!original[occurrence]) {
-						continue;
+					const auto& source_instance = *source.Selected.Particles(static_cast<std::uint32_t>(layer)).m_Particles[occurrence];
+					if (!original[occurrence] || original[occurrence]->Particle != source_instance.Player.get() || &original[occurrence]->Selected != source_instance.Selected.get() || original[occurrence]->Update != source_instance.Player->m_UpdateOwner) {
+						throw std::runtime_error("motion retained particle clone requires each completed context to belong to its actual player and selected tree");
 					}
 					auto& instance = *destination.Selected.Particles(static_cast<std::uint32_t>(layer)).m_Particles[occurrence];
 					if (!instance.Selected || !instance.Player) {
@@ -822,7 +835,13 @@ namespace sgre::scene {
 					player.Commands().m_InstallSelection = [&destination, actual = &instance](const auto& selection, auto flags) {
 						destination.InstallParticleSelection(*actual, selection, flags);
 					};
+					// The copied root keeps only a dormant receipt until this new parent performs the next real transfer.
+					player.m_DeformationTransferOwner = destination.Ancestry.get();
+					player.m_DeformationTransferLayer = static_cast<std::uint32_t>(layer);
+					player.m_DeformationTransferSerial = destination.Ancestry->m_AncestrySerial;
 					copied[occurrence] = std::make_unique<Context>(*this, *instance.Selected, player.Commands(), player.Root(), player.RenderControls(), nullptr, &destination, nullptr, &player, destination.Depth + 1, original[occurrence].get());
+					copied[occurrence]->ClonedRootTransferPending = true;
+					copied[occurrence]->ClonedContainingSerial = destination.Ancestry->m_AncestrySerial;
 					CloneContextTree(*copied[occurrence], *original[occurrence], contexts);
 				}
 			}

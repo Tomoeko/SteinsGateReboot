@@ -1056,6 +1056,7 @@ if(SGRE_BUILD_TESTS)
 		motion_particle_birth
 		motion_particle_retirement
 		motion_particle_scene
+		motion_particle_clone
 		motion_particle_rows
 		movie_packet
 		movie_layer_bindings
