@@ -184,6 +184,45 @@ static void TestPropertiesAndDelegates() {
 	    "already initialized");
 }
 
+static void TestCyclicDelegateStatusAndMutation() {
+	SquirrelVm vm;
+	ScriptObjectBindings objects(vm);
+	const auto derived = vm.CreateClass(objects.ObjectClass());
+	std::size_t getters = 0;
+	vm.NewSlot(derived, std::string("getMissing"), vm.CreateNativeClosure("counted-failed-property", [&](SquirrelVm&, const auto) {
+		++getters;
+
+		return SquirrelNativeResult::StackStatus(-1);
+	}));
+	std::size_t changing_getters = 0;
+	vm.NewSlot(derived, std::string("getChanging"), vm.CreateNativeClosure("stateful-cyclic-property", [&](SquirrelVm&, const auto) {
+		++changing_getters;
+		if (changing_getters < 10) {
+			return SquirrelNativeResult::StackStatus(-1);
+		}
+
+		return SquirrelNativeResult::ReturnValue(std::int32_t{73});
+	}));
+	const auto first = vm.CreateInstance(derived);
+	const auto second = vm.CreateInstance(derived);
+	const auto third = vm.CreateInstance(derived);
+	objects.AttachInstance(first, second);
+	objects.AttachInstance(second, third);
+	objects.AttachInstance(third, first);
+	RequireFailure([&] {
+		static_cast<void>(vm.ReadSlot(first, std::string("missing")));
+	},
+	    "the index doesn't exist");
+	Require(getters == 99 && sgre::script::StringText(vm.LastError()) == "the index doesn't exist", "cyclic Object lookup must retain the native 100-level limit and execute each admitted getter");
+
+	Require(vm.ReadSlot(first, std::string("changing")) == SquirrelValue{std::int32_t{73}} && changing_getters == 10, "a repeated receiver/key can succeed after stateful getters; cyclic traversal must not be short-circuited or cached");
+	const auto replacement = vm.CreateTable();
+	vm.NewSlot(replacement, std::string("missing"), std::int32_t{91});
+	objects.SetDelegate(second, replacement);
+	Require(vm.ReadSlot(first, std::string("missing")) == SquirrelValue{std::int32_t{91}} && getters == 101, "a later delegate mutation must be visible immediately after a cyclic miss");
+	Require(vm.ObserveContext(vm.RootContext()).NativeFrameCount == 0 && vm.ContextState(vm.RootContext()) == sgre::script::SquirrelContextState::Idle, "failed delegated native calls must fully restore their physical frames and counters");
+}
+
 static void TestDelegateClosureBinding() {
 	SquirrelVm vm;
 	ScriptObjectBindings objects(vm);
@@ -517,6 +556,7 @@ int main() {
 		TestNamedBaseConstructorReceiver();
 		TestRegisteredWeakReferenceMember();
 		TestPropertiesAndDelegates();
+		TestCyclicDelegateStatusAndMutation();
 		TestDelegateClosureBinding();
 		TestCompletionObservers();
 		TestBridgeOwnership();

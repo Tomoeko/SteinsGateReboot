@@ -1,11 +1,14 @@
 #include "sgre/script/squirrel_vm.hpp"
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 using sgre::script::SquirrelNativeResult;
@@ -137,12 +140,81 @@ static void TestResultRetiresBeforeReceiverAndCallerRestores() {
 	vm.RethrowReleaseFailure();
 }
 
+static void TestInvalidGetterStatusRemainsSafetyFailure() {
+	SquirrelVm vm;
+	const auto class_value = vm.CreateClass();
+	vm.NewSlot(class_value, std::string("_get"), vm.CreateNativeClosure("invalid-status-suspension", [](SquirrelVm&, const auto) {
+		auto result = SquirrelNativeResult::StackStatus(-1);
+		result.Suspend = true;
+
+		return result;
+	}));
+	const auto instance = vm.CreateInstance(class_value);
+	bool failed = false;
+	try {
+		static_cast<void>(vm.FindPropertyInContext(vm.RootContext(), instance, "invalid"));
+	} catch (const sgre::script::SquirrelVmException&) {
+		throw std::runtime_error("invalid callback state must not become ignored native missing status");
+	} catch (const std::runtime_error& error) {
+		Require(std::string_view(error.what()) == "Squirrel explicit native status cannot use compatibility suspension", "invalid callback state must retain its separate safety diagnostic");
+		failed = true;
+	}
+
+	Require(failed && vm.ObserveContext(vm.RootContext()).NativeFrameCount == 0 && vm.ContextState(vm.RootContext()) == sgre::script::SquirrelContextState::Idle, "native status recovery must preserve callback safety validation and unwind physical frames");
+}
+
+static void TestOwnedPropertyResultAndMissingStatus() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SquirrelVm vm(limits);
+	const auto root = vm.RootContext();
+	const auto child = vm.CreateContext();
+	const auto table = vm.CreateTable();
+	vm.NewSlot(table, std::string("nil"), SquirrelValue{});
+	const auto nil = vm.FindPropertyInContext(root, table, "nil");
+	Require(nil.has_value() && vm.Type(*nil) == SquirrelValueType::Null, "owned native get must distinguish a present null from failed lookup");
+	vm.SetLastError(std::string("before-miss"));
+	Require(!vm.FindPropertyInContext(root, table, "missing") && sgre::script::StringText(vm.LastError()) == "the index doesn't exist", "a native get miss must return status and retain the original index diagnostic");
+	const std::string binary_key("key\0tail", 8);
+	vm.NewSlot(table, binary_key, std::int32_t{67});
+	Require(vm.FindPropertyInContext(root, table, binary_key) == std::optional<SquirrelValue>{std::int32_t{67}}, "general property API must preserve key bytes; C-string truncation belongs to its original native caller");
+
+	const auto class_value = vm.CreateClass();
+	std::size_t released = 0;
+	SquirrelValue produced_weak;
+	vm.NewSlot(class_value, std::string("_get"), vm.CreateNativeClosure("owned-property-output", [&](SquirrelVm& active, const auto) {
+		Require(active.CurrentContext() == root, "owned general get must execute in the selected receiving context");
+		auto result = active.CreateInstance(active.CreateClass());
+		produced_weak = active.CreateWeakReference(result);
+		active.SetInstanceReleaseHook(result, [&](SquirrelVm&, const SquirrelValue&) {
+			++released;
+		});
+
+		return SquirrelNativeResult::ReturnValue(std::move(result));
+	}));
+	const auto instance = vm.CreateInstance(class_value);
+	const auto caller = vm.CreateNativeClosure("child-owned-property-caller", [&](SquirrelVm& active, const auto) {
+		auto result = active.FindPropertyInContext(root, instance, "temporary");
+		Require(result.has_value() && active.Type(*result) == SquirrelValueType::Instance && released == 0 && active.CurrentContext() == child, "owned result must survive its physical result/receiver pops and restore the actual child caller");
+		result.reset();
+		Require(released == 1 && active.Type(active.ResolveWeakReference(produced_weak)) == SquirrelValueType::Null, "only the escaped owner may keep a transient property result alive");
+
+		return SquirrelNativeResult::NoValues();
+	});
+	const std::array<SquirrelValue, 1> arguments{vm.RootTableInContext(child)};
+	static_cast<void>(vm.InvokeInContext(child, caller, arguments));
+	vm.Close();
+	vm.RethrowReleaseFailure();
+}
+
 int main() {
 	try {
 		TestActualRawAndTypedReads();
 		TestDelegateAndInstanceMembership();
 		TestPhysicalAliasSurvivesActualStackGrowth();
 		TestResultRetiresBeforeReceiverAndCallerRestores();
+		TestOwnedPropertyResultAndMissingStatus();
+		TestInvalidGetterStatusRemainsSafetyFailure();
 		std::cout << "Squirrel native property-stack checks passed\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

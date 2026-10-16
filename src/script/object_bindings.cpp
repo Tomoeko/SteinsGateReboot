@@ -213,7 +213,7 @@ namespace sgre::script {
 			}
 		}
 
-		SquirrelValue ReadProperty(std::span<const SquirrelValue> arguments) {
+		SquirrelNativeResult ReadProperty(std::span<const SquirrelValue> arguments) {
 			if (arguments.size() != 2) {
 				throw std::runtime_error("native Object.get received an incorrect argument count");
 			}
@@ -225,7 +225,7 @@ namespace sgre::script {
 				const auto method = Vm.GetSlot(instance, method_name);
 				try {
 					const std::array<SquirrelValue, 1> receiver{instance};
-					return Vm.InvokeInContext(Vm.CurrentContext(), method, receiver).Value;
+					return SquirrelNativeResult::ReturnValue(Vm.InvokeInContext(Vm.CurrentContext(), method, receiver).Value);
 				} catch (const std::runtime_error&) {
 					// Native 0x140228ac0 attempts delegate lookup after a getter call fails.
 				}
@@ -234,17 +234,22 @@ namespace sgre::script {
 			const auto delegate = DelegateValue(instance);
 			const auto type = Vm.Type(delegate);
 			if (type != SquirrelValueType::Table && type != SquirrelValueType::Instance) {
-				throw std::runtime_error("native Object property getter failed");
+				return SquirrelNativeResult::StackStatus(-1);
 			}
 
 			const auto& key = StringText(arguments[1]);
-			const auto value = Vm.ReadSlot(delegate, key.substr(0, key.find('\0')));
-			const auto value_type = Vm.Type(value);
-			if (type == SquirrelValueType::Instance && (value_type == SquirrelValueType::Closure || value_type == SquirrelValueType::NativeClosure) && !Vm.HasBoundEnvironment(value)) {
-				return Vm.BindEnvironment(value, delegate);
+			const auto found = Vm.FindPropertyInContext(Vm.CurrentContext(), delegate, key.substr(0, key.find('\0')));
+			if (!found) {
+				return SquirrelNativeResult::StackStatus(-1);
 			}
 
-			return value;
+			const auto& value = *found;
+			const auto value_type = Vm.Type(value);
+			if (type == SquirrelValueType::Instance && (value_type == SquirrelValueType::Closure || value_type == SquirrelValueType::NativeClosure) && !Vm.HasBoundEnvironment(value)) {
+				return SquirrelNativeResult::ReturnValue(Vm.BindEnvironment(value, delegate));
+			}
+
+			return SquirrelNativeResult::ReturnValue(value);
 		}
 
 		void WriteProperty(std::span<const SquirrelValue> arguments) {
@@ -358,10 +363,7 @@ namespace sgre::script {
 				return SquirrelNativeResult{};
 			});
 			const auto getter = [](Implementation& state, const auto arguments) {
-				SquirrelNativeResult result;
-				result.Value = state.ReadProperty(arguments);
-
-				return result;
+				return state.ReadProperty(arguments);
 			};
 			method("_get", getter);
 			method("get", getter);

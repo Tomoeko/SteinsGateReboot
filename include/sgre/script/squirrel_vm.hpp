@@ -350,6 +350,8 @@ namespace sgre::script {
 		[[nodiscard]] SquirrelValue ReadSlot(const SquirrelValue& object, const SquirrelValue& key, std::uint64_t instruction_budget = 1000000);
 		// General native lookup runs against the selected VM context and restores its caller afterward.
 		[[nodiscard]] SquirrelValue ReadSlotInContext(SquirrelContextHandle context, const SquirrelValue& object, const SquirrelValue& key, std::uint64_t instruction_budget = 1000000);
+		// Native string-key get returns missing status without throwing; a present null remains an owned result.
+		[[nodiscard]] std::optional<SquirrelValue> FindPropertyInContext(SquirrelContextHandle context, const SquirrelValue& object, std::string_view key, std::uint64_t instruction_budget = 1000000);
 		// Pushes object and string key, aliases the native getter output to that key cell, converts, then pops both.
 		// Raw presence follows table/userdata delegates, skips metamethod/default/root retry, and pops on either outcome.
 		// General failure records the native index error and returns the converter's zero/empty fallback.

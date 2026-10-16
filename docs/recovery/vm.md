@@ -455,6 +455,34 @@ Object adapter retains base state in a checked Instance registry alongside
 independent derived-native identities. `_tostring` accepts its string result;
 a failed hook or non-string result recovers the original value's pointer diagnostic through `0x14025b9a0`, rather than throwing the hook's error.
 
+Object getter `0x140228ac0` returns negative native status after a missing
+delegate property. General get `0x140222a80` replaces its failed lookup error
+with `the index doesn't exist`; CallNative's negative-status branch at
+`0x140254b6c` restores the native frame without replacing the output. The
+adapter now carries this expected failure through the existing physical
+getter continuation instead of repeatedly throwing C++ exceptions. An owning
+string-property query preserves a present null, the aliased key/result cell,
+selected receiving context, and default-delegate behavior. This complements
+the scalar conversion API, whose result must retire before its receiver.
+Actual getters still run in order, and the native 100-level limit remains;
+there is no cached miss or early cycle suppression. Independent fixtures
+verify 99 admitted named getters before overflow, success after ten stateful
+visits, delegate mutation, escaped result ownership, and separate callback
+safety errors.
+
+An Exit Game prompt observation exposed a three-object delegate cycle for
+absent optional properties. The same hidden 1280×720 test reduced sustained
+median Update time from 60.58 ms to about 13 ms after the status correction.
+Seven focused ASan/UBSan fixture executables pass against both the optimized
+public core and a coherent core with the changed Object/VM implementations
+sanitized; the remaining core objects are optimized. Original keyboard navigation cancels
+the prompt, a second close request reopens it, and confirmation reaches CRT
+exit status zero in an owned hidden observer with that termination service
+explicitly enabled. The public headless termination guard remains unchanged.
+The supplied affirmative button bitmap is preserved. These checks establish
+the reported update improvement and original script sequence, not complete
+native window, pixel, audio, or whole-game fidelity.
+
 Object subscriber append `0x140228e00`, matching unsubscribe `0x140229510`,
 first-consumed notification `0x140229130`, and notify-all/clear
 `0x1402292a0` guide the owned completion callbacks. Explicit native release

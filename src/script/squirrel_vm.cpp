@@ -4444,6 +4444,13 @@ namespace sgre::script {
 			auto& object = Object(*handle);
 			if (object.Type == SquirrelValueType::NativeClosure) {
 				if (NativeCallDepthExceeded(Active())) {
+					if (action && action->Kind == VmReturnKind::GetterOutput) {
+						AssignStoredValue(Active().LastError, std::string("Native stack overflow"));
+						static_cast<void>(RecoverFailedAction(*action));
+
+						return;
+					}
+
 					FailNativeCallDepth(Active());
 				}
 
@@ -4516,6 +4523,18 @@ namespace sgre::script {
 						const auto callback_result = object.Native(m_Api, arguments);
 						// Native254b17 retires callback depth before output replacement, retaining the call record.
 						native_call.Restore();
+						if (callback_result.NativeStatus && *callback_result.NativeStatus < 0 && *callback_result.NativeStatus != -666 && !callback_result.Suspend && action && action->Kind == VmReturnKind::GetterOutput) {
+							if (callback_result.PushReturnedValue) {
+								m_Api.PushNativeValue(callback_result.Value);
+							}
+
+							// Native254b6c propagates failed status before any getter output replacement.
+							operand_frame.Restore();
+							native_frame.Restore();
+							recovered = RecoverFailedAction(*action);
+
+							return SquirrelNativeResult{};
+						}
 
 						auto read = ReadNativeResult(callback_result, action && action->UsesNativeTemporary);
 						if (action && action->Kind == VmReturnKind::GetterOutput && !action->UsesNativeTemporary) {
@@ -8292,6 +8311,44 @@ namespace sgre::script {
 		// Native222a80 replaces the failed lookup's error instead of exposing _get failure.
 		AssignStoredValue(m_Implementation->Active().LastError, std::string("the index doesn't exist"));
 		throw SquirrelVmException(std::string("the index doesn't exist"), "the index doesn't exist");
+	}
+
+	std::optional<SquirrelValue> SquirrelVm::FindPropertyInContext(SquirrelContextHandle context, const SquirrelValue& object, std::string_view key, std::uint64_t instruction_budget) {
+		auto& owner = *m_Implementation;
+		auto& state = owner.Context(context);
+		if (owner.m_Closed || state.Suspended || state.PropertyReadDepth >= owner.m_Limits.MaxFrames || key.size() > owner.m_Limits.MaxStringBytes) {
+			throw std::runtime_error("Squirrel property read requires a live nonsuspended bounded context");
+		}
+
+		owner.CheckValue(object);
+		const auto receiver = owner.BorrowedValue(object);
+		std::string key_text(key);
+		VmReadContextScope activation(owner.m_ActiveContext, context.Index);
+		VmPropertyReadScope property_scope(state);
+		OperandArgumentScope operands(state.Stack, true);
+		const auto previous_base = state.Stack.Base();
+		const auto previous_top = state.Stack.Top();
+		state.Stack.EnsurePushExtent(2);
+		state.Stack.Push(owner.ResolveStoredValue(receiver));
+		state.Stack.Push(CreateString(std::move(key_text)));
+		if (!owner.m_Running) {
+			owner.m_InstructionRemaining = instruction_budget;
+		}
+
+		std::optional<SquirrelValue> result;
+		if (owner.ReadAliasedProperty(previous_top, previous_top + 1, false)) {
+			// This native get exports an owner before popping the aliased key/result cell.
+			result = owner.ResolveStoredValue(state.Stack.At(previous_top + 1));
+		}
+
+		state.Stack.SetTop(previous_top + 1 - previous_base);
+		if (!result) {
+			AssignStoredValue(state.LastError, std::string("the index doesn't exist"));
+		}
+		state.Stack.SetTop(previous_top - previous_base);
+		operands.TransferToAcceptedFrame();
+
+		return result;
 	}
 
 	SquirrelPropertyReadResult SquirrelVm::ReadPropertyInContext(SquirrelContextHandle context, const SquirrelValue& object, std::string_view key, SquirrelPropertyReadKind kind, std::uint64_t instruction_budget) {
