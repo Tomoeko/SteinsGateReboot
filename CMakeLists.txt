@@ -4,6 +4,7 @@ find_package(Threads REQUIRED)
 
 option(SGRE_ENABLE_SANITIZERS "Enable address and undefined-behavior sanitizers" OFF)
 option(SGRE_BUILD_TESTS "Build independent resource recovery tests" ON)
+option(SGRE_BUILD_GAME "Build the native game application" ${APPLE})
 option(SGRE_BUILD_MACOS_MEDIA "Build the native macOS media boundary" ${APPLE})
 option(SGRE_BUILD_MACOS_RENDERER "Build the native macOS renderer boundary" ${APPLE})
 set(SGRE_GAME_ROOT "" CACHE PATH "Optional local reference installation for integration checks")
@@ -83,6 +84,7 @@ add_library(sgre_resource
 	src/resource/archive_mounts.cpp
 	src/resource/archive_reader.cpp
 	src/resource/font.cpp
+	src/resource/resident_font.cpp
 	src/resource/sfnt.cpp
 	src/resource/truetype_outline.cpp
 	src/text/truetype_glyph_font.cpp
@@ -564,6 +566,20 @@ target_sources(sgre_resource PRIVATE
 	src/text/bitmap_element_draw.cpp
 	src/script/console_bindings.cpp
 )
+
+if(SGRE_BUILD_GAME)
+	if(NOT APPLE OR NOT SGRE_BUILD_MACOS_MEDIA OR NOT SGRE_BUILD_MACOS_RENDERER)
+		message(FATAL_ERROR "sgre-game currently requires the macOS media and renderer boundaries")
+	endif()
+
+	add_executable(sgre-game src/platform/macos/original_script_startup.mm)
+	target_link_libraries(sgre-game PRIVATE sgre_resource sgre_platform_render sgre_platform_save sgre_platform_media)
+	target_compile_options(sgre-game PRIVATE -fobjc-arc -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror)
+	set_target_properties(sgre-game PROPERTIES CXX_EXTENSIONS OFF OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+	set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/original_script_startup.mm")
+	file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/macos/original_script_startup.mm" SGRE_GAME_HOST_SOURCE_SHA256)
+	target_compile_definitions(sgre-game PRIVATE SGRE_PRIVATE_STARTUP_SOURCE_SHA256="${SGRE_GAME_HOST_SOURCE_SHA256}")
+endif()
 
 add_executable(sgre-inspect tools/inspect_main.cpp)
 target_link_libraries(sgre-inspect PRIVATE sgre_resource)

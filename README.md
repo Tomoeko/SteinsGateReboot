@@ -16,7 +16,7 @@ cmake --build Files/build/recovery --target sgre-inspect
 ## Build game
 
 ```sh
-cmake -S Files/research/runtime/game-release-cmake-stage -B Files/build/game-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0" -DCMAKE_OBJCXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0"
+cmake --fresh -S . -B Files/build/game-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_SHARED_LIBS=ON -DSGRE_BUILD_TESTS=OFF -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0" -DCMAKE_OBJCXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0"
 cmake --build Files/build/game-release --target sgre-game --parallel
 ```
 
