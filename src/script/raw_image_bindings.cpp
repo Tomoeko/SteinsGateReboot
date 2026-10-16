@@ -1,6 +1,7 @@
 #include "sgre/script/raw_image_bindings.hpp"
 
 #include "sgre/script/binary_bindings.hpp"
+#include "sgre/script/struct_bindings.hpp"
 
 #include <array>
 #include <bit>
@@ -51,9 +52,12 @@ namespace sgre::script {
 		SquirrelVm& Vm;
 		ScriptObjectBindings& Objects;
 		ScriptBinaryBindings& Binary;
+		ScriptStructBindings* Structs = nullptr;
 		ScriptRawImageLimits Limits;
 		SquirrelValue Class;
 		SquirrelHostRoot ClassRoot;
+		SquirrelValue ExtendedClass;
+		SquirrelHostRoot ExtendedClassRoot;
 		std::map<std::uint32_t, RawImageBindingRecord> Instances;
 		std::size_t PixelBytes = 0;
 
@@ -210,6 +214,24 @@ namespace sgre::script {
 
 			return SquirrelNativeResult::NoValues();
 		});
+		method("store", [](Implementation& owner, auto arguments) {
+			if (arguments.size() != 2) {
+				throw std::runtime_error("invalid argument.");
+			}
+			if (owner.Structs == nullptr) {
+				throw std::runtime_error("RawImage.store requires its actual mutable Struct character-array service");
+			}
+			const auto size = owner.Structs->CharacterArraySize(arguments[1]);
+			const auto& image = *owner.Record(arguments[0]).Image;
+			const auto pixels = std::size_t(image.Width()) * image.Height();
+			if (size != pixels * 3 && size != pixels * 4) {
+				throw std::runtime_error("char array size mismatch.");
+			}
+			const auto bytes = image.StorePixels(size == pixels * 4);
+			owner.Structs->StoreCharacterArray(arguments[1], bytes);
+
+			return SquirrelNativeResult::NoValues();
+		});
 		method("restore", [](Implementation& owner, auto arguments) {
 			if (arguments.size() != 2) {
 				throw std::runtime_error("invalid argument.");
@@ -220,12 +242,24 @@ namespace sgre::script {
 			return SquirrelNativeResult::NoValues();
 		});
 		vm.NewSlot(vm.RootTable(), std::string("RawImage"), state.Class);
+		// Native0609e0 derives SQRawImageEx from SQRawImage. Save thumbnails use the inherited pixel owner.
+		state.ExtendedClass = vm.CreateClass(state.Class);
+		state.ExtendedClassRoot = vm.Retain(state.ExtendedClass);
+		vm.NewSlot(vm.RootTable(), std::string("RawImageEx"), state.ExtendedClass);
 	}
 
 	ScriptRawImageBindings::~ScriptRawImageBindings() = default;
 
 	SquirrelValue ScriptRawImageBindings::RawImageClass() const {
 		return m_Implementation->Class;
+	}
+
+	void ScriptRawImageBindings::ConfigureStorageOwners(ScriptStructBindings& actual_structs) {
+		auto& state = *m_Implementation;
+		if (state.Structs != nullptr || !state.Instances.empty()) {
+			throw std::runtime_error("RawImage storage service must be configured once before image construction");
+		}
+		state.Structs = &actual_structs;
 	}
 
 	const scene::RawImage& ScriptRawImageBindings::Image(const SquirrelValue& instance) const {

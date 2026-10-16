@@ -505,6 +505,21 @@ namespace sgre::resource {
 		return !m_IsTable && !m_IsElement && m_Owner->Definitions[m_Definition].Fields[m_Field].Tag == 9;
 	}
 
+	bool StructValue::IsCharacterArray() const {
+		return !m_IsTable && !m_IsElement && m_Owner->Definitions[m_Definition].Fields[m_Field].Tag == 10;
+	}
+
+	void StructValue::WriteCharacterArray(std::span<const std::uint8_t> bytes) {
+		if (!IsCharacterArray()) {
+			throw std::runtime_error("require char array.");
+		}
+		if (bytes.size() != Length()) {
+			throw std::runtime_error("char array size mismatch.");
+		}
+		auto destination = m_Owner->Range(m_Offset, bytes.size());
+		std::copy(bytes.begin(), bytes.end(), destination.begin());
+	}
+
 	std::uint32_t StructValue::CountFlags() const {
 		if (!IsFlags()) {
 			throw std::runtime_error("structvalue is not flags.");

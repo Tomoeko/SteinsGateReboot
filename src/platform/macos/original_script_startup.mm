@@ -317,6 +317,7 @@ namespace sgre::platform {
 				throw std::runtime_error("original startup requires its actual serialized font/cache owner and original archive seed");
 			}
 
+			m_RawImages.ConfigureStorageOwners(m_Structs);
 			script::InstallNativePrinting(m_Vm, m_Logs.OutputCallback());
 			m_System.ConfigureLooperTime(m_Owners.Looper);
 			// Original04b340 concatenates only disk root zero;SPEC_TXT selects wind3d11data here.

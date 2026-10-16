@@ -1,6 +1,7 @@
 #include "sgre/script/raw_image_bindings.hpp"
 
 #include "sgre/script/binary_bindings.hpp"
+#include "sgre/script/struct_bindings.hpp"
 
 #include <array>
 #include <bit>
@@ -138,6 +139,73 @@ static void TestLimitsErrorsAndExplicitRelease() {
 	vm.RethrowReleaseFailure();
 }
 
+static void TestExtendedThumbnailOwner() {
+	sgre::script::SquirrelVm vm;
+	sgre::script::ScriptObjectBindings objects(vm);
+	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptRawImageBindings images(vm, objects, binary);
+	const auto extended = vm.GetSlot(vm.RootTable(), std::string("RawImageEx"));
+	Require(extended != images.RawImageClass(), "the native extension must remain a distinct derived class");
+	const auto image = vm.Invoke(extended, std::array<SquirrelValue, 3>{vm.RootTable(), std::int32_t{2}, std::int32_t{1}}).Value;
+	const auto retained = vm.Retain(image);
+	Require(vm.IsInstanceOf(image, extended) && vm.IsInstanceOf(image, images.RawImageClass()) && vm.IsInstanceOf(image, objects.ObjectClass()), "save thumbnails require the original derived RawImage and Object ownership");
+	static_cast<void>(Call(vm, image, "clearUpdate"));
+	images.StoreThumbnail(image, std::array<std::uint8_t, 8>{3, 2, 1, 255, 6, 5, 4, 128});
+	Require(images.Image(image).StorePixels(false) == std::vector<std::uint8_t>{1, 2, 3, 4, 5, 6} && !images.Image(image).IsUpdated(), "extended save capture must store inherited RGB bytes without fabricating update state");
+	images.ReleaseInstance(image);
+	RequireError([&] {
+		static_cast<void>(images.Image(image));
+	},
+	    "no live pixel owner");
+	vm.Close();
+	vm.RethrowReleaseFailure();
+}
+
+static void TestStoreUsesMutableCharacterArrays() {
+	sgre::script::SquirrelVm vm;
+	sgre::script::ScriptObjectBindings objects(vm);
+	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptPsbBindings psb(vm, objects);
+	sgre::script::ScriptStructBindings structs(vm, objects, psb, binary);
+	sgre::script::ScriptRawImageBindings images(vm, objects, binary);
+	images.ConfigureStorageOwners(structs);
+	const auto atom = [](auto value) {
+		sgre::resource::PsbValue result;
+		result.Data = std::move(value);
+
+		return result;
+	};
+	const auto field = [&](std::int64_t tag, std::int64_t count) {
+		return atom(sgre::resource::PsbArray{atom(tag), atom(count)});
+	};
+	auto schema = std::make_shared<sgre::resource::PsbDocument>();
+	schema->Root = atom(sgre::resource::PsbObject{{"root", atom(sgre::resource::PsbObject{{"rgb", field(10, 6)}, {"rgba", field(10, 8)}, {"short", field(10, 7)}, {"word", field(11, 6)}})}});
+	const auto source = psb.WrapDocument(schema);
+	const auto document = vm.Invoke(structs.StructClass(), std::array<SquirrelValue, 2>{vm.RootTable(), source}).Value;
+	const auto root = Call(vm, document, "getRoot");
+	const auto rgb = vm.ReadSlot(root, std::string("rgb"));
+	const auto rgba = vm.ReadSlot(root, std::string("rgba"));
+	const auto image = vm.Invoke(vm.GetSlot(vm.RootTable(), std::string("RawImageEx")), std::array<SquirrelValue, 3>{vm.RootTable(), std::int32_t{2}, std::int32_t{1}}).Value;
+	images.StoreThumbnail(image, std::array<std::uint8_t, 8>{3, 2, 1, 255, 6, 5, 4, 128});
+	Require(std::holds_alternative<std::monostate>(Call(vm, image, "store", {rgb})) && std::holds_alternative<std::monostate>(Call(vm, image, "store", {rgba})), "native store writes the actual destination array and returns zero results");
+	for (std::int32_t index = 0; index != 6; ++index) {
+		Require(vm.ReadSlot(rgb, index) == SquirrelValue{index + 1}, "RGB storage must preserve the independent byte-order vector");
+	}
+	Require(vm.ReadSlot(rgba, std::int32_t{3}) == SquirrelValue{std::int32_t{-1}} && vm.ReadSlot(rgba, std::int32_t{7}) == SquirrelValue{std::int32_t{-128}}, "RGBA storage must preserve alpha bytes and the destination schema's signed reads");
+	const auto before = structs.BorrowStructStorage(document).Serialize();
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "store", {vm.ReadSlot(root, std::string("short"))}));
+	},
+	    "char array size mismatch");
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "store", {vm.ReadSlot(root, std::string("word"))}));
+	},
+	    "require char array");
+	Require(structs.BorrowStructStorage(document).Serialize() == before, "invalid size/type must reject before touching any field in the actual save owner");
+	vm.Close();
+	vm.RethrowReleaseFailure();
+}
+
 static void TestAutomaticNativeRetirement() {
 	sgre::script::SquirrelVmLimits limits;
 	limits.ReclaimObjects = true;
@@ -169,6 +237,8 @@ int main() {
 		TestBackgroundFilterCallbacks();
 		TestGenuineClassesAndMutablePixels();
 		TestLimitsErrorsAndExplicitRelease();
+		TestExtendedThumbnailOwner();
+		TestStoreUsesMutableCharacterArrays();
 		TestAutomaticNativeRetirement();
 		std::cout << "genuine RawImage binding and native pixel ownership passed\n";
 

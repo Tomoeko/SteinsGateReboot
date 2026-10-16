@@ -9,6 +9,7 @@
 namespace sgre::script {
 
 	class ScriptBinaryBindings;
+	class ScriptStructBindings;
 
 	struct ScriptRawImageLimits {
 		std::size_t MaxInstances = 1024;
@@ -26,6 +27,8 @@ namespace sgre::script {
 		ScriptRawImageBindings& operator=(ScriptRawImageBindings&&) = delete;
 
 		[[nodiscard]] SquirrelValue RawImageClass() const;
+		// Configure before image construction; the mutable Struct service encloses all store callbacks.
+		void ConfigureStorageOwners(ScriptStructBindings& actual_structs);
 		// Borrows the actual mutable image until its script instance retires.
 		[[nodiscard]] const scene::RawImage& Image(const SquirrelValue& instance) const;
 		void StoreThumbnail(const SquirrelValue& instance, std::span<const std::uint8_t> bgra);

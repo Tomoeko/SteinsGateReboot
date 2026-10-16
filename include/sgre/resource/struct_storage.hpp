@@ -47,6 +47,8 @@ namespace sgre::resource {
 		void Write(const StructScalar& value);
 		void Clear();
 		[[nodiscard]] bool IsFlags() const;
+		[[nodiscard]] bool IsCharacterArray() const;
+		void WriteCharacterArray(std::span<const std::uint8_t> bytes);
 		[[nodiscard]] std::uint32_t CountFlags() const;
 		[[nodiscard]] std::uint32_t CountFlags(std::span<const std::uint32_t> indices) const;
 		[[nodiscard]] bool AndFlags() const;

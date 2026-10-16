@@ -471,6 +471,19 @@ namespace sgre::script {
 		return *m_Implementation->Document(instance).Storage;
 	}
 
+	std::size_t ScriptStructBindings::CharacterArraySize(const SquirrelValue& instance) const {
+		const auto& value = m_Implementation->Value(instance).Value;
+		if (!value.IsCharacterArray()) {
+			throw std::runtime_error("require char array.");
+		}
+
+		return value.Length();
+	}
+
+	void ScriptStructBindings::StoreCharacterArray(const SquirrelValue& instance, std::span<const std::uint8_t> bytes) {
+		m_Implementation->Value(instance).Value.WriteCharacterArray(bytes);
+	}
+
 	SquirrelValue ScriptStructBindings::ValueClass() const {
 		return m_Implementation->ValueClass;
 	}
