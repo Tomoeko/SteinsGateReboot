@@ -13,6 +13,8 @@ namespace sgre::text {
 		StackUnderflow = 0x81,
 		StackOverflow = 0x82,
 		CodeOverflow = 0x83,
+		DivideByZero = 0x85,
+		InvalidReference = 0x86,
 		EndWithoutCall = 0x88,
 		NestedDefinition = 0x89,
 		InstructionLimit = 0x8b,
