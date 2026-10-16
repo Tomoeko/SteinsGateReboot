@@ -81,10 +81,6 @@ namespace sgre::scene {
 		return inverse;
 	}
 
-	static bool SameActualReference(const MotionSceneLayerReference& left, const MotionSceneLayerReference& right) {
-		return left.Owner == right.Owner && left.RootSelectionSerial == right.RootSelectionSerial && left.ContextIdentity == right.ContextIdentity && left.ContextSelectionSerial == right.ContextSelectionSerial && left.NativeOrdinal == right.NativeOrdinal && left.NodeIdentifier == right.NodeIdentifier;
-	}
-
 	EmoteVelvetyFrameOwner::EmoteVelvetyFrameOwner(const MotionRootScene& actual_root, const MotionPlayerCommands& actual_commands, const MotionScenePlayer& actual_plain, EmoteVelvetyFrameDefinition definition, float actual_view_height) : m_Root(actual_root), m_Commands(actual_commands), m_Plain(actual_plain), m_Definition(std::move(definition)) {
 		if (!std::isfinite(m_Definition.PixelsPerMeter) || !(m_Definition.PixelsPerMeter > 0) || !std::isfinite(m_Definition.ReferenceSpeedLimit) || m_Definition.ReferenceSpeedLimit < 0 || !std::isfinite(actual_view_height) || !(actual_view_height > 0) || m_Definition.ReferenceLayer.size() > kMaximumMotionCommandNameBytes) {
 			throw std::runtime_error("Emote Velvety global frame requires actual bounded units, view height and reference policy");
@@ -135,10 +131,7 @@ namespace sgre::scene {
 		} else {
 			if (!m_Lookup || scene != m_Scene || m_Commands.SelectionSerial() != m_SelectionSerial || scene->GraphGeneration() != m_GraphGeneration) {
 				const auto selected_reference = scene->FindLayer(m_Definition.ReferenceLayer);
-				if (!m_Reference || !selected_reference || !SameActualReference(*m_Reference, *selected_reference)) {
-					m_HasReference = false;
-					m_HistoryInitialized = false;
-				}
+				// Revalidate the portable anchor without resetting native Common+B9 history.
 				m_Reference = selected_reference;
 				m_Scene = scene;
 				m_SelectionSerial = m_Commands.SelectionSerial();

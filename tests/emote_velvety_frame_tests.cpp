@@ -609,6 +609,83 @@ static void TestSkipReferenceHistoryAndWarmClearProvenance() {
 	Require(frame.Prepare(0, controls).ResetRotationReference, "repeated post-clear Skip preserves warm provenance and remains a real history reset");
 }
 
+static void TestWarmReferenceHistorySurvivesActualSameTimelineRenewal() {
+	Fixture fixture(ReferenceDocument({2, 0}));
+	PlainFixture renewed(fixture);
+	PlainFixture control(fixture);
+	sgre::scene::EmoteVelvetyFrameOwner renewed_frame(renewed.Root, renewed.Commands, *renewed.Plain, {}, 100);
+	sgre::scene::EmoteVelvetyFrameOwner control_frame(control.Root, control.Commands, *control.Plain, {}, 100);
+	sgre::scene::EmoteVelvetyGlobalControls controls;
+	static_cast<void>(renewed_frame.Prepare(1, controls));
+	static_cast<void>(control_frame.Prepare(1, controls));
+	renewed.Root.SetCoordinate({100, 0});
+	control.Root.SetCoordinate({100, 0});
+	renewed.Plain->Progress(0);
+	control.Plain->Progress(0);
+	const auto renewed_warm = renewed_frame.Prepare(1, controls);
+	const auto control_warm = control_frame.Prepare(1, controls);
+	RequireNear(renewed_warm.WorldToPhysics.TranslationX, control_warm.WorldToPhysics.TranslationX, "warm reference histories start from the same genuine speed-limited displacement");
+	Require(renewed_warm.WorldToPhysics.TranslationX < -90 && !renewed_warm.ResetRotationReference, "continuity fixture must have a real accumulated reference deficit and consumed first-frame flag");
+	const auto old_selection = renewed.Commands.SelectionSerial();
+	const auto old_reference = renewed.Plain->Scene()->FindLayer("move_LR");
+	Require(old_reference.has_value(), "renewal fixture requires the real preceding reference cell");
+	renewed.Commands.Play("main", sgre::scene::MotionPlayFlags::Force);
+	renewed.Plain->Progress(0);
+	const auto new_reference = renewed.Plain->Scene()->FindLayer("move_LR");
+	Require(renewed.Commands.SelectionSerial() > old_selection && new_reference.has_value() && old_reference->NativeOrdinal == new_reference->NativeOrdinal && old_reference->RootSelectionSerial != new_reference->RootSelectionSerial, "genuine force renewal must change selection identity while retaining the actual reference row and metadata");
+	const auto next = renewed_frame.Prepare(1, controls);
+	const auto expected = control_frame.Prepare(1, controls);
+	const auto actual_words = Matrices(next, renewed_frame.PhysicsToWorld());
+	const auto expected_words = Matrices(expected, control_frame.PhysicsToWorld());
+	for (std::size_t index = 0; index < actual_words.size(); ++index) {
+		RequireNear(actual_words[index], expected_words[index], "ordinary actual reference rebind must preserve warm native reference history without Skip");
+	}
+	Require(!next.ResetRotationReference && next.WorldToPhysics.TranslationX < -90, "reference cache renewal must not invent a first-frame or accumulated-history reset");
+	renewed.Root.SetCoordinate({110, 0});
+	control.Root.SetCoordinate({110, 0});
+	renewed.Plain->Progress(0);
+	control.Plain->Progress(0);
+	RequireNear(renewed_frame.Prepare(1, controls).WorldToPhysics.TranslationX, control_frame.Prepare(1, controls).WorldToPhysics.TranslationX, "continued genuine root movement must retain matching history after renewal");
+	renewed_frame.Skip();
+	const auto skipped = renewed_frame.Prepare(0, controls);
+	Require(skipped.ResetRotationReference && skipped.WorldToPhysics.TranslationX == 0, "the actual explicit Skip remains a real history and rotation-reference reset");
+}
+
+static void TestWarmReferenceRebindRetainsQueuedAndClearGuards() {
+	Fixture fixture(ReferenceDocument({2, 0}));
+	PlainFixture actual(fixture);
+	sgre::scene::EmoteVelvetyFrameOwner frame(actual.Root, actual.Commands, *actual.Plain, {}, 100);
+	sgre::scene::EmoteVelvetyGlobalControls controls;
+	static_cast<void>(frame.Prepare(1, controls));
+	actual.Root.SetCoordinate({100, 0});
+	actual.Plain->Progress(0);
+	const auto warm = frame.Prepare(1, controls);
+	Require(warm.WorldToPhysics.TranslationX < -90, "queued renewal requires genuine warm accumulated reference history");
+	actual.Commands.Play("main", sgre::scene::MotionPlayFlags::Force);
+	actual.Plain->Progress(0);
+	actual.Plain->Draw();
+	try {
+		RequireFailure([&] {
+			static_cast<void>(frame.Prepare(1, controls));
+		},
+		    "completed live idle plain player");
+	} catch (...) {
+		fixture.Runtime->SceneContext().Clear();
+		throw;
+	}
+	fixture.Runtime->SceneContext().Clear();
+	RequireFailure([&] {
+		frame.ClearPlain(*actual.Plain);
+	},
+	    "unchanged actual cached reference");
+	Require(actual.Plain->Scene() != nullptr, "stale reference Clear rejection must preserve the renewed selected tree");
+	const auto renewed = frame.Prepare(1, controls);
+	Require(renewed.WorldToPhysics.TranslationX < -90 && !renewed.ResetRotationReference, "failed queued preparation must not reset the history subsequently rebound through a real frame");
+	frame.ClearPlain(*actual.Plain);
+	const auto cleared = frame.Prepare(1, controls);
+	Require(cleared.WorldToPhysics.TranslationX < -90 && !cleared.ResetRotationReference, "successful exact-owner Clear must preserve the same warm history after actual rebind");
+}
+
 int main() {
 	try {
 		TestActualCommonMetadataPresenceAndDefaults();
@@ -617,6 +694,8 @@ int main() {
 		TestWarmChildClearAndExactOwnerAdmission();
 		TestColdClearAndColdNextUpdateGate();
 		TestSkipReferenceHistoryAndWarmClearProvenance();
+		TestWarmReferenceHistorySurvivesActualSameTimelineRenewal();
+		TestWarmReferenceRebindRetainsQueuedAndClearGuards();
 		TestSkipFiveActualOccurrenceResetFlags();
 		std::cout << "Actual Velvety frame: Common metadata, real plain root/scene map, unit/rotation flags, reference history and bounded-speed deficit passed\n";
 		return 0;
