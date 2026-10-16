@@ -498,6 +498,11 @@ static void SceneJumpArgumentTests() {
 	Require(!LaunchArguments({}).Jump && !LaunchArguments({"--skip-startup"}).Jump && !LaunchArguments({"--normal-start"}).Jump, "ordinary and existing startup options must not invent a custom scene request");
 	const auto selected = LaunchArguments({"--jump", "reSG00_01.ks:1355"});
 	Require(selected.Jump && selected.Jump->Storage == "reSG00_01.ks" && selected.Jump->TargetLine == 1355 && selected.DebugStartInGame == true, "jump must own its exact original storage/source line and imply per-launch direct entry");
+	const auto prepared = LaunchArguments({"--checkpoint-worker", "chapter.ks:120", "--headless"});
+	Require(prepared.Jump && prepared.CheckpointWorker && prepared.Headless && prepared.DebugStartInGame == true, "internal worker must require explicit hidden policy independently of ordinary jump");
+	Reject([&] {
+		static_cast<void>(LaunchArguments({"--checkpoint-worker", "chapter.ks:120"}));
+	});
 	const auto zero = LaunchArguments({"--jump", "ExactCase.ks:0"});
 	const auto maximum = LaunchArguments({"--jump", "chapter.ks:2147483647"});
 	const auto unicode = LaunchArguments({"--headless", "--jump", "章名.ks:0007", "--help"});

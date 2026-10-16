@@ -11,6 +11,8 @@
 #include "sgre/media/webm_playback.hpp"
 #include "sgre/platform/application_pump.hpp"
 #include "sgre/platform/backup_crypto.hpp"
+#include "sgre/platform/checkpoint_preparation.hpp"
+#include "sgre/platform/content_digest.hpp"
 #include "sgre/platform/emote_entropy.hpp"
 #include "sgre/platform/host_locale.hpp"
 #include "sgre/platform/host_performance_counter.hpp"
@@ -22,6 +24,7 @@
 #include "sgre/render/sprite_graphics_targets.hpp"
 #include "sgre/resource/archive_mounts.hpp"
 #include "sgre/resource/resident_font.hpp"
+#include "sgre/save/scene_checkpoint_cache.hpp"
 #include "sgre/scenario/scenario_search.hpp"
 #include "sgre/scene/bitmap_font_preparation_service.hpp"
 #include "sgre/scene/emote_wind.hpp"
@@ -134,6 +137,10 @@ namespace sgre::platform {
 		std::optional<script::ScriptDebugSceneEntry> SceneEntry;
 		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
 		std::optional<scenario::ScenarioCalendarCommand> SceneCalendar;
+		std::shared_ptr<save::SceneCheckpointCache> CheckpointCache;
+		std::shared_ptr<CheckpointPreparation> CheckpointJob;
+		std::string CheckpointIdentity;
+		std::string CheckpointParent = "original-session-entry";
 	};
 
 	static std::unique_ptr<script::SquirrelVm> CreateOriginalStartupVm() {
@@ -329,6 +336,11 @@ namespace sgre::platform {
 			}
 			if (m_Owners.SceneSeek) {
 				m_SceneSeek = std::make_unique<script::OriginalSceneSeek>(m_Vm, *m_Owners.SceneSeek);
+			}
+			if (m_Owners.CheckpointCache && (!m_Owners.SceneEntry || !m_Owners.SceneEntry->Checkpoint.empty() || m_Owners.CheckpointJob)) {
+				m_CheckpointRecorder = std::make_unique<script::OriginalCheckpointRecorder>(m_Vm, m_Owners.CheckpointIdentity, m_Owners.CheckpointParent, [cache = m_Owners.CheckpointCache](const auto& location, auto bytes) {
+					return cache->Submit(script::OriginalCheckpointKey(location), std::move(bytes));
+				});
 			}
 			if (m_Owners.SceneCalendar) {
 				if (!m_Owners.SceneEntry) {
@@ -582,6 +594,12 @@ namespace sgre::platform {
 
 		void Update() {
 			RequireOpen();
+			if (m_Owners.CheckpointJob) {
+				const auto error = m_Owners.CheckpointJob->Error();
+				if (!error.empty()) {
+					throw std::runtime_error(error);
+				}
+			}
 			BeginPrivateReturnUpdate();
 			// Real macOS upload preparation services jobs queued by actual resource workers.
 			static_cast<void>(m_Owners.FontPreparation->PreparePending());
@@ -607,6 +625,17 @@ namespace sgre::platform {
 				const auto& seek = m_SceneSeek->Observation();
 				if (seek.Phase == script::OriginalSceneSeekPhase::Failed || seek.Phase == script::OriginalSceneSeekPhase::Cancelled) {
 					throw std::runtime_error("original stateful seek ended before releasing presentation: " + seek.Reason);
+				}
+			}
+			if (m_CheckpointRecorder && !m_CheckpointRecorder->Error().empty() && m_CheckpointRecorder->Error() != m_CheckpointRecorderError) {
+				m_CheckpointRecorderError = m_CheckpointRecorder->Error();
+				std::cerr << m_CheckpointRecorderError << '\n';
+			}
+			if (m_Owners.CheckpointCache) {
+				const auto error = m_Owners.CheckpointCache->Error();
+				if (!error.empty() && error != m_CheckpointError) {
+					m_CheckpointError = error;
+					std::cerr << "original checkpoint cache: " << error << '\n';
 				}
 			}
 			CompletePrivateReturnUpdate();
@@ -671,6 +700,18 @@ namespace sgre::platform {
 		void Close() {
 			if (m_Closed) {
 				return;
+			}
+			if (m_CheckpointRecorder) {
+				std::cerr << "originalCheckpointRecorder captures=" << m_CheckpointRecorder->Captures() << '\n';
+				m_CheckpointRecorder->Cancel();
+				m_CheckpointRecorder.reset();
+			}
+			if (m_Owners.CheckpointCache) {
+				try {
+					m_Owners.CheckpointCache->Flush();
+				} catch (const std::exception& error) {
+					std::cerr << "original checkpoint cache: " << error.what() << '\n';
+				}
 			}
 			if (m_CalendarRestore) {
 				m_CalendarRestore->Cancel();
@@ -831,12 +872,31 @@ namespace sgre::platform {
 			}
 
 			if (m_Owners.SceneEntry && !m_SceneEntryInstalled && m_Vm.HasSlot(m_Vm.RootTable(), std::string("Application"))) {
-				script::InstallOriginalDebugSceneEntry(m_Vm, *m_Owners.SceneEntry);
+				auto entry = *m_Owners.SceneEntry;
+				if (m_Owners.CheckpointJob) {
+					entry.CheckpointPoll = [this]() -> std::optional<std::vector<std::uint8_t>> {
+						if (!m_CheckpointRecorder) {
+							return {};
+						}
+						auto prepared = m_Owners.CheckpointJob->Result();
+						if (!prepared) {
+							return {};
+						}
+						m_CheckpointRecorder->SetEntryPredecessor(prepared->Digest);
+						std::cerr << "original full checkpoint prepared digest=" << prepared->Digest << '\n';
+
+						return std::move(prepared->Bytes);
+					};
+				}
+				script::InstallOriginalDebugSceneEntry(m_Vm, std::move(entry));
 				m_SceneEntryInstalled = true;
 				std::cerr << "originalDirectSceneEntry installed storage=" << std::quoted(m_Owners.SceneEntry->Storage) << " line=" << m_Owners.SceneEntry->TargetLine << '\n';
 			}
 			if (m_SceneSeek) {
 				m_SceneSeek->InstallAvailableHooks();
+			}
+			if (m_CheckpointRecorder) {
+				m_CheckpointRecorder->InstallAvailableHook();
 			}
 			if (m_CalendarRestore) {
 				m_CalendarRestore->InstallAvailableHook();
@@ -1191,6 +1251,9 @@ namespace sgre::platform {
 		input::KeyMappings m_KeyMappings;
 		script::ScriptInputBindings m_Inputs;
 		bool m_SceneEntryInstalled = false;
+		std::unique_ptr<script::OriginalCheckpointRecorder> m_CheckpointRecorder;
+		std::string m_CheckpointError;
+		std::string m_CheckpointRecorderError;
 		std::unique_ptr<script::OriginalSceneSeek> m_SceneSeek;
 		std::unique_ptr<script::OriginalCalendarRestore> m_CalendarRestore;
 		std::optional<script::OriginalCalendarRestorePhase> m_CalendarReported;
@@ -1366,6 +1429,10 @@ namespace sgre::platform {
 		std::optional<script::ScriptDebugSceneEntry> SceneEntry;
 		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
 		std::optional<scenario::ScenarioCalendarCommand> SceneCalendar;
+		std::shared_ptr<save::SceneCheckpointCache> CheckpointCache;
+		std::shared_ptr<CheckpointPreparation> CheckpointJob;
+		std::string CheckpointIdentity;
+		std::string CheckpointParent = "original-session-entry";
 		render::SpritePresentationDescription Presentation;
 		std::filesystem::path ConfigurationWorkspace;
 		std::optional<app::LaunchConfiguration> Configuration;
@@ -1456,7 +1523,7 @@ namespace sgre::platform {
 
 					                             return m_Output->Description().Channels;
 				                             },
-				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek, m_Run.SceneCalendar};
+				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek, m_Run.SceneCalendar, m_Run.CheckpointCache, m_Run.CheckpointJob, m_Run.CheckpointIdentity, m_Run.CheckpointParent};
 				m_Driver = std::make_unique<OriginalScriptStartup>(std::move(owners), m_Run.Installation, m_Run.ArchiveSeed);
 				m_Driver->ConfigureApplicationClose(m_Events);
 				InstallFinishCloseReceiver();
@@ -2306,19 +2373,45 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		run.SaveDirectory = std::filesystem::weakly_canonical(std::filesystem::absolute(*options.SaveDirectory));
 		RequireStartupSaveOverride(run.SaveDirectory, run.Installation, store.ConfigurationPath().parent_path());
 	}
+	run.CheckpointIdentity = sgre::platform::OriginalCheckpointResourceIdentity(run.Installation);
+	run.CheckpointCache = std::make_shared<sgre::save::SceneCheckpointCache>(store.ConfigurationPath().parent_path() / "checkpoints", run.CheckpointIdentity, sgre::platform::ContentSha256);
 	run.DebugStartInGame = options.Jump.has_value() || options.DebugStartInGame.value_or(loaded.Configuration.DebugStartInGame);
 	if (run.DebugStartInGame) {
 		sgre::scenario::ScenarioSearchCatalog scenarios({run.Installation, run.ArchiveSeed});
 		const auto target = scenarios.ValidateJump(options.Jump ? options.Jump->Storage : "reSG00_01.ks", options.Jump ? options.Jump->TargetLine : 135);
-		if (options.Jump) {
+		if (options.Jump && !options.CheckpointWorker) {
 			sgre::script::ScriptDebugSceneEntry entry;
 			entry.Storage = target.CanonicalStorage;
 			entry.TargetLine = target.SourceLine;
+			if (target.SnapshotIndex > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+				throw std::runtime_error("jump snapshot record exceeds original signed cursor");
+			}
+			entry.CheckpointLocation.Storage = target.CanonicalStorage;
+			entry.CheckpointLocation.Label = target.SceneLabel;
+			entry.CheckpointLocation.SourceLine = target.SnapshotLine;
+			entry.CheckpointLocation.Point = target.Point;
+			entry.CheckpointLocation.Record = static_cast<std::int32_t>(target.SnapshotIndex);
+			entry.CheckpointIdentity = run.CheckpointIdentity;
+			const auto checkpoint = run.CheckpointCache->Find(sgre::script::OriginalCheckpointKey(entry.CheckpointLocation));
+			if (checkpoint) {
+				entry.Checkpoint = checkpoint->Bytes;
+				run.CheckpointParent = checkpoint->Digest;
+				std::cerr << "original full checkpoint selected digest=" << checkpoint->Digest << " retained_variants=" << checkpoint->Variants << '\n';
+			} else if (!options.ValidateOnly) {
+				sgre::platform::CheckpointPreparationRequest preparation;
+				preparation.Executable = StartupExecutablePath();
+				preparation.Installation = run.Installation;
+				preparation.JobRoot = store.ConfigurationPath().parent_path() / "checkpoints/jobs";
+				preparation.Target = target.CanonicalStorage + ":" + std::to_string(target.SourceLine);
+				preparation.Key = sgre::script::OriginalCheckpointKey(entry.CheckpointLocation);
+				run.CheckpointJob = std::make_shared<sgre::platform::CheckpointPreparation>(std::move(preparation), run.CheckpointCache);
+				std::cerr << "original full checkpoint reconstruction started in background\n";
+			} else {
+				std::cerr << "original full checkpoint requires background reconstruction\n";
+			}
 			run.SceneEntry = std::move(entry);
-			const auto calendar = sgre::scenario::ReadScenarioCalendarRestore(sgre::scenario::ScenarioSearchLocation{run.Installation, run.ArchiveSeed}, target);
-			run.SceneCalendar = calendar.Command;
-			std::cerr << "original calendar entry: " << calendar.Reason << '\n';
 		} else {
+			run.CheckpointParent = "new-game";
 			sgre::script::OriginalSceneSeekTarget seek;
 			seek.Storage = target.CanonicalStorage;
 			seek.RequestedLine = target.SourceLine;
@@ -2440,7 +2533,7 @@ int main(int argc, char** argv) {
 				}
 				const auto options = sgre::app::ParseLaunchArguments(arguments);
 				if (options.Help) {
-					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a validated original scene snapshot directly for this run.\n";
+					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a complete recorded original checkpoint for this run.\n";
 
 					return 0;
 				}

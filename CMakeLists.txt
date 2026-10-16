@@ -307,6 +307,8 @@ add_library(sgre_resource
 	src/script/native_format.cpp
 	src/script/driver_logs.cpp
 	src/script/debug_scene_entry.cpp
+	src/script/original_checkpoint.cpp
+	src/save/scene_checkpoint_cache.cpp
 	src/script/original_calendar_restore.cpp
 	src/script/original_scene_seek.cpp
 	src/script/driver_phases.cpp
@@ -579,7 +581,7 @@ if(SGRE_BUILD_GAME)
 		message(FATAL_ERROR "sgre-game currently requires the macOS media and renderer boundaries")
 	endif()
 
-	add_executable(sgre-game src/platform/macos/original_script_startup.mm)
+	add_executable(sgre-game src/platform/macos/original_script_startup.mm src/platform/macos/content_digest.mm src/platform/macos/checkpoint_preparation.mm)
 	target_link_libraries(sgre-game PRIVATE sgre_resource sgre_platform_render sgre_platform_save sgre_platform_media)
 	target_compile_options(sgre-game PRIVATE -fobjc-arc -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror)
 	set_target_properties(sgre-game PROPERTIES CXX_EXTENSIONS OFF OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
@@ -627,6 +629,7 @@ if(SGRE_BUILD_TESTS)
 		launch_configuration
 		display_path
 		original_debug_scene_entry
+		original_checkpoint
 		original_calendar_restore
 		original_scene_seek
 		scenario_search
@@ -1513,6 +1516,19 @@ if(SGRE_BUILD_TESTS)
 	if(EXISTS "${SGRE_SEEK_ENVPLAYER}" AND EXISTS "${SGRE_SEEK_UTIL}" AND EXISTS "${SGRE_SEEK_INIT}")
 		add_test(NAME original_scene_seek_original COMMAND original_scene_seek_tests "${SGRE_SEEK_ENVPLAYER}" "${SGRE_SEEK_UTIL}" "${SGRE_SEEK_INIT}")
 		set_tests_properties(original_scene_seek_original PROPERTIES TIMEOUT 15)
+	endif()
+
+	if(APPLE)
+		add_executable(scene_checkpoint_cache_tests tests/scene_checkpoint_cache_tests.cpp src/platform/macos/content_digest.mm)
+		target_link_libraries(scene_checkpoint_cache_tests PRIVATE sgre_resource)
+		target_compile_options(scene_checkpoint_cache_tests PRIVATE -Werror)
+		set_target_properties(scene_checkpoint_cache_tests PROPERTIES CXX_EXTENSIONS OFF OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+		add_test(NAME scene_checkpoint_cache COMMAND scene_checkpoint_cache_tests)
+		add_executable(checkpoint_preparation_tests tests/checkpoint_preparation_tests.cpp src/platform/macos/checkpoint_preparation.mm src/platform/macos/content_digest.mm)
+		target_link_libraries(checkpoint_preparation_tests PRIVATE sgre_resource)
+		target_compile_options(checkpoint_preparation_tests PRIVATE -Werror)
+		set_target_properties(checkpoint_preparation_tests PROPERTIES CXX_EXTENSIONS OFF OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+		add_test(NAME checkpoint_preparation COMMAND checkpoint_preparation_tests)
 	endif()
 
 	add_executable(original_scene_seek_movie_tests tests/original_scene_seek_movie_tests.cpp)

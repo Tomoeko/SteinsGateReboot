@@ -27,6 +27,7 @@ namespace sgre::app {
 		std::optional<std::filesystem::path> SaveDirectory;
 		std::optional<std::uint64_t> MaximumMilliseconds;
 		std::optional<std::size_t> MaximumIterations;
+		bool CheckpointWorker = false;
 		bool Headless = false;
 		bool ValidateOnly = false;
 		bool Help = false;

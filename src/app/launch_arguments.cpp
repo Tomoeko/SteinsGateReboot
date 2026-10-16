@@ -88,9 +88,10 @@ namespace sgre::app {
 			if (option == "--skip-startup" || option == "--debug-start-in-game" || option == "--normal-start") {
 				RequireUnique(result.DebugStartInGame.has_value(), "startup sequence");
 				result.DebugStartInGame = option != "--normal-start";
-			} else if (option == "--jump") {
+			} else if (option == "--jump" || option == "--checkpoint-worker") {
 				RequireUnique(result.Jump.has_value(), "scene jump");
 				result.Jump = ParseSceneJump(OptionValue(arguments, index));
+				result.CheckpointWorker = option == "--checkpoint-worker";
 			} else if (option == "--fullscreen" || option == "--windowed") {
 				RequireUnique(result.Fullscreen.has_value(), "window mode");
 				result.Fullscreen = option == "--fullscreen";
@@ -121,6 +122,9 @@ namespace sgre::app {
 				RequireUnique(result.Installation.has_value(), "installation path");
 				result.Installation = LaunchPath(option);
 			}
+		}
+		if (result.CheckpointWorker && !result.Headless) {
+			throw std::runtime_error("internal checkpoint worker requires explicit headless policy");
 		}
 		if (result.Jump) {
 			if (result.DebugStartInGame == false) {
