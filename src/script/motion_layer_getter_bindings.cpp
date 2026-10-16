@@ -201,6 +201,10 @@ namespace sgre::script {
 			if (!layer) {
 				return {};
 			}
+			return WrapGetter(task, *layer, actual_layer, actual_child, weak);
+		}
+
+		SquirrelValue WrapGetter(const scene::MotionPlayerTask& task, scene::MotionSceneLayerReference layer, std::optional<SquirrelObjectIdentity> actual_layer, std::optional<scene::MotionChildBorrow> actual_child, const std::weak_ptr<Implementation>& weak) {
 			if (Getters.size() == kMaximumMotionLayerGetters) {
 				throw std::runtime_error("Motion layer getters exceed their bounded native instance capacity");
 			}
@@ -209,7 +213,7 @@ namespace sgre::script {
 			Objects.AttachInstance(instance);
 			const auto identity = Vm.BorrowObjectIdentity(instance);
 			try {
-				Getters.emplace(identity.Index, GetterRecord{identity, task, *layer, actual_layer, actual_child});
+				Getters.emplace(identity.Index, GetterRecord{identity, task, layer, actual_layer, actual_child});
 				Objects.ConfigureNativeRelease(instance, [weak, identity](const SquirrelValue&) {
 					if (const auto owner = weak.lock()) {
 						const auto found = owner->Getters.find(identity.Index);
@@ -332,7 +336,21 @@ namespace sgre::script {
 
 				return SquirrelNativeResult::ReturnValue(owner->MakeChildMotion(*record.OwningLayer, record.Task, child));
 			}));
-			static constexpr std::array<std::string_view, 15> unsupported{"getVisible", "getBranchVisible", "getLayerVisible", "getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "getChildren", "containsArea"};
+			Vm.NewSlot(GetterClass, std::string("getChildren"), Vm.CreateNativeClosure("MotionLayerGetter.getChildren", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				const auto owner = weak.lock();
+				if (!owner || arguments.empty()) {
+					throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
+				}
+				const auto record = owner->Getter(arguments[0]);
+				const auto children = ActualScene(record.Task, record.Child).LayerChildren(record.Layer);
+				const auto result = owner->Vm.CreateArray();
+				const auto result_root = owner->Vm.Retain(result);
+				for (const auto& child : children) {
+					owner->Vm.AppendArray(result, owner->WrapGetter(record.Task, child, record.OwningLayer, record.Child, weak));
+				}
+				return SquirrelNativeResult::ReturnValue(result);
+			}));
+			static constexpr std::array<std::string_view, 14> unsupported{"getVisible", "getBranchVisible", "getLayerVisible", "getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "containsArea"};
 			for (const auto method : unsupported) {
 				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, method](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
 					const auto owner = weak.lock();

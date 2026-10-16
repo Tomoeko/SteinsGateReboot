@@ -1225,8 +1225,51 @@ static void TestGetterContainsQueuedReadonlyAndWeakRetirement() {
 	Require(std::get<bool>(fixture.Call(snapshot, "contains", {20.0f, 40.0f})), "separate copied shape remains usable after live getter source retirement");
 }
 
+static void TestImmediateChildrenAndWrapperLifetime() {
+	using sgre::resource::PsbArray;
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*FolderContainsDocument());
+	auto& timeline = FixtureField(FixtureField(FixtureField(FixtureField(document->Root, "object"), "outer"), "motion"), "main");
+	auto& folder = std::get<PsbArray>(FixtureField(timeline, "layer").Data)[0];
+	std::get<PsbArray>(FixtureField(folder, "children").Data).push_back(Layer(false, 2));
+	auto& priority = std::get<PsbArray>(FixtureField(timeline, "priority").Data)[0];
+	FixtureField(priority, "content") = Atom(PsbArray{Integer(0), Integer(1), Integer(2), Integer(3)});
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("folder")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto children = fixture.Call(getter, "getChildren");
+	const auto children_root = fixture.Vm.Retain(children);
+	Require(fixture.Vm.Length(children) == 2, "immediate children must exclude a grandchild while retaining both physical siblings");
+	const auto ordinary = fixture.Vm.GetSlot(children, std::int32_t{0});
+	const auto second = fixture.Vm.GetSlot(children, std::int32_t{1});
+	Require(std::get<std::int32_t>(fixture.Call(ordinary, "getType")) == 0 && std::get<std::int32_t>(fixture.Call(second, "getType")) == 1, "child getters lost native ordinal order or used ambiguous layer labels");
+	const auto grandchildren = fixture.Read(ordinary, "children");
+	const auto grandchildren_root = fixture.Vm.Retain(grandchildren);
+	Require(fixture.Vm.Length(grandchildren) == 1, "children property did not preserve the immediate child's own subtree");
+	const auto leaf = fixture.Vm.GetSlot(grandchildren, std::int32_t{0});
+	Require(fixture.Vm.Length(fixture.Call(leaf, "getChildren")) == 0, "a leaf getter must return an actual empty array");
+	const auto repeated = fixture.Read(getter, "children");
+	const auto repeated_root = fixture.Vm.Retain(repeated);
+	Require(repeated != children && fixture.Vm.GetSlot(repeated, std::int32_t{0}) != ordinary, "each native children query must construct fresh getter wrappers");
+	Require(fixture.Secondary->PlayerCount() == 1 && fixture.Uploads == 0, "enumerating layer children created another player or texture");
+	static_cast<void>(fixture.Call(motion, "clear"));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(ordinary, "getChildren"));
+	},
+	    "selected scene");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(second, "getType"));
+	},
+	    "selected scene");
+}
+
 int main() {
 	try {
+		TestImmediateChildrenAndWrapperLifetime();
 		TestGetterContainsActualVmMouseAndTypedArguments();
 		TestGetterContainsRetainedGeometryAndNoVisibilityFilter();
 		TestGetterContainsFolderAndActualChildSubtree();

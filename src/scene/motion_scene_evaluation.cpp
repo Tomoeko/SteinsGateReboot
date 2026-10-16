@@ -1814,6 +1814,32 @@ namespace sgre::scene {
 		return m_Implementation->ResolveLayer(reference).Prepared->Type;
 	}
 
+	std::vector<MotionSceneLayerReference> MotionSceneEvaluation::LayerChildren(const MotionSceneLayerReference& reference) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			const auto* context = entry.Actual;
+			if (context == nullptr || context->Identity != reference.ContextIdentity) {
+				continue;
+			}
+			std::vector<MotionSceneLayerReference> children;
+			const auto nodes = context->Selected.Nodes();
+			for (const auto& node : nodes) {
+				// Native5162f0 scans +38 relative-parent links in the receiver's physical player only.
+				if (!node.Parent || *node.Parent != reference.NativeOrdinal - 1) {
+					continue;
+				}
+				auto child = reference;
+				child.NativeOrdinal = node.NativeOrdinal;
+				child.GlobalOrdinal = reference.GlobalOrdinal - reference.NativeOrdinal + node.NativeOrdinal;
+				child.NodeIdentifier = node.Identifier;
+				children.push_back(child);
+			}
+			return children;
+		}
+		throw std::runtime_error("motion children getter context is no longer current");
+	}
+
 	const MotionChildConstructionState& MotionSceneEvaluation::LayerChild(const MotionSceneLayerReference& reference) const {
 		auto& state = *m_Implementation;
 		const auto& node = state.ResolveLayer(reference);

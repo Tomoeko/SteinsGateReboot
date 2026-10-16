@@ -97,6 +97,8 @@ namespace sgre::scene {
 		// Queries retained shape owners without advancing selected frames or requiring an unqueued draw.
 		[[nodiscard]] bool Contains(const MotionSceneLayerReference& reference, resource::MotionPoint point) const;
 		[[nodiscard]] std::uint32_t LayerType(const MotionSceneLayerReference& reference) const;
+		// Immediate same-player children in native ordinal order; never includes another selected player's tree.
+		[[nodiscard]] std::vector<MotionSceneLayerReference> LayerChildren(const MotionSceneLayerReference& reference) const;
 		// Checked borrow of the actual kind3 player; no task/resource retain. Expires on its genuine retirement.
 		[[nodiscard]] const MotionChildConstructionState& LayerChild(const MotionSceneLayerReference& reference) const;
 		// Native Getter left/top read retained numeric coordinates independently of deformed shape bounds.
