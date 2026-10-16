@@ -430,7 +430,7 @@ static void TestActualDialogThresholdCompilation() {
 
 static void TestUnsupportedGrammarAndDiagnostics() {
 	SquirrelVm vm;
-	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "local value = 1; return value;", "this.value = 1;", "return 1 + 2;", "if (true) return 1;", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
+	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "if (true) return 1;", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
 		RequireFailure([&] {
 			static_cast<void>(CompileSquirrelSource(vm, source, "rejected-source"));
 		},
@@ -444,6 +444,11 @@ static void TestUnsupportedGrammarAndDiagnostics() {
 		static_cast<void>(CompileSquirrelSource(vm, "return this\n[\"key\"];", "bracket-newline-source"));
 	},
 	    "bracket-newline-source");
+	const auto receiver = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("value"), std::int32_t{0});
+	Require(std::get<std::int32_t>(Run(vm, "local value = 1; return value;", receiver)) == 1, "newly recovered local declaration must produce its independent value");
+	Require(std::holds_alternative<std::monostate>(Run(vm, "this.value = 1;", receiver)) && std::get<std::int32_t>(vm.GetSlot(receiver, std::string("value"))) == 1, "newly recovered assignment must publish its effect and retain implicit null return");
+	Require(std::get<std::int32_t>(Run(vm, "return 1 + 2;", receiver)) == 3, "newly recovered arithmetic must produce its VM addition result");
 	Require(std::get<std::int32_t>(Run(vm, "return 29;", vm.RootTable())) == 29, "a rejected compile must not poison a later actual compilation/invocation");
 }
 
@@ -756,6 +761,196 @@ static void TestRegisteredColorHexAndActualArgumentWords() {
 	Require(std::get<std::int32_t>(vm.Invoke(closure, receiver_arguments).Value) == 71 && calls == 1, "compiled hexadecimal callback changed its result or invocation count");
 }
 
+static void TestScopedLocalDeclarations() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("inner"), std::int32_t{0});
+	vm.NewSlot(receiver, std::string("scoped"), std::int32_t{61});
+	vm.NewSlot(vm.ConstantTable(), std::string("TOKEN"), std::int32_t{90});
+	Require(std::get<std::int32_t>(Run(vm, "local value = 5; { local value = value + 2; this.inner = value; local scoped = 99; } return value;", receiver)) == 5 && std::get<std::int32_t>(vm.GetSlot(receiver, std::string("inner"))) == 7, "block shadow initializer must read the old local, then restore its original register binding");
+	Require(std::get<std::int32_t>(Run(vm, "{ local scoped = 17; } return scoped;", receiver)) == 61, "retired block local must resolve through the actual receiver rather than its stale register");
+	Require(std::get<std::int32_t>(Run(vm, "local TOKEN = 7, other = TOKEN + 3; local TOKEN = other + 1; return TOKEN;", receiver)) == 11, "declarations must register names in order and resolve the last same-scope local before constants");
+	Require(std::holds_alternative<std::monostate>(Run(vm, "local empty; return empty;", receiver)), "uninitialized local must receive native null");
+	Require(std::get<std::int32_t>(Run(vm, "local value = 1\nvalue = value + 4\nreturn value", receiver)) == 5, "native statement LF must separate declarations and assignments without semicolons");
+	Require(std::get<std::int32_t>(Run(vm, "local value = 1; return value + (value = 4);", receiver)) == 8, "binary evaluation must retain the original local register alias rather than invent an eager local copy");
+}
+
+static void TestContainerLiteralsAndEvaluationOrder() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	std::vector<std::int32_t> calls;
+	vm.NewSlot(receiver, std::string("mark"), vm.CreateNativeClosure("mark", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 2 && arguments[0] == receiver, "container callback lost its receiver");
+		calls.push_back(std::get<std::int32_t>(arguments[1]));
+		return sgre::script::SquirrelNativeResult::ReturnValue(arguments[1]);
+	}));
+	const auto result = Run(vm, "local index = 2; return { values = [mark(1), index++, index,] nested = { answer = mark(2) }, [\"dynamic\"] = mark(3), constructor = 19 };", receiver);
+	const auto values = vm.GetSlot(result, std::string("values"));
+	Require(vm.Type(result) == sgre::script::SquirrelValueType::Table && vm.Type(values) == sgre::script::SquirrelValueType::Array && calls == std::vector<std::int32_t>{1, 2, 3}, "container fields and nested elements must execute once in original order");
+	Require(std::get<std::int32_t>(vm.GetSlot(values, std::int32_t{0})) == 1 && std::get<std::int32_t>(vm.GetSlot(values, std::int32_t{1})) == 2 && std::get<std::int32_t>(vm.GetSlot(values, std::int32_t{2})) == 3, "array append must publish each value before the following element changes its local");
+	Require(std::get<std::int32_t>(vm.GetSlot(vm.GetSlot(result, std::string("nested")), std::string("answer"))) == 2 && std::get<std::int32_t>(vm.GetSlot(result, std::string("dynamic"))) == 3 && std::get<std::int32_t>(vm.GetSlot(result, std::string("constructor"))) == 19, "literal identifier and evaluated table keys differ");
+	RequireFailure([&] {
+		static_cast<void>(vm.GetSlot(values, std::int32_t{3}));
+	},
+	    "index");
+	calls.clear();
+	RequireFailure([&] {
+		static_cast<void>(Run(vm, "local index = 2; return { values = [mark(1), index++, index,] nested = { answer = mark(2) } [\"dynamic\"] = mark(3), constructor = 19 };", receiver));
+	},
+	    "Squirrel assignment to a missing slot");
+	Require(calls == std::vector<std::int32_t>{1, 2, 3}, "without the field comma, native postfix must evaluate the preceding table, computed key and right value before its real missing-slot SET fails");
+	const auto spaced = Run(vm, "return [11 17 23];", receiver);
+	Require(std::get<std::int32_t>(vm.GetSlot(spaced, std::int32_t{2})) == 23, "native container parser permits omitted optional commas between complete expressions");
+	Require(vm.Type(Run(vm, "return {};", receiver)) == sgre::script::SquirrelValueType::Table && vm.Type(Run(vm, "return [];", receiver)) == sgre::script::SquirrelValueType::Array, "empty literals must allocate actual distinct container types");
+}
+
+static void TestMutableCallArgumentsAndReceivers() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	std::vector<std::int32_t> values;
+	vm.NewSlot(receiver, std::string("collect"), vm.CreateNativeClosure("collect", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 4 && arguments[0] == receiver, "local argument call lost its receiver or arity");
+		for (std::size_t index = 1; index < arguments.size(); ++index) {
+			values.push_back(std::get<std::int32_t>(arguments[index]));
+		}
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{53});
+	}));
+	Require(std::get<std::int32_t>(Run(vm, "local value = 4; return collect(value, value++, value);", receiver)) == 53 && values == std::vector<std::int32_t>{4, 4, 5}, "each local argument must be copied before later argument mutation");
+	values.clear();
+	Require(std::get<std::int32_t>(Run(vm, "local value = 4; return collect((value), value++, value);", receiver)) == 53 && values == std::vector<std::int32_t>{4, 4, 5}, "parentheses erase assignment eligibility but must not bypass native local-argument copying");
+	values.clear();
+	Require(std::get<std::int32_t>(Run(vm, "local value = 3; return collect(value, value = 7, value);", receiver)) == 53 && values == std::vector<std::int32_t>{3, 7, 7}, "local assignment result must be frozen at its argument boundary");
+	const auto first = vm.CreateTable();
+	const auto second = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("first"), first);
+	vm.NewSlot(receiver, std::string("second"), second);
+	std::size_t calls = 0;
+	vm.NewSlot(first, std::string("method"), vm.CreateNativeClosure("method", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 2 && arguments[0] == first && arguments[1] == second, "prepared method receiver must survive reassignment of the original local during arguments");
+		++calls;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{71});
+	}));
+	Require(std::get<std::int32_t>(Run(vm, "local object = this.first; return object.method(object = this.second);", receiver)) == 71 && calls == 1, "method preparation must precede argument effects exactly once");
+}
+
+static void TestAssignmentAndPostIncrementEffects() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("value"), std::int32_t{3});
+	Require(std::get<std::int32_t>(Run(vm, "local left = 0, right = 0; left = right = 9; return left + right;", receiver)) == 18, "assignment must associate right-to-left through actual local registers");
+	Require(std::get<std::int32_t>(Run(vm, "local old = this.value++; return old;", receiver)) == 3 && std::get<std::int32_t>(vm.GetSlot(receiver, std::string("value"))) == 4, "slot post-increment must return the old value and commit one addition");
+	std::size_t key_calls = 0;
+	vm.NewSlot(receiver, std::string("key"), vm.CreateNativeClosure("key", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 1 && arguments[0] == receiver, "assignment key lost its receiver");
+		++key_calls;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("value"));
+	}));
+	Require(std::get<std::int32_t>(Run(vm, "return this[key()] = 27;", receiver)) == 27 && key_calls == 1 && std::get<std::int32_t>(vm.GetSlot(receiver, std::string("value"))) == 27, "indexed assignment must evaluate its key once and return the actual assigned value");
+	const auto type = vm.CreateClass();
+	std::int32_t stored = 12;
+	std::string order;
+	vm.NewSlot(type, std::string("_get"), vm.CreateNativeClosure("get", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 2 && sgre::script::StringText(arguments[1]) == "count", "post-increment getter key differs");
+		order += "G";
+		return sgre::script::SquirrelNativeResult::ReturnValue(stored);
+	}));
+	vm.NewSlot(type, std::string("_set"), vm.CreateNativeClosure("set", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 3 && sgre::script::StringText(arguments[1]) == "count", "post-increment setter key differs");
+		order += "S";
+		stored = std::get<std::int32_t>(arguments[2]);
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	vm.NewSlot(receiver, std::string("proxy"), vm.CreateInstance(type));
+	Require(std::get<std::int32_t>(Run(vm, "return this.proxy.count++;", receiver)) == 12 && stored == 13 && order == "GS", "compiled post-increment must use the VM getter/arithmetic/setter operation without duplicate source reads");
+}
+
+static void TestForLoopControlAndContainerEffects() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto receiver = vm.CreateTable();
+	const auto result = Run(vm, "local result = []; for (local i = 0; i <= 3; i++) { local item = { number = i previous = i > 0 ? i - 1 : -1 next = i < 3 ? i + 1 : -1 }; result.append(item); } return result;", receiver);
+	for (std::int32_t index = 0; index < 4; ++index) {
+		const auto item = vm.GetSlot(result, index);
+		Require(std::get<std::int32_t>(vm.GetSlot(item, std::string("number"))) == index && std::get<std::int32_t>(vm.GetSlot(item, std::string("previous"))) == (index == 0 ? -1 : index - 1) && std::get<std::int32_t>(vm.GetSlot(item, std::string("next"))) == (index == 3 ? -1 : index + 1), "loop must construct each independent container from the current induction value and selected arithmetic branch");
+	}
+	RequireFailure([&] {
+		static_cast<void>(vm.GetSlot(result, std::int32_t{4}));
+	},
+	    "index");
+	Require(std::get<std::int32_t>(Run(vm, "local sum = 0; for (local i = 0; i < 3; i++) for (local j = 0; j < 2; j++) { sum = sum + i + j; } return sum;", receiver)) == 9, "nested for iteration blocks and back jumps must preserve both loop-local registers");
+	Require(std::get<std::int32_t>(Run(vm, "local value = 0; for (; value < 5; value = value + 1) ; return value;", receiver)) == 5, "empty loop body must still execute its iteration and condition");
+	Require(std::get<std::int32_t>(Run(vm, "for (;;) return 37;", receiver)) == 37, "omitted condition must follow the real loop body without a fabricated completion");
+	Require(std::get<std::int32_t>(Run(vm, "local value = 0; for (local i = 5; i < 0; i++) { value = 19; } return value;", receiver)) == 0, "false initial condition must skip both body and iteration");
+	vm.NewSlot(receiver, std::string("i"), std::int32_t{83});
+	Require(std::get<std::int32_t>(Run(vm, "for (local i = 0; i < 2; i++) {} return i;", receiver)) == 83, "loop-local scope must retire before following receiver lookup");
+	Require(std::get<std::int32_t>(Run(vm, "local count = 0; for (local i = 0; i < 1000; i++) { local values = [i, i + 1]; count = count + 1; } return count;", receiver)) == 1000, "ordinary iterations must reuse bounded registers rather than allocate runtime compiler temporaries");
+}
+
+static void TestLoopSideEffectOrderAndSuspension() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	std::string order;
+	vm.NewSlot(receiver, std::string("check"), vm.CreateNativeClosure("check", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		order += "C";
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::get<std::int32_t>(arguments[1]) < 2);
+	}));
+	vm.NewSlot(receiver, std::string("step"), vm.CreateNativeClosure("step", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		order += "I";
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::get<std::int32_t>(arguments[1]) + 1);
+	}));
+	vm.NewSlot(receiver, std::string("body"), vm.CreateNativeClosure("body", [&](SquirrelVm&, std::span<const SquirrelValue>) {
+		order += "B";
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	Require(std::get<std::int32_t>(Run(vm, "local i = 0; for (; check(i); i = step(i)) body(); return i;", receiver)) == 2 && order == "CBICBIC", "compiled iteration must execute after each body although parsed before the body");
+	std::size_t waits = 0;
+	vm.NewSlot(receiver, std::string("wait"), vm.CreateNativeClosure("wait", [&](SquirrelVm&, std::span<const SquirrelValue>) {
+		++waits;
+		return vm.RequestNativeSuspension();
+	}));
+	const auto closure = vm.CreateClosure(CompileSquirrelSource(vm, "local count = 0; for (local i = 0; i < 2; i++) { count = count + 1; wait(); } return count;", "suspended-loop"));
+	const std::array<SquirrelValue, 1> arguments{receiver};
+	Require(vm.Invoke(closure, arguments).State == sgre::script::SquirrelRunState::Suspended && waits == 1, "loop must suspend at its actual first callback");
+	Require(vm.Resume().State == sgre::script::SquirrelRunState::Suspended && waits == 2, "resume must preserve induction and local state for exactly the next iteration");
+	const auto completed = vm.Resume();
+	Require(completed.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(completed.Value) == 2 && waits == 2, "second resume must exit the original loop with retained local values");
+}
+
+static void TestLocalGrammarSafetyAndLimits() {
+	SquirrelVm vm;
+	vm.NewSlot(vm.ConstantTable(), std::string("IMMUTABLE"), std::int32_t{9});
+	for (const auto source : {"local = 1;", "local value = ;", "for local i = 0;", "for (local i = 0 i < 2; i++) {}", "for (local i = 0; i < 2 i++) {}", "for (local i = 0; i < 2; i++ {}", "for (;;) break;", "for (;;) continue;", "return { value : 1 };", "return { [1 = 2 };", "return [1,;", "return { value = 1; };", "return 1 = 2;", "return 1++;", "return (1 + 2)++;", "local value = 1; return (value) = 3;", "IMMUTABLE = 7;", "return IMMUTABLE++;", "return ++this.value;", "return --this.value;", "return this.value--1;", "return 2 * 3;", "return function() :(value) { return value; };"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "local-grammar-error"));
+		},
+		    "local-grammar-error");
+	}
+	for (const auto source : {"IMMUTABLE.field = 7;", "IMMUTABLE[0] = 7;"}) {
+		const auto program = CompileSquirrelSource(vm, source, "constant-slot-context");
+		Require(std::count_if(program.MainFunction.Instructions.begin(), program.MainFunction.Instructions.end(), [](const auto& instruction) {
+			return instruction.Opcode == 13;
+		}) == 1,
+		    "dereference must clear constant-binding modification status and leave actual slot/type validation to the VM");
+	}
+	std::string declarations;
+	for (std::size_t index = 0; index < 255; ++index) {
+		declarations += "local value" + std::to_string(index) + ";";
+	}
+	RequireFailure([&] {
+		static_cast<void>(CompileSquirrelSource(vm, declarations, "local-register-limit"));
+	},
+	    "register limit exceeded");
+	RequireFailure([&] {
+		static_cast<void>(CompileSquirrelSource(vm, std::string(70, '{') + "17;" + std::string(70, '}'), "block-depth-limit"));
+	},
+	    "depth limit exceeded");
+	RequireFailure([&] {
+		static_cast<void>(CompileSquirrelSource(vm, "return " + std::string(70, '[') + "17" + std::string(70, ']') + ";", "container-depth-limit"));
+	},
+	    "depth limit exceeded");
+	Require(std::get<std::int32_t>(Run(vm, "local value = 6; value++; return value + 1;", vm.RootTable())) == 8, "rejected syntax must leave compiler and VM available for a genuine later local program");
+}
+
 int main() {
 	try {
 		TestLiteralsStatementsAndMainPrototype();
@@ -775,6 +970,13 @@ int main() {
 		TestHexadecimalWordsAndPrefixBoundaries();
 		TestHexadecimalDigitLimitsAndDiagnostics();
 		TestRegisteredColorHexAndActualArgumentWords();
+		TestScopedLocalDeclarations();
+		TestContainerLiteralsAndEvaluationOrder();
+		TestMutableCallArgumentsAndReceivers();
+		TestAssignmentAndPostIncrementEffects();
+		TestForLoopControlAndContainerEffects();
+		TestLoopSideEffectOrderAndSuspension();
+		TestLocalGrammarSafetyAndLimits();
 		std::cout << "source compiler: real prototypes, receiver/context lookup, inert compilation, calls and grammar rejection passed\n";
 		return 0;
 	} catch (const std::exception& error) {

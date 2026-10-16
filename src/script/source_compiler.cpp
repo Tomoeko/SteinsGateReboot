@@ -35,6 +35,10 @@ namespace sgre::script {
 		Dot,
 		Comma,
 		Semicolon,
+		Assign,
+		Plus,
+		Minus,
+		Increment,
 		Equal,
 		NotEqual,
 		Less,
@@ -154,10 +158,24 @@ namespace sgre::script {
 				token.Kind = SourceTokenKind::Semicolon;
 				break;
 			case '=':
-				if (m_Position == m_Source.size() || m_Source[m_Position++] != '=') {
-					Fail(token.Offset, "unsupported operator in recovered expression grammar");
+				token.Kind = SourceTokenKind::Assign;
+				if (m_Position < m_Source.size() && m_Source[m_Position] == '=') {
+					++m_Position;
+					token.Kind = SourceTokenKind::Equal;
 				}
-				token.Kind = SourceTokenKind::Equal;
+				break;
+			case '+':
+				token.Kind = SourceTokenKind::Plus;
+				if (m_Position < m_Source.size() && m_Source[m_Position] == '+') {
+					++m_Position;
+					token.Kind = SourceTokenKind::Increment;
+				}
+				break;
+			case '-':
+				if (m_Position < m_Source.size() && m_Source[m_Position] == '-') {
+					Fail(token.Offset, "decrement requires unrecovered source grammar");
+				}
+				token.Kind = SourceTokenKind::Minus;
 				break;
 			case '<':
 			case '>':
@@ -294,6 +312,8 @@ namespace sgre::script {
 	struct SourceOperand {
 		std::uint8_t Register = 0;
 		bool IsSlot = false;
+		bool IsLocal = false;
+		bool ReadOnly = false;
 		bool LiteralKey = false;
 		std::int32_t Key = 0;
 	};
@@ -405,18 +425,22 @@ namespace sgre::script {
 		}
 
 		SourceOperand Identifier(SourceFunctionState& state, std::string name) {
-			const auto local = std::find(state.Locals.begin(), state.Locals.end(), name);
-			if (local != state.Locals.end()) {
-				SourceOperand result;
-				result.Register = static_cast<std::uint8_t>(local - state.Locals.begin());
-				return result;
+			for (std::size_t index = state.Locals.size(); index != 0; --index) {
+				if (state.Locals[index - 1] == name) {
+					SourceOperand result;
+					result.Register = static_cast<std::uint8_t>(index - 1);
+					result.IsLocal = true;
+					return result;
+				}
 			}
 			if (SourceKeyword(name)) {
 				Fail("unsupported keyword in recovered expression grammar");
 			}
 			if (const auto constant = m_Vm.FindRawSlot(m_Vm.ConstantTable(), SquirrelString(name))) {
 				if (m_Vm.Type(*constant) != SquirrelValueType::Table) {
-					return LoadConstant(state, *constant);
+					auto result = LoadConstant(state, *constant);
+					result.ReadOnly = true;
+					return result;
 				}
 				// Native25fcab resolves one enum member before emitting its primitive literal.
 				Require(SourceTokenKind::Dot, "constant table requires '.' and member identifier");
@@ -429,7 +453,9 @@ namespace sgre::script {
 				if (!member) {
 					Fail("invalid constant [" + name + "." + member_name + "]");
 				}
-				return LoadConstant(state, *member);
+				auto result = LoadConstant(state, *member);
+				result.ReadOnly = true;
+				return result;
 			}
 			SourceOperand result;
 			result.IsSlot = true;
@@ -471,7 +497,53 @@ namespace sgre::script {
 			return result;
 		}
 
+		SourceOperand Container(SourceFunctionState& state, bool table) {
+			SourceOperand result;
+			result.Register = Allocate(state);
+			const auto allocation = state.Function.Instructions.size();
+			Emit(state, table ? 30 : 31, result.Register);
+			const auto temporary_base = state.NextRegister;
+			const auto ending = table ? SourceTokenKind::RightBrace : SourceTokenKind::RightBracket;
+			std::int32_t count = 0;
+			while (m_Token.Kind != ending) {
+				if (m_Token.Kind == SourceTokenKind::End) {
+					Fail("unterminated container literal");
+				}
+				if (table) {
+					std::uint8_t key = 0;
+					if (Accept(SourceTokenKind::LeftBracket)) {
+						key = Materialize(state, CommaExpression(state));
+						Require(SourceTokenKind::RightBracket, "table key requires closing bracket");
+					} else {
+						if (m_Token.Kind != SourceTokenKind::Identifier || (SourceKeyword(m_Token.Text) && m_Token.Text != "constructor")) {
+							Fail("table field requires identifier or bracketed key");
+						}
+						key = LoadConstant(state, SquirrelString(m_Token.Text)).Register;
+						m_Token = m_Lexer.Next();
+					}
+					Require(SourceTokenKind::Assign, "table field requires '='");
+					const auto value = Materialize(state, Expression(state));
+					Emit(state, 60, 0, result.Register, key, value);
+				} else {
+					const auto value = Materialize(state, Expression(state));
+					Emit(state, 32, result.Register, value);
+				}
+				++count;
+				static_cast<void>(Accept(SourceTokenKind::Comma));
+				state.NextRegister = temporary_base;
+			}
+			state.Function.Instructions[allocation].Argument1 = count;
+			Require(ending, "container literal requires closing delimiter");
+			return result;
+		}
+
 		SourceOperand Primary(SourceFunctionState& state) {
+			if (Accept(SourceTokenKind::LeftBracket)) {
+				return Container(state, false);
+			}
+			if (Accept(SourceTokenKind::LeftBrace)) {
+				return Container(state, true);
+			}
 			if (Accept(SourceTokenKind::Root)) {
 				if (m_Token.Kind != SourceTokenKind::Identifier || SourceKeyword(m_Token.Text)) {
 					Fail("root access requires identifier");
@@ -551,7 +623,14 @@ namespace sgre::script {
 			std::vector<std::uint8_t> arguments;
 			if (m_Token.Kind != SourceTokenKind::RightParenthesis) {
 				do {
-					arguments.push_back(Materialize(state, Expression(state)));
+					const auto argument = Expression(state);
+					auto value = Materialize(state, argument);
+					if (static_cast<std::size_t>(value) < state.Locals.size()) {
+						const auto saved = Allocate(state);
+						Emit(state, 10, saved, value);
+						value = saved;
+					}
+					arguments.push_back(value);
 				} while (Accept(SourceTokenKind::Comma));
 			}
 			Require(SourceTokenKind::RightParenthesis, "call requires closing parenthesis");
@@ -574,6 +653,7 @@ namespace sgre::script {
 						Fail("member access requires identifier");
 					}
 					const auto object = Materialize(state, operand);
+					operand = {};
 					operand.Register = object;
 					operand.IsSlot = true;
 					operand.LiteralKey = true;
@@ -587,12 +667,21 @@ namespace sgre::script {
 					const auto object = Materialize(state, operand);
 					const auto key = Materialize(state, Expression(state));
 					Require(SourceTokenKind::RightBracket, "indexed access requires closing bracket");
+					operand = {};
 					operand.Register = object;
 					operand.IsSlot = true;
 					operand.LiteralKey = false;
 					operand.Key = key;
 				} else if (Accept(SourceTokenKind::LeftParenthesis)) {
 					operand = Call(state, operand);
+				} else if (m_Token.Kind == SourceTokenKind::Increment && !m_Token.NewlineBefore) {
+					RequireAssignable(operand);
+					m_Token = m_Lexer.Next();
+					const auto key = operand.IsSlot ? SlotKey(state, operand) : std::uint8_t{0};
+					SourceOperand result;
+					result.Register = Allocate(state);
+					Emit(state, operand.IsSlot ? 38 : 39, result.Register, operand.Register, key, 1);
+					return result;
 				} else {
 					return operand;
 				}
@@ -610,25 +699,41 @@ namespace sgre::script {
 		}
 
 		SourceOperand Unary(SourceFunctionState& state) {
-			if (!Accept(SourceTokenKind::Not)) {
+			const auto operation = m_Token.Kind;
+			if (operation != SourceTokenKind::Not && operation != SourceTokenKind::Minus) {
 				return Postfix(state);
 			}
+			m_Token = m_Lexer.Next();
 			EnterExpressionDepth();
 			const auto value = Materialize(state, Unary(state));
 			--m_Depth;
 			SourceOperand result;
 			result.Register = Allocate(state);
-			Emit(state, 46, result.Register, value);
+			Emit(state, operation == SourceTokenKind::Not ? 46 : 45, result.Register, value);
 			return result;
 		}
 
-		SourceOperand Comparison(SourceFunctionState& state) {
+		SourceOperand Additive(SourceFunctionState& state) {
 			auto left = Unary(state);
-			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual || m_Token.Kind == SourceTokenKind::Less || m_Token.Kind == SourceTokenKind::Greater || m_Token.Kind == SourceTokenKind::LessEqual || m_Token.Kind == SourceTokenKind::GreaterEqual) {
+			while (m_Token.Kind == SourceTokenKind::Plus || m_Token.Kind == SourceTokenKind::Minus) {
 				const auto operation = m_Token.Kind;
 				m_Token = m_Lexer.Next();
 				const auto left_value = Materialize(state, left);
 				const auto right_value = Materialize(state, Unary(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 17, left.Register, right_value, left_value, operation == SourceTokenKind::Plus ? '+' : '-');
+			}
+			return left;
+		}
+
+		SourceOperand Comparison(SourceFunctionState& state) {
+			auto left = Additive(state);
+			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual || m_Token.Kind == SourceTokenKind::Less || m_Token.Kind == SourceTokenKind::Greater || m_Token.Kind == SourceTokenKind::LessEqual || m_Token.Kind == SourceTokenKind::GreaterEqual) {
+				const auto operation = m_Token.Kind;
+				m_Token = m_Lexer.Next();
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, Additive(state));
 				left = {};
 				left.Register = Allocate(state);
 				if (operation == SourceTokenKind::Equal || operation == SourceTokenKind::NotEqual) {
@@ -684,9 +789,41 @@ namespace sgre::script {
 			return result;
 		}
 
+		void RequireAssignable(const SourceOperand& operand) const {
+			if (operand.ReadOnly) {
+				Fail("free variables cannot be modified");
+			}
+			if (!operand.IsLocal && !operand.IsSlot) {
+				Fail("can't assign expression");
+			}
+		}
+
+		std::uint8_t SlotKey(SourceFunctionState& state, const SourceOperand& operand) {
+			if (!operand.LiteralKey) {
+				return static_cast<std::uint8_t>(operand.Key);
+			}
+			const auto key = Allocate(state);
+			Emit(state, 1, key, operand.Key);
+			return key;
+		}
+
 		SourceOperand Expression(SourceFunctionState& state) {
 			EnterExpressionDepth();
 			const auto condition = LogicalOr(state);
+			if (Accept(SourceTokenKind::Assign)) {
+				RequireAssignable(condition);
+				const auto key = condition.IsSlot ? SlotKey(state, condition) : std::uint8_t{0};
+				const auto value = Materialize(state, Expression(state));
+				--m_Depth;
+				if (condition.IsLocal) {
+					Emit(state, 10, condition.Register, value);
+					return condition;
+				}
+				SourceOperand result;
+				result.Register = Allocate(state);
+				Emit(state, 13, result.Register, condition.Register, key, value);
+				return result;
+			}
 			if (!Accept(SourceTokenKind::Question)) {
 				--m_Depth;
 				return condition;
@@ -722,40 +859,133 @@ namespace sgre::script {
 			return result;
 		}
 
-		void CompileStatements(SourceFunctionState& state, SourceTokenKind ending) {
+		bool Keyword(std::string_view name) const {
+			return m_Token.Kind == SourceTokenKind::Identifier && m_Token.Text == name;
+		}
+
+		void FinishStatement() {
+			if (!Accept(SourceTokenKind::Semicolon) && m_Token.Kind != SourceTokenKind::End && m_Token.Kind != SourceTokenKind::RightBrace && !m_Token.NewlineBefore) {
+				Fail("unsupported statement continuation in recovered grammar");
+			}
+		}
+
+		void LocalDeclaration(SourceFunctionState& state) {
+			m_Token = m_Lexer.Next();
+			do {
+				if (m_Token.Kind != SourceTokenKind::Identifier || (SourceKeyword(m_Token.Text) && m_Token.Text != "constructor")) {
+					Fail("local declaration requires identifier");
+				}
+				const auto name = m_Token.Text;
+				m_Token = m_Lexer.Next();
+				const auto local = static_cast<std::uint8_t>(state.Locals.size());
+				// Native261790 makes the new name visible only after evaluating its initializer.
+				if (Accept(SourceTokenKind::Assign)) {
+					const auto value = Materialize(state, Expression(state));
+					if (local != value) {
+						Emit(state, 10, local, value);
+					}
+				} else {
+					Emit(state, 20, Allocate(state), 1);
+				}
+				if (state.Locals.size() >= kMaximumCompilerRegisters) {
+					Fail("register limit exceeded");
+				}
+				state.Locals.push_back(name);
+				state.NextRegister = state.Locals.size();
+				state.Function.StackSize = std::max(state.Function.StackSize, static_cast<std::uint32_t>(state.NextRegister));
+			} while (Accept(SourceTokenKind::Comma));
+		}
+
+		void ForStatement(SourceFunctionState& state) {
+			m_Token = m_Lexer.Next();
+			const auto outer_locals = state.Locals.size();
+			Require(SourceTokenKind::LeftParenthesis, "for requires opening parenthesis");
+			if (Keyword("local")) {
+				LocalDeclaration(state);
+			} else if (m_Token.Kind != SourceTokenKind::Semicolon) {
+				static_cast<void>(Materialize(state, CommaExpression(state)));
+			}
+			Require(SourceTokenKind::Semicolon, "for initializer requires semicolon");
+			state.NextRegister = state.Locals.size();
+			const auto condition_start = state.Function.Instructions.size();
+			std::optional<std::size_t> exit_branch;
+			if (m_Token.Kind != SourceTokenKind::Semicolon) {
+				const auto condition = Materialize(state, CommaExpression(state));
+				exit_branch = state.Function.Instructions.size();
+				Emit(state, 26, condition);
+			}
+			Require(SourceTokenKind::Semicolon, "for condition requires semicolon");
+			state.NextRegister = state.Locals.size();
+			const auto iteration_start = state.Function.Instructions.size();
+			if (m_Token.Kind != SourceTokenKind::RightParenthesis) {
+				static_cast<void>(Materialize(state, CommaExpression(state)));
+			}
+			Require(SourceTokenKind::RightParenthesis, "for requires closing parenthesis");
+			auto& instructions = state.Function.Instructions;
+			std::vector<SquirrelInstruction> iteration(instructions.begin() + static_cast<std::ptrdiff_t>(iteration_start), instructions.end());
+			instructions.resize(iteration_start);
+			state.NextRegister = state.Locals.size();
+			CompileStatement(state);
+			instructions.insert(instructions.end(), iteration.begin(), iteration.end());
+			const auto back_jump = static_cast<std::int32_t>(condition_start) - static_cast<std::int32_t>(instructions.size()) - 1;
+			Emit(state, 24, 0, back_jump);
+			if (exit_branch) {
+				PatchBranch(state, *exit_branch);
+			}
+			state.Locals.resize(outer_locals);
+			state.NextRegister = outer_locals;
+		}
+
+		void CompileStatement(SourceFunctionState& state) {
+			EnterExpressionDepth();
+			if (Accept(SourceTokenKind::Semicolon)) {
+				--m_Depth;
+				return;
+			}
+			if (Accept(SourceTokenKind::LeftBrace)) {
+				const auto outer_locals = state.Locals.size();
+				CompileStatements(state, SourceTokenKind::RightBrace, false);
+				Require(SourceTokenKind::RightBrace, "block requires closing brace");
+				state.Locals.resize(outer_locals);
+				state.NextRegister = outer_locals;
+			} else if (Keyword("for")) {
+				ForStatement(state);
+			} else {
+				if (Keyword("local")) {
+					LocalDeclaration(state);
+				} else {
+					const bool returning = Keyword("return");
+					if (returning) {
+						m_Token = m_Lexer.Next();
+					}
+					if (returning && (m_Token.NewlineBefore || m_Token.Kind == SourceTokenKind::End || m_Token.Kind == SourceTokenKind::RightBrace || m_Token.Kind == SourceTokenKind::Semicolon)) {
+						Emit(state, 19, 255);
+					} else {
+						const auto result = Materialize(state, CommaExpression(state));
+						if (returning) {
+							if (state.Parent != nullptr && !state.Function.Instructions.empty() && state.Function.Instructions.back().Opcode == 6 && state.Function.Instructions.back().Argument0 == result) {
+								state.Function.Instructions.back().Opcode = 5;
+							}
+							Emit(state, 19, 1, result);
+						}
+					}
+				}
+				FinishStatement();
+				state.NextRegister = state.Locals.size();
+			}
+			--m_Depth;
+		}
+
+		void CompileStatements(SourceFunctionState& state, SourceTokenKind ending, bool implicit_return = true) {
 			while (m_Token.Kind != ending) {
 				if (m_Token.Kind == SourceTokenKind::End) {
 					Fail("unterminated function body");
 				}
-				if (Accept(SourceTokenKind::Semicolon)) {
-					continue;
-				}
-				const bool returning = m_Token.Kind == SourceTokenKind::Identifier && m_Token.Text == "return";
-				if (returning) {
-					m_Token = m_Lexer.Next();
-				}
-				if (returning && m_Token.NewlineBefore) {
-					Emit(state, 19, 255);
-					state.NextRegister = state.Locals.size();
-					continue;
-				}
-				if (returning && (m_Token.Kind == ending || m_Token.Kind == SourceTokenKind::Semicolon)) {
-					Emit(state, 19, 255);
-				} else {
-					const auto result = Materialize(state, CommaExpression(state));
-					if (returning) {
-						if (state.Parent != nullptr && !state.Function.Instructions.empty() && state.Function.Instructions.back().Opcode == 6 && state.Function.Instructions.back().Argument0 == result) {
-							state.Function.Instructions.back().Opcode = 5;
-						}
-						Emit(state, 19, 1, result);
-					}
-				}
-				if (!Accept(SourceTokenKind::Semicolon) && m_Token.Kind != ending) {
-					Fail("unsupported statement continuation in recovered grammar");
-				}
-				state.NextRegister = state.Locals.size();
+				CompileStatement(state);
 			}
-			Emit(state, 19, 255);
+			if (implicit_return) {
+				Emit(state, 19, 255);
+			}
 		}
 
 		SquirrelVm& m_Vm;
