@@ -297,8 +297,6 @@ namespace sgre::app {
 		}
 		if (result.Disposition != LaunchConfigurationDisposition::Reused) {
 			Persist(config_path, result.Configuration);
-		} else {
-			AtomicSave(LastGoodPath(config_path), result.Configuration);
 		}
 
 		return result;
@@ -307,6 +305,17 @@ namespace sgre::app {
 	void LaunchConfigurationStore::Save(const LaunchConfiguration& configuration) const {
 		const auto validated = ValidateAssets(configuration, ConfigurationPath());
 		static_cast<void>(validated.SeedFile.empty() ? ReadOriginalArchiveSeed(validated.Installation / "sgre_steam.exe") : SeedFromFile(validated.SeedFile));
+		static_cast<void>(HasConfig(LastGoodPath(ConfigurationPath())));
+		if (HasConfig(ConfigurationPath())) {
+			try {
+				const auto existing = ParseLaunchConfigurationDocument(ReadConfig(ConfigurationPath()));
+				if (existing.SchemaVersion == 2 && SerializeLaunchConfiguration(existing.Configuration) == SerializeLaunchConfiguration(validated)) {
+					return;
+				}
+			} catch (const LaunchConfigurationFormatError&) {
+				// Explicit Save still replaces malformed managed state after asset validation.
+			}
+		}
 		Persist(ConfigurationPath(), validated);
 	}
 

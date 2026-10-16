@@ -165,6 +165,17 @@ static void StoreTests(const Fixture& fixture) {
 	Require(reused.Disposition == sgre::app::LaunchConfigurationDisposition::Reused && reused.ArchiveSeed == "independent-fixture-seed" && reused.Configuration.Installation == fixture.Game && reused.Configuration.Width == 1024 && reused.Configuration.Height == 576 && reused.Configuration.AudioSamplesPerSecond == 44100 && reused.Configuration.AudioChannels == 1 && reused.Configuration.DebugStartInGame && reused.Configuration.WindowWidth == 1600 && reused.Configuration.WindowHeight == 1000 && reused.Configuration.Fullscreen && !reused.Configuration.WindowCentered, "restart failed to reuse actual stored paths/defaults/debug/seed");
 	Require(Read(store.ConfigurationPath()) == before, "restart rewrote a valid config");
 	const auto managed = store.ConfigurationPath().string() + ".last-good";
+	const auto old_stamp = std::filesystem::file_time_type::clock::now() - std::chrono::hours(24);
+	std::filesystem::last_write_time(store.ConfigurationPath(), old_stamp);
+	std::filesystem::last_write_time(managed, old_stamp);
+	static_cast<void>(restarted.LoadOrCreate());
+	store.Save(configuration);
+	Require(std::filesystem::last_write_time(store.ConfigurationPath()) == old_stamp && std::filesystem::last_write_time(managed) == old_stamp, "unchanged startup and shutdown preferences must not rewrite primary or last-good config");
+	std::filesystem::rename(managed, managed + ".held");
+	static_cast<void>(restarted.LoadOrCreate());
+	store.Save(configuration);
+	Require(!std::filesystem::exists(managed), "loading valid config or saving unchanged preferences must not recreate an absent last-good file");
+	std::filesystem::rename(managed + ".held", managed);
 	std::filesystem::rename(managed, managed + ".held");
 	std::filesystem::create_directory(managed);
 	Reject([&] {
