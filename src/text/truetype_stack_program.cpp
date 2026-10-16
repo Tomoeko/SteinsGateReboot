@@ -2,11 +2,13 @@
 
 #include "sgre/text/truetype_control_program.hpp"
 #include "sgre/text/truetype_program.hpp"
+#include "sgre/text/truetype_state_program.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -318,6 +320,430 @@ namespace sgre::text {
 		return 0;
 	}
 
+	static std::int32_t AddWords(std::int32_t first, std::int32_t second) {
+		return WordValue(static_cast<std::uint32_t>(first) + static_cast<std::uint32_t>(second));
+	}
+
+	static std::int32_t SubtractWords(std::int32_t first, std::int32_t second) {
+		return WordValue(static_cast<std::uint32_t>(first) - static_cast<std::uint32_t>(second));
+	}
+
+	static std::int32_t MultiplyFixed(std::int32_t first, std::int32_t second) {
+		const auto product = std::int64_t(first) * second;
+		const auto rounded = product - (product < 0 ? 1 : 0) + 0x8000;
+		const auto quotient = rounded / 0x10000 - (rounded < 0 && rounded % 0x10000 != 0 ? 1 : 0);
+
+		return WordValue(static_cast<std::uint32_t>(quotient));
+	}
+
+	static std::optional<StackEffect> StateStackEffect(std::uint8_t opcode) {
+		if (opcode <= 0x05 || opcode == 0x0e || opcode == 0x18 || opcode == 0x19 || opcode == 0x3d || opcode == 0x4d || opcode == 0x4e || opcode == 0x7a || opcode == 0x7c || opcode == 0x7d) {
+			return StackEffect{0, 0};
+		}
+		if (opcode == 0x0c || opcode == 0x0d) {
+			return StackEffect{0, 2};
+		}
+		if ((opcode >= 0x10 && opcode <= 0x17) || opcode == 0x1a || (opcode >= 0x1d && opcode <= 0x1f) || opcode == 0x5e || opcode == 0x5f || opcode == 0x76 || opcode == 0x77 || opcode == 0x85 || opcode == 0x8d) {
+			return StackEffect{1, 0};
+		}
+		if (opcode == 0x42 || opcode == 0x44 || opcode == 0x70 || opcode == 0x8e) {
+			return StackEffect{2, 0};
+		}
+		if (opcode == 0x43 || opcode == 0x45 || (opcode >= 0x68 && opcode <= 0x6f) || opcode == 0x88) {
+			return StackEffect{1, 1};
+		}
+		if (opcode == 0x4b || opcode == 0x4c) {
+			return StackEffect{0, 1};
+		}
+
+		return std::nullopt;
+	}
+
+	static std::int32_t RoundStateDistance(const TrueTypeGraphicsState& graphics, std::int32_t distance, std::int32_t compensation) {
+		const bool negative = distance < 0;
+		const auto adjusted = negative ? SubtractWords(compensation, distance) : AddWords(compensation, distance);
+		std::int32_t rounded = 0;
+		switch (graphics.Round) {
+		case TrueTypeRoundMode::HalfGrid:
+			rounded = WordValue(static_cast<std::uint32_t>(adjusted) & 0xffffffc0u);
+			if (negative) {
+				rounded = SubtractWords(-32, rounded);
+
+				return rounded > 0 ? -32 : rounded;
+			}
+
+			return rounded >= -32 ? AddWords(rounded, 32) : 32;
+		case TrueTypeRoundMode::Grid:
+			rounded = WordValue(static_cast<std::uint32_t>(AddWords(adjusted, 32)) & 0xffffffc0u);
+			break;
+		case TrueTypeRoundMode::DoubleGrid:
+			rounded = WordValue(static_cast<std::uint32_t>(AddWords(adjusted, 16)) & 0xffffffe0u);
+			break;
+		case TrueTypeRoundMode::DownToGrid:
+			rounded = WordValue(static_cast<std::uint32_t>(adjusted) & 0xffffffc0u);
+			break;
+		case TrueTypeRoundMode::UpToGrid:
+			rounded = WordValue(static_cast<std::uint32_t>(AddWords(adjusted, 63)) & 0xffffffc0u);
+			break;
+		case TrueTypeRoundMode::Off:
+			rounded = adjusted;
+			break;
+		case TrueTypeRoundMode::Super:
+		case TrueTypeRoundMode::Super45:
+			if (graphics.RoundPeriod <= 0) {
+				throw std::runtime_error("TrueType super-round state requires a positive original period");
+			}
+
+			rounded = AddWords(adjusted, SubtractWords(graphics.RoundThreshold, graphics.RoundPhase));
+			if (graphics.Round == TrueTypeRoundMode::Super) {
+				rounded = WordValue(static_cast<std::uint32_t>(rounded) & static_cast<std::uint32_t>(NegateWord(graphics.RoundPeriod)));
+			} else {
+				rounded = SubtractWords(rounded, rounded % graphics.RoundPeriod);
+			}
+
+			rounded = AddWords(rounded, graphics.RoundPhase);
+			if (negative) {
+				rounded = NegateWord(rounded);
+
+				return rounded > 0 ? NegateWord(graphics.RoundPhase) : rounded;
+			}
+
+			return rounded < 0 ? graphics.RoundPhase : rounded;
+		}
+
+		rounded = negative ? NegateWord(rounded) : rounded;
+
+		return negative ? std::min(rounded, 0) : std::max(rounded, 0);
+	}
+
+	static void SetSuperRound(TrueTypeGraphicsState& graphics, std::int32_t selector, bool diagonal) {
+		const auto word = static_cast<std::uint32_t>(selector);
+		std::int32_t period = diagonal ? 0x2d41 : 0x4000;
+		if ((word & 0xc0) == 0) {
+			period = diagonal ? 0x16a0 : 0x2000;
+		} else if ((word & 0xc0) == 0x80) {
+			period = diagonal ? 0x5a82 : 0x8000;
+		}
+
+		const auto phase = period * static_cast<std::int32_t>((word >> 4) & 3) / 4;
+		const auto threshold = (word & 15) == 0 ? period - 1 : (static_cast<std::int32_t>(word & 15) - 4) * period / 8;
+		graphics.RoundPeriod = period / 256;
+		graphics.RoundPhase = phase / 256;
+		graphics.RoundThreshold = threshold / 256 - (threshold < 0 && threshold % 256 != 0 ? 1 : 0);
+		graphics.Round = diagonal ? TrueTypeRoundMode::Super45 : TrueTypeRoundMode::Super;
+	}
+
+	static void RequireEqualPpem(const TrueTypeInterpreterMetrics& metrics) {
+		if (metrics.XPpem != metrics.YPpem) {
+			throw std::runtime_error("TrueType state execution requires recovered anisotropic CVT and ppem projection");
+		}
+	}
+
+	static bool StateReferenceValid(std::int32_t index, std::size_t count, bool strict, std::uint32_t offset) {
+		if (static_cast<std::uint32_t>(index) < count) {
+			return true;
+		}
+		if (strict) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "state instruction index is outside its actual owner");
+		}
+
+		return false;
+	}
+
+	static void SelectStateZone(TrueTypeGraphicsState& graphics, std::uint8_t opcode, std::int32_t value, bool strict, std::uint32_t offset) {
+		if (!StateReferenceValid(value, 2, strict, offset)) {
+			return;
+		}
+
+		if (opcode == 0x16) {
+			graphics.ZonePointers.fill(static_cast<std::uint16_t>(value));
+		} else {
+			graphics.ZonePointers[opcode - 0x13] = static_cast<std::uint16_t>(value);
+		}
+	}
+
+	static std::int32_t StateInformation(const TrueTypeInterpreterMetrics& metrics, std::int32_t selector) {
+		const auto word = static_cast<std::uint32_t>(selector);
+		auto result = (word & 1) != 0 ? metrics.InterpreterVersion : 0u;
+		if ((word & 2) != 0 && metrics.Rotated) {
+			result |= 1u << 8;
+		}
+		if ((word & 4) != 0 && metrics.Stretched) {
+			result |= 1u << 9;
+		}
+		if ((word & 8) != 0 && metrics.HasVariations) {
+			result |= 1u << 10;
+		}
+		if ((word & 32) != 0 && metrics.Grayscale) {
+			result |= 1u << 12;
+		}
+		if (metrics.InterpreterVersion == 40) {
+			if ((word & 64) != 0) {
+				result |= 1u << 13;
+			}
+			if ((word & 256) != 0 && metrics.Version40Flag372) {
+				result |= 1u << 15;
+			}
+			if ((word & 1024) != 0) {
+				result |= 1u << 17;
+			}
+			if ((word & 2048) != 0) {
+				result |= 1u << 18;
+			}
+			if ((word & 4096) != 0 && metrics.Version40Flag376) {
+				result |= 1u << 19;
+			}
+		}
+
+		return WordValue(result);
+	}
+
+	static void SetScanControl(TrueTypeInterpreterState& state, std::int32_t selector) {
+		const auto word = static_cast<std::uint32_t>(selector);
+		const auto threshold = word & 255;
+		if (threshold == 255) {
+			state.Graphics.ScanControl = true;
+
+			return;
+		}
+		if (threshold == 0) {
+			state.Graphics.ScanControl = false;
+
+			return;
+		}
+
+		const auto& metrics = state.Metrics;
+		if (((word & 0x100) != 0 && metrics.CurrentPpem <= threshold) || ((word & 0x200) != 0 && metrics.Rotated) || ((word & 0x400) != 0 && metrics.Stretched)) {
+			state.Graphics.ScanControl = true;
+		}
+		if (((word & 0x800) != 0 && metrics.CurrentPpem > threshold) || ((word & 0x1000) != 0 && metrics.Rotated) || ((word & 0x2000) != 0 && metrics.Stretched)) {
+			state.Graphics.ScanControl = false;
+		}
+	}
+
+	static void SetInstructionControl(TrueTypeInterpreterState& state, std::int32_t value, std::int32_t selector, bool strict, std::uint32_t offset) {
+		if (selector < 1 || selector > 3) {
+			if (strict) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "INSTCTRL selector is outside its original three flags");
+			}
+
+			return;
+		}
+
+		const auto flag = 1u << (selector - 1);
+		if (value != 0 && static_cast<std::uint32_t>(value) != flag) {
+			if (strict) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "INSTCTRL value is neither zero nor its selected flag");
+			}
+
+			return;
+		}
+
+		state.Graphics.InstructionControl = static_cast<std::uint8_t>((state.Graphics.InstructionControl & ~flag) | static_cast<std::uint32_t>(value));
+		if (selector == 3 && state.Metrics.InterpreterVersion == 40) {
+			state.BackwardCompatibility = value != 4;
+		}
+	}
+
+	static void ExecuteStateKernel(const TrueTypeInstruction& instruction, std::span<std::int32_t> arguments, TrueTypeInterpreterState& state, bool strict) {
+		auto& graphics = state.Graphics;
+		const auto opcode = instruction.Opcode;
+		if (opcode <= 0x05) {
+			TrueTypeAxisVector vector;
+			vector.X = (opcode & 1) != 0 ? 0x4000 : 0;
+			vector.Y = (opcode & 1) != 0 ? 0 : 0x4000;
+			if (opcode < 4) {
+				graphics.Projection = vector;
+				graphics.DualProjection = vector;
+			}
+			if ((opcode & 2) == 0) {
+				graphics.Freedom = vector;
+			}
+
+			return;
+		}
+		if (opcode == 0x0c || opcode == 0x0d) {
+			const auto& vector = opcode == 0x0c ? graphics.Projection : graphics.Freedom;
+			arguments[0] = vector.X;
+			arguments[1] = vector.Y;
+
+			return;
+		}
+		if (opcode >= 0x10 && opcode <= 0x12) {
+			graphics.ReferencePoints[opcode - 0x10] = static_cast<std::uint16_t>(arguments[0]);
+
+			return;
+		}
+		if (opcode >= 0x13 && opcode <= 0x16) {
+			SelectStateZone(graphics, opcode, arguments[0], strict, instruction.Offset);
+
+			return;
+		}
+		if (opcode >= 0x68 && opcode <= 0x6f) {
+			const auto compensation = state.Metrics.Compensation[opcode & 3];
+			if (opcode < 0x6c) {
+				arguments[0] = RoundStateDistance(graphics, arguments[0], compensation);
+			} else {
+				const bool negative = arguments[0] < 0;
+				const auto adjusted = negative ? SubtractWords(arguments[0], compensation) : AddWords(arguments[0], compensation);
+				arguments[0] = negative ? std::min(adjusted, 0) : std::max(adjusted, 0);
+			}
+
+			return;
+		}
+
+		switch (opcode) {
+		case 0x0e:
+			graphics.Freedom = graphics.Projection;
+			break;
+		case 0x17:
+			if (arguments[0] < 0) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidArgument, instruction.Offset, "SLOOP has a negative loop count");
+			}
+
+			graphics.Loop = arguments[0];
+			break;
+		case 0x18:
+			graphics.Round = TrueTypeRoundMode::Grid;
+			break;
+		case 0x19:
+			graphics.Round = TrueTypeRoundMode::HalfGrid;
+			break;
+		case 0x1a:
+			graphics.MinimumDistance = arguments[0];
+			break;
+		case 0x1d:
+			graphics.ControlValueCutIn = arguments[0];
+			break;
+		case 0x1e:
+			graphics.SingleWidthCutIn = arguments[0];
+			break;
+		case 0x1f:
+			graphics.SingleWidth = MultiplyFixed(arguments[0], state.Metrics.Scale16Dot16);
+			break;
+		case 0x3d:
+			graphics.Round = TrueTypeRoundMode::DoubleGrid;
+			break;
+		case 0x42:
+			if (StateReferenceValid(arguments[0], state.Storage.size(), strict, instruction.Offset)) {
+				state.Storage[static_cast<std::uint32_t>(arguments[0])] = arguments[1];
+			}
+
+			break;
+		case 0x43:
+			arguments[0] = StateReferenceValid(arguments[0], state.Storage.size(), strict, instruction.Offset) ? state.Storage[static_cast<std::uint32_t>(arguments[0])] : 0;
+			break;
+		case 0x44:
+		case 0x70:
+			if (StateReferenceValid(arguments[0], state.ControlValues.size(), strict, instruction.Offset)) {
+				if (opcode == 0x44) {
+					RequireEqualPpem(state.Metrics);
+				}
+
+				state.ControlValues[static_cast<std::uint32_t>(arguments[0])] = opcode == 0x70 ? MultiplyFixed(arguments[1], state.Metrics.Scale16Dot16) : arguments[1];
+			}
+
+			break;
+		case 0x45:
+			if (StateReferenceValid(arguments[0], state.ControlValues.size(), strict, instruction.Offset)) {
+				RequireEqualPpem(state.Metrics);
+				arguments[0] = state.ControlValues[static_cast<std::uint32_t>(arguments[0])];
+			} else {
+				arguments[0] = 0;
+			}
+
+			break;
+		case 0x4b:
+			RequireEqualPpem(state.Metrics);
+			arguments[0] = state.Metrics.CurrentPpem;
+			break;
+		case 0x4c:
+			if (state.Metrics.InterpreterVersion == 35) {
+				RequireEqualPpem(state.Metrics);
+				arguments[0] = state.Metrics.CurrentPpem;
+			} else {
+				arguments[0] = state.Metrics.PointSize;
+			}
+
+			break;
+		case 0x4d:
+			graphics.AutoFlip = true;
+			break;
+		case 0x4e:
+			graphics.AutoFlip = false;
+			break;
+		case 0x5e:
+			graphics.DeltaBase = static_cast<std::uint16_t>(arguments[0]);
+			break;
+		case 0x5f:
+			if (static_cast<std::uint32_t>(arguments[0]) > 6) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidArgument, instruction.Offset, "SDS shift is outside the original zero-through-six range");
+			}
+
+			graphics.DeltaShift = static_cast<std::uint16_t>(arguments[0]);
+			break;
+		case 0x76:
+		case 0x77:
+			SetSuperRound(graphics, arguments[0], opcode == 0x77);
+			break;
+		case 0x7a:
+			graphics.Round = TrueTypeRoundMode::Off;
+			break;
+		case 0x7c:
+			graphics.Round = TrueTypeRoundMode::UpToGrid;
+			break;
+		case 0x7d:
+			graphics.Round = TrueTypeRoundMode::DownToGrid;
+			break;
+		case 0x85:
+			SetScanControl(state, arguments[0]);
+			break;
+		case 0x88:
+			arguments[0] = StateInformation(state.Metrics, arguments[0]);
+			break;
+		case 0x8d:
+			if (arguments[0] >= 0) {
+				graphics.ScanType = arguments[0];
+			}
+
+			break;
+		case 0x8e:
+			SetInstructionControl(state, arguments[0], arguments[1], strict, instruction.Offset);
+			break;
+		default:
+			throw std::logic_error("TrueType admitted state opcode has no instruction kernel");
+		}
+	}
+
+	static bool ExecuteStateInstruction(const TrueTypeInstruction& instruction, TrueTypeStackLimits limits, TrueTypeStackProgramResult& operands, TrueTypeInterpreterState& state) {
+		const auto effect = StateStackEffect(instruction.Opcode);
+		if (!effect) {
+			return false;
+		}
+
+		const auto old_top = operands.Stack.size();
+		const bool underflow = old_top < effect->Pop;
+		if (underflow && limits.StrictStackUnderflow) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::StackUnderflow, instruction.Offset, "state instruction lacks its complete fixed operand group");
+		}
+
+		const auto arguments = underflow ? std::size_t(0) : old_top - effect->Pop;
+		const auto new_top = arguments + effect->Push;
+		if (new_top > operands.StackCapacity) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::StackOverflow, instruction.Offset, "state instruction exceeds the actual operand capacity");
+		}
+
+		operands.Stack.resize(std::max({old_top, new_top, std::size_t(effect->Pop)}));
+		if (underflow) {
+			std::fill_n(operands.Stack.begin(), effect->Pop, 0);
+		}
+
+		ExecuteStateKernel(instruction, std::span(operands.Stack).subspan(arguments), state, limits.StrictStackUnderflow);
+		operands.Stack.resize(new_top);
+
+		return true;
+	}
+
 	static std::uint32_t SkipControlBranch(std::span<const std::uint8_t> code, const TrueTypeInstruction& origin, bool stop_at_else, TrueTypeControlProgramResult& result) {
 		auto offset = origin.Offset + origin.ByteCount;
 		std::uint32_t depth = 1;
@@ -354,7 +780,7 @@ namespace sgre::text {
 		return target;
 	}
 
-	TrueTypeControlProgramResult ExecuteTrueTypeControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
+	static TrueTypeControlProgramResult ExecuteControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack, TrueTypeInterpreterState* state) {
 		const std::array ranges{font.Program(), code.Preparation, code.Glyph};
 		for (const auto range : ranges) {
 			if (range.size() > kMaximumStackProgramBytes) {
@@ -453,6 +879,8 @@ namespace sgre::text {
 				if (taken) {
 					next_offset = RelativeControlJump(offset, distance, arguments, std::span(calls).first(call_depth));
 				}
+			} else if (state && ExecuteStateInstruction(instruction, stack_limits, result.Operands, *state)) {
+				// State kernels share the original fixed-group preflight and control clock.
 			} else {
 				ExecuteFixed(instruction, stack_limits, result.Operands);
 			}
@@ -471,6 +899,23 @@ namespace sgre::text {
 		result.FinalOffset = offset;
 
 		return result;
+	}
+
+	TrueTypeControlProgramResult ExecuteTrueTypeControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
+		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, nullptr);
+	}
+
+	TrueTypeControlProgramResult ExecuteTrueTypeStateProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, TrueTypeInterpreterState& state, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
+		if (state.Storage.size() > 0xffff || state.ControlValues.size() > kMaximumStackProgramBytes / sizeof(std::int32_t)) {
+			throw std::runtime_error("TrueType state exceeds its bounded storage or CVT owner size");
+		}
+		if (static_cast<std::uint8_t>(state.Graphics.Round) > 7) {
+			throw std::runtime_error("TrueType state requires an original rounding mode");
+		}
+
+		state.BackwardCompatibility = state.Metrics.InterpreterVersion == 40 && !state.Metrics.FaceIsTricky && (state.Graphics.InstructionControl & 4) == 0;
+
+		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, &state);
 	}
 
 } // namespace sgre::text
