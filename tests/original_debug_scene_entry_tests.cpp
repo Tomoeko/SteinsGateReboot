@@ -113,7 +113,7 @@ static void TestReleaseAndOwnedDebugProvider() {
 	vm.ResetContext(vm.RootContext());
 	static_cast<void>(vm.CollectGarbage());
 	const auto second = Call(vm, instance, "getMainScene");
-	Require(second != first && std::get<std::int32_t>(vm.GetSlot(second, std::string("target"))) == 135, "provider reused a scene table mutated by its previous consumer");
+	Require(std::holds_alternative<std::monostate>(second), "later application transitions must regain the original hook rather than replaying the debug entry");
 	Require(!std::get<bool>(Call(vm, system.SystemClass(), "getDebugBuild")), "explicit scene entry enabled unrelated original developer paths");
 	RequireFailure([&] {
 		static_cast<void>(vm.Invoke(vm.GetSlot(instance, std::string("getMainScene")), std::array<SquirrelValue, 1>{vm.CreateTable()}));
@@ -398,7 +398,7 @@ static void TestParsedJumpUsesOwnedOriginalEntryHook() {
 	vm.ResetContext(vm.RootContext());
 	static_cast<void>(vm.CollectGarbage());
 	const auto second = Call(vm, instance, "getMainScene");
-	Require(second != scene && std::get<std::int32_t>(vm.GetSlot(second, std::string("target"))) == 1355 && !std::get<bool>(Call(vm, system.SystemClass(), "getDebugBuild")), "a custom jump must retain the original fresh-scene provider contract without enabling unrelated developer flags");
+	Require(std::holds_alternative<std::monostate>(second) && !std::get<bool>(Call(vm, system.SystemClass(), "getDebugBuild")), "a custom jump must expire after its first entry and preserve ordinary title/load transitions");
 }
 
 int main(int argc, char** argv) {

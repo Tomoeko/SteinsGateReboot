@@ -25,7 +25,7 @@ namespace sgre::script {
 	// Explicit rewritten-host debug instrumentation, never installed by normal startup.
 	// Install after the original Application class is published and before MyApplication derives
 	// or any Application instance locks the class. The VM owns the installed provider and its entry.
-	// Original main consumes a fresh complete checkpoint through getMainScene.
+	// Original main consumes the requested entry once; later title/load/restart transitions use its original hook.
 	// Bare {storage, target} remains available for isolated scene-only fixtures;
 	// System.getDebugBuild and original bootstrap/developer branches remain unchanged.
 	void InstallOriginalDebugSceneEntry(SquirrelVm& vm, ScriptDebugSceneEntry entry);

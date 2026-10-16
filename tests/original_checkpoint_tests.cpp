@@ -210,6 +210,12 @@ static void TestFullSceneEntryWithoutHeadlessPolicy(bool pending) {
 	}
 	const auto application = vm.CreateClass();
 	vm.NewSlot(application, std::string("getMainScene"), OriginalMethod(vm));
+	std::size_t original_entries = 0;
+	vm.NewSlot(application, std::string("awaitOriginal"), vm.CreateNativeClosure("original application entry fixture", [&](SquirrelVm&, auto) {
+		++original_entries;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{37});
+	}));
 	vm.NewSlot(vm.RootTable(), std::string("Application"), application);
 	sgre::script::InstallOriginalDebugSceneEntry(vm, entry);
 	entry.Checkpoint.clear();
@@ -234,7 +240,7 @@ static void TestFullSceneEntryWithoutHeadlessPolicy(bool pending) {
 	vm.ResetContext(vm.RootContext());
 	static_cast<void>(vm.CollectGarbage());
 	const auto second = vm.Invoke(method, std::array<SquirrelValue, 1>{instance}).Value;
-	Require(std::get<std::int32_t>(vm.GetSlot(vm.GetSlot(second, std::string("flags")), std::string("phone-state"))) == -2147483647, "ordinary full scene hook reused mutated flags");
+	Require(second == SquirrelValue{std::int32_t{37}} && original_entries == 1 && std::get<std::int32_t>(vm.GetSlot(flags, std::string("phone-state"))) == 0, "later original title/load transitions must invoke the retained original hook without replaying the launch checkpoint or overwriting progressed phone flags");
 }
 
 int main() {

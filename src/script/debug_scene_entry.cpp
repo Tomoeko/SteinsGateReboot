@@ -9,6 +9,10 @@
 #include <variant>
 
 namespace sgre::script {
+	struct DebugSceneEntryState {
+		ScriptDebugSceneEntry Entry;
+		bool Consumed = false;
+	};
 
 	static SquirrelInstruction EntryInstruction(std::uint8_t opcode, std::uint8_t destination, std::int32_t operand = 0, std::uint8_t argument2 = 0, std::uint8_t argument3 = 0) {
 		return SquirrelInstruction{operand, opcode, destination, argument2, argument3};
@@ -92,16 +96,29 @@ namespace sgre::script {
 		}
 
 		const auto pending = static_cast<bool>(entry.CheckpointPoll);
-		const auto state = std::make_shared<ScriptDebugSceneEntry>(std::move(entry));
-		const std::array<SquirrelValue, 1> captures{application};
+		const auto state = std::make_shared<DebugSceneEntryState>();
+		state->Entry = std::move(entry);
+		const std::array<SquirrelValue, 2> captures{application, vm.GetSlot(application, std::string("getMainScene"))};
 		const auto provider = vm.CreateNativeClosureWithCaptures("debug.Application.getMainScene", [state](SquirrelVm& active, std::span<const SquirrelValue> arguments) {
-			const auto& entry = *state;
+			const auto& entry = state->Entry;
 			const auto application_class = active.NativeStackValue(-1);
-			if (arguments.size() != 2 || active.Type(arguments.front()) != SquirrelValueType::Instance || !active.IsInstanceOf(arguments.front(), application_class)) {
+			if (arguments.size() != 3 || active.Type(arguments.front()) != SquirrelValueType::Instance || !active.IsInstanceOf(arguments.front(), application_class)) {
 				throw std::runtime_error("original debug scene provider requires its actual Application-derived receiver");
 			}
+			if (state->Consumed) {
+				const auto original = active.NativeStackValue(-2);
+				const auto result = active.InvokeInContext(active.CurrentContext(), original, arguments.first(1));
+				if (result.State != SquirrelRunState::Completed) {
+					throw std::runtime_error("original getMainScene did not complete its recovered scene-selection hook");
+				}
+
+				return SquirrelNativeResult::ReturnValue(result.Value);
+			}
 			if (!entry.Checkpoint.empty()) {
-				return SquirrelNativeResult::ReturnValue(RestoreOriginalCheckpoint(active, entry.Checkpoint, entry.CheckpointLocation, entry.CheckpointIdentity));
+				const auto scene = RestoreOriginalCheckpoint(active, entry.Checkpoint, entry.CheckpointLocation, entry.CheckpointIdentity);
+				state->Consumed = true;
+
+				return SquirrelNativeResult::ReturnValue(scene);
 			}
 			if (entry.CheckpointPoll) {
 				throw std::runtime_error("original full checkpoint provider was called before its host completion");
@@ -111,6 +128,7 @@ namespace sgre::script {
 			const auto scene_root = active.Retain(scene);
 			active.NewSlot(scene, std::string("storage"), active.CreateString(entry.Storage));
 			active.NewSlot(scene, std::string("target"), entry.TargetLine);
+			state->Consumed = true;
 
 			return SquirrelNativeResult::ReturnValue(scene);
 		},
@@ -124,17 +142,18 @@ namespace sgre::script {
 			if (arguments.size() != 2 || active.Type(arguments.front()) != SquirrelValueType::Instance || !active.IsInstanceOf(arguments.front(), active.NativeStackValue(-1))) {
 				throw std::runtime_error("original checkpoint wait requires its actual Application-derived receiver");
 			}
-			if (state->Checkpoint.empty()) {
-				if (auto bytes = state->CheckpointPoll()) {
-					static_cast<void>(RestoreOriginalCheckpoint(active, *bytes, state->CheckpointLocation, state->CheckpointIdentity));
-					state->Checkpoint = std::move(*bytes);
-					state->CheckpointPoll = {};
+			auto& entry = state->Entry;
+			if (!state->Consumed && entry.Checkpoint.empty()) {
+				if (auto bytes = entry.CheckpointPoll()) {
+					static_cast<void>(RestoreOriginalCheckpoint(active, *bytes, entry.CheckpointLocation, entry.CheckpointIdentity));
+					entry.Checkpoint = std::move(*bytes);
+					entry.CheckpointPoll = {};
 				}
 			}
 
-			return SquirrelNativeResult::ReturnValue(!state->Checkpoint.empty());
+			return SquirrelNativeResult::ReturnValue(state->Consumed || !entry.Checkpoint.empty());
 		},
-		    captures);
+		    std::array<SquirrelValue, 1>{application});
 		const auto ready_pin = vm.Retain(ready);
 		const auto hook = MakePendingEntry(vm, ready, provider);
 		const auto hook_pin = vm.Retain(hook);
