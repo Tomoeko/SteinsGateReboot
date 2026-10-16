@@ -194,6 +194,23 @@ namespace sgre::platform {
 		});
 	}
 
+	void SampleMacFunctionKeyboard(input::KeyboardSample& sample, const std::array<std::uint16_t, 24>& codes, const MacPhysicalKeyReader& reader) {
+		if (!sample.Available) {
+			return;
+		}
+		if (reader.Read == nullptr) {
+			throw std::runtime_error("macOS focused function keyboard requires its physical key-state reader");
+		}
+
+		const bool function_modifier = reader.Read(reader.Context, kVK_Function);
+		auto sampled = sample;
+		for (std::size_t index = 0; index < codes.size(); ++index) {
+			const auto code = codes[index];
+			sampled.VirtualKeys[0x70 + index] = (index >= 12 || function_modifier) && code != 0xffff && reader.Read(reader.Context, code) ? 0x80 : 0;
+		}
+		sample = sampled;
+	}
+
 	void SampleMacPhysicalKeyboard(input::KeyboardSample& sample, const input::KeyMappings& actual_mappings, bool break_key_available, const MacPhysicalKeyReader& reader) {
 		if (!sample.Available) {
 			return;
@@ -213,8 +230,18 @@ namespace sgre::platform {
 		}
 
 		// The caller supplies its actual focus-gated function/mouse snapshot. Publish only after all reads succeed.
+		const bool function_modifier = reader.Read(reader.Context, kVK_Function);
 		auto sampled = sample;
+		if (!function_modifier) {
+			std::fill(sampled.VirtualKeys.begin() + 0x70, sampled.VirtualKeys.begin() + 0x7c, 0);
+		}
 		for (const auto& physical : kInputPhysicalKeys) {
+			if (!function_modifier && physical.NativeVirtual >= 0x70 && physical.NativeVirtual <= 0x7b) {
+				sampled.ScanKeys[physical.NativeScan] = 0;
+
+				continue;
+			}
+
 			if (reader.Read(reader.Context, physical.Code)) {
 				sampled.ScanKeys[physical.NativeScan] = 0x80;
 				if (physical.NativeVirtual != 0) {
@@ -463,12 +490,9 @@ namespace sgre::platform {
 		if (!sample.Available) {
 			return sample;
 		}
-		for (std::size_t index = 0; index != state.FunctionKeyCodes.size(); ++index) {
-			const auto code = state.FunctionKeyCodes[index];
-			if (code != 0xffff && CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, code)) {
-				sample.VirtualKeys[0x70 + index] = 0x80;
-			}
-		}
+		MacPhysicalKeyReader reader;
+		reader.Read = ReadSessionPhysicalKey;
+		SampleMacFunctionKeyboard(sample, state.FunctionKeyCodes, reader);
 		sample.VirtualKeys[1] = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft) ? 0x80 : 0;
 		sample.VirtualKeys[2] = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight) ? 0x80 : 0;
 		sample.VirtualKeys[4] = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonCenter) ? 0x80 : 0;
