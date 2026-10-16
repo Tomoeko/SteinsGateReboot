@@ -6,6 +6,8 @@ Recover STEINS;GATE RE:BOOT as readable, maintainable first-party C++ from the s
 
 Recover the entire supplied game and all character models, animation variants, routes and endings. Individual characters are diagnostic examples. Keep runtime algorithms independent of character names, archive ordinals and fixture identities; validate recovered features across the complete resource inventory.
 
+The user authorizes a deliberate improvement to hair physics: preserve smooth visible continuity across animation and pose changes, even when the original engine snaps. Keep this authored policy separate from recovered simulation, independent of character names, and scoped to physical deformation. Preserve authored body poses, facial animation, camera behavior and game sequence. Native comparisons must state whether the continuity policy is enabled.
+
 The immediate target is macOS on Apple Silicon with Metal. Keep the engine and resource interpretation portable for future Linux, Ubuntu, Windows, and SteamOS ports. Native behavior, executable analysis, original resources, and retained native captures are the fidelity oracles. Recover behavior; do not invent replacement gameplay, dialogue, menus, assets, timing, or animations to close a checklist.
 
 ## Working rules
