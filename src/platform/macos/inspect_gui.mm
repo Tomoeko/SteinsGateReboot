@@ -1,5 +1,6 @@
 #include "sgre/platform/inspect_gui.hpp"
 
+#include "sgre/app/display_path.hpp"
 #include "sgre/scenario/scenario_search.hpp"
 
 #include <atomic>
@@ -76,6 +77,14 @@ namespace sgre::platform {
 		return InspectString(path.string());
 	}
 
+	static std::filesystem::path InspectHomeDirectory() {
+		return std::filesystem::path(InspectUtf8(NSHomeDirectory()));
+	}
+
+	static NSString* InspectDisplayPath(const std::filesystem::path& path) {
+		return InspectString(app::DisplayUserPath(path, InspectHomeDirectory()));
+	}
+
 	static std::exception_ptr InspectNativeFailure(NSException* error) noexcept {
 		try {
 			return std::make_exception_ptr(std::runtime_error("AppKit inspector failure: " + InspectUtf8(error.reason != nil ? error.reason : error.name)));
@@ -88,7 +97,7 @@ namespace sgre::platform {
 		try {
 			std::rethrow_exception(failure);
 		} catch (const std::exception& error) {
-			return error.what();
+			return app::RedactUserHome(error.what(), InspectHomeDirectory());
 		} catch (...) {
 			return "unknown inspector failure";
 		}
@@ -109,7 +118,7 @@ namespace sgre::platform {
 	}
 
 	static std::string InspectJumpCommand(const scenario::ScenarioSearchMatch& match, const std::filesystem::path& installation) {
-		return "sgre-game " + InspectShellQuote(installation.string()) + " --jump " + InspectShellQuote(match.JumpTarget);
+		return "sgre-game " + app::QuotePosixUserPathArgument(installation, InspectHomeDirectory()) + " --jump " + InspectShellQuote(match.JumpTarget);
 	}
 
 	static void InspectStopEventLoop() {
@@ -437,7 +446,7 @@ namespace sgre::platform {
 	State->Installation = std::move(job->Installation);
 	if (!State->Installation.empty()) {
 		State->Options.Installation = State->Installation;
-		m_Installation.stringValue = sgre::platform::InspectPath(State->Installation);
+		m_Installation.stringValue = sgre::platform::InspectDisplayPath(State->Installation);
 	}
 
 	[m_Matches reloadData];
@@ -613,7 +622,7 @@ namespace sgre::platform {
 		panel.allowsMultipleSelection = NO;
 		if ([panel runModal] == NSModalResponseOK) {
 			State->Options.Installation = std::filesystem::path(sgre::platform::InspectUtf8(panel.URL.path));
-			m_Installation.stringValue = sgre::platform::InspectPath(*State->Options.Installation);
+			m_Installation.stringValue = sgre::platform::InspectDisplayPath(*State->Options.Installation);
 			State->Results = {};
 			State->Entries.clear();
 			State->Installation.clear();
@@ -695,7 +704,7 @@ namespace sgre::platform {
 		task.currentDirectoryURL = [NSURL fileURLWithPath:sgre::platform::InspectPath(State->Workspace) isDirectory:YES];
 		NSError* error = nil;
 		if (![task launchAndReturnError:&error]) {
-			m_Status.stringValue = [@"Game launch failed: " stringByAppendingString:error.localizedDescription != nil ? error.localizedDescription : @"unknown process error"];
+			m_Status.stringValue = sgre::platform::InspectString("Game launch failed: " + sgre::app::RedactUserHome(sgre::platform::InspectUtf8(error.localizedDescription != nil ? error.localizedDescription : @"unknown process error"), sgre::platform::InspectHomeDirectory()));
 			return;
 		}
 		m_Status.stringValue = @"Game launched at the selected original restore point. Closing the inspector leaves the game running.";

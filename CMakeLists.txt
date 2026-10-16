@@ -12,6 +12,7 @@ option(BUILD_SHARED_LIBS "Link the first-party core once across recovery executa
 
 add_library(sgre_resource
 	src/app/launch_arguments.cpp
+	src/app/display_path.cpp
 	src/app/launch_configuration.cpp
 	src/app/launch_configuration_json.cpp
 	src/app/launch_archive_seed.cpp
@@ -599,6 +600,7 @@ if(SGRE_BUILD_TESTS)
 		resource_cipher
 		md5
 		launch_configuration
+		display_path
 		original_debug_scene_entry
 		scenario_search
 		resource_cache

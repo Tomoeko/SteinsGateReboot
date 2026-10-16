@@ -1,3 +1,4 @@
+#include "sgre/app/display_path.hpp"
 #include "sgre/io/file_reader.hpp"
 #include "sgre/media/webm.hpp"
 #include "sgre/platform/inspect_gui.hpp"
@@ -12,6 +13,7 @@
 #include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -423,12 +425,21 @@ static std::string ShellArgument(std::string_view value) {
 	return result;
 }
 
+static std::filesystem::path InspectorHome() {
+	const char* value = std::getenv("HOME");
+	if (value == nullptr) {
+		return {};
+	}
+	const std::string_view home(value);
+
+	return std::filesystem::path(std::u8string(home.begin(), home.end()));
+}
+
 static void SearchScenarios(const Options& options) {
 	auto location = sgre::scenario::ResolveScenarioSearchLocation(std::filesystem::current_path(), options.GameRoot);
 	std::string game_command = "sgre-game";
 	if (options.GameRoot) {
-		const auto encoded = location.Installation.u8string();
-		game_command += " " + ShellArgument(std::string(encoded.begin(), encoded.end()));
+		game_command += " " + sgre::app::QuotePosixUserPathArgument(location.Installation, InspectorHome());
 	}
 	sgre::scenario::ScenarioSearchCatalog catalog(std::move(location));
 	sgre::scenario::ScenarioSearchRequest request;
@@ -499,7 +510,7 @@ int main(int argc, char** argv) {
 
 		return 0;
 	} catch (const std::exception& error) {
-		std::cerr << "sgre-inspect: " << error.what() << '\n';
+		std::cerr << "sgre-inspect: " << sgre::app::RedactUserHome(error.what(), InspectorHome()) << '\n';
 		return 1;
 	}
 }
