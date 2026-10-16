@@ -822,11 +822,14 @@ namespace sgre::scene {
 			}
 		}
 
-		void PublishClamps() {
+		void PublishClamps(const EmoteTimelineScheduler* timelines) {
 			for (const auto& clamp : Clamps) {
 				const auto current = [&](std::string_view name) {
 					const auto found = Values.find(name);
-					return found != Values.end() && found->second.Present ? found->second.Value : 0.0f;
+					const auto base = found != Values.end() && found->second.Present ? found->second.Value : 0.0f;
+
+					// Native 2cd7bb/2cd7ce compose active difference tracks before the paired clamp.
+					return timelines == nullptr ? base : timelines->ApplyDifference(name, base);
 				};
 				const auto pair = ApplyEmoteClamp(clamp.Transform, current(clamp.LeftRight), current(clamp.UpDown));
 				Commands.ParameterValues().WriteLocal(clamp.LeftRight, pair[0], 0);
@@ -880,7 +883,7 @@ namespace sgre::scene {
 						Commands.ParameterValues().WriteLocal(name, timelines == nullptr ? value.Value : timelines->ApplyDifference(name, value.Value), 0);
 					}
 				}
-				PublishClamps();
+				PublishClamps(timelines);
 				Updating = false;
 			} catch (...) {
 				Updating = false;

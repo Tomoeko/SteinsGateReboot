@@ -1,5 +1,7 @@
 #include "sgre/scene/emote_variable_controls.hpp"
 
+#include "sgre/scene/emote_timeline_scheduler.hpp"
+
 #include "sgre/scene/motion_player_commands.hpp"
 
 #include <array>
@@ -935,8 +937,106 @@ static void TestSkipNamedOrderExtensionsAndDeferredPublication() {
 	fixture.Controls->Update(0);
 	Require(fixture.Controls->Read("scalar") == 7 && fixture.Controls->Read("talk") == 7 && fixture.Controls->Read("eye-left") == 8 && fixture.Commands.ParameterValues().Read("extension") == 11 && fixture.PropertyPhases == phases + 1, "existing dirty publication receives the completed actual controllers afterward");
 }
+static sgre::resource::MotionTimeline ClampDifferencePlainTimeline(std::string name) {
+	sgre::resource::MotionTimeline timeline;
+	timeline.Name = std::move(name);
+	timeline.LastTime = 100;
+	sgre::resource::PsbArray parameters;
+	for (const auto* identifier : {"x", "y", "unclamped"}) {
+		parameters.push_back(Atom(sgre::resource::PsbObject{{"id", Atom(std::string(identifier))}, {"discretization", Atom(false)}, {"rangeBegin", Atom(-10.0)}, {"rangeEnd", Atom(10.0)}, {"division", Atom(20.0)}}));
+	}
+	timeline.Parameters = Atom(std::move(parameters));
+
+	return timeline;
+}
+
+static void TestDifferencePlaybackSurvivesFinalPairClamp() {
+	sgre::scene::TextureCache cache([](auto, const auto&) -> sgre::render::SpriteTextureHandle {
+		throw std::runtime_error("difference/clamp fixture has no texture inputs");
+	},
+	    [](auto) {
+		    throw std::runtime_error("difference/clamp fixture has no texture releases");
+	    });
+	sgre::scene::MotionResourceManager manager(cache);
+	auto model = std::make_shared<sgre::resource::MotionResource>();
+	sgre::resource::MotionObject character;
+	character.Name = "character";
+	character.Timelines.push_back(ClampDifferencePlainTimeline("base"));
+	character.Timelines.push_back(ClampDifferencePlainTimeline("child"));
+	model->Objects.push_back(std::move(character));
+	sgre::scene::MotionProjectIdentity identity;
+	identity.DocumentInstance = cache.AllocateDocumentIdentity();
+	identity.RootOffset = 46;
+	const auto project = manager.Register(identity, model, {});
+	sgre::scene::MotionPlayerCommands parent(manager);
+	parent.SetCharacter("character");
+	parent.Play("base");
+	sgre::scene::MotionTimelineParameters parent_parameters(parent.ParameterValues(), *parent.CachedTimeline());
+	sgre::scene::MotionPlayerCommands child(manager, parent);
+	child.SetCharacter("character");
+	child.Play("child");
+	sgre::scene::MotionTimelineParameters child_parameters(child.ParameterValues(), *child.CachedTimeline());
+	bool reject_mutation = false;
+	const auto require_mutable = [&] {
+		if (reject_mutation) {
+			throw std::runtime_error("difference/clamp owner is queued");
+		}
+	};
+	sgre::scene::EmoteVariableProgram program;
+	program.Transitions = {"x", "y", "unclamped"};
+	sgre::scene::EmoteClampDefinition clamp;
+	clamp.LeftRight = "x";
+	clamp.UpDown = "y";
+	clamp.Transform.Kind = sgre::scene::EmoteClampKind::Radial;
+	clamp.Transform.Minimum = -1;
+	clamp.Transform.Maximum = 1;
+	program.Clamps.push_back(std::move(clamp));
+	sgre::scene::EmoteVariableControls controls(parent, require_mutable, std::move(program));
+	controls.Set("unclamped", 5);
+	controls.Update(0);
+	Require(parent.ParameterValues().Read("x") == 0 && parent.ParameterValues().Read("y") == 0 && child_parameters.Entries()[2].Position == 15, "actual base controls publish before any difference timeline starts");
+	const auto track = [](std::string name, double value) {
+		const auto first = Atom(sgre::resource::PsbObject{{"time", Atom(0.0)}, {"type", Atom(std::int64_t{1})}, {"content", Atom(sgre::resource::PsbObject{{"value", Atom(value)}, {"easing", Atom(0.0)}})}});
+		const auto hidden = Atom(sgre::resource::PsbObject{{"time", Atom(2.0)}, {"type", Atom(std::int64_t{0})}});
+
+		return Atom(sgre::resource::PsbObject{{"label", Atom(std::move(name))}, {"frameList", Atom(sgre::resource::PsbArray{first, hidden})}});
+	};
+	const auto definition = Atom(sgre::resource::PsbObject{{"label", Atom(std::string("difference"))}, {"loopBegin", Atom(-1.0)}, {"loopEnd", Atom(-1.0)}, {"lastTime", Atom(20.0)}, {"variableList", Atom(sgre::resource::PsbArray{track("x", 3), track("y", 4), track("unclamped", 2)})}});
+	sgre::resource::PsbDocument document;
+	document.Root = Atom(sgre::resource::PsbObject{{"metadata", Atom(sgre::resource::PsbObject{{"timelineControl", Atom(sgre::resource::PsbArray{definition})}})}});
+	sgre::scene::EmoteTimelineScheduler scheduler(controls, document, require_mutable);
+	scheduler.Play("difference", 3);
+	scheduler.Update(1);
+	Require(scheduler.ApplyDifference("x", 0) == 3 && scheduler.ApplyDifference("y", 0) == 4 && scheduler.ApplyDifference("unclamped", 5) == 7, "the real difference track must reach its independent 3/4/2 endpoint before testing final clamp publication");
+	controls.UpdateWithTimelines(1, scheduler);
+	Require(std::abs(parent.ParameterValues().Read("x") - 0.6f) < 0.000002f && std::abs(parent.ParameterValues().Read("y") - 0.8f) < 0.000002f, "final pair clamp must preserve genuine 3/4 difference playback as independent 3-4-5 radial output");
+	Require(std::abs(parent_parameters.Entries()[0].Position - 10.6f) < 0.000003f && std::abs(parent_parameters.Entries()[1].Position - 10.8f) < 0.000003f && parent_parameters.Entries()[2].Position == 17 && child_parameters.Entries()[0].Position == parent_parameters.Entries()[0].Position && child_parameters.Entries()[1].Position == parent_parameters.Entries()[1].Position && child_parameters.Entries()[2].Position == 17, "both real parameter registrations receive the clamped pair and the separate unclamped difference value");
+	Require(controls.Read("x") == 0 && controls.Read("y") == 0 && controls.Read("unclamped") == 5, "clamping and difference publication retain the original current-value map");
+	const auto published_x = parent.ParameterValues().Read("x");
+	const auto published_y = parent.ParameterValues().Read("y");
+	controls.UpdateWithTimelines(0, scheduler);
+	Require(parent.ParameterValues().Read("x") == published_x && parent.ParameterValues().Read("y") == published_y && parent.ParameterValues().Read("unclamped") == 7, "a repeated zero-time publication recomputes from base state without accumulating or losing an existing contribution");
+	scheduler.SetBlendRatio("difference", 0.1f);
+	scheduler.Update(0.25f);
+	Require(scheduler.BlendRatio("difference") == 0.1f, "the actual positive scheduler phase publishes the changed blend cache before variables consume it");
+	controls.UpdateWithTimelines(0.25f, scheduler);
+	Require(std::abs(parent.ParameterValues().Read("x") - 0.3f) < 0.000002f && std::abs(parent.ParameterValues().Read("y") - 0.4f) < 0.000002f && std::abs(parent.ParameterValues().Read("unclamped") - 5.2f) < 0.000002f, "partial blend reaches the final clamp as the pre-clamp contribution instead of reusing the prior normalized result");
+	reject_mutation = true;
+	RequireFailure([&] {
+		controls.UpdateWithTimelines(0, scheduler);
+	},
+	    "queued");
+	reject_mutation = false;
+	Require(std::abs(parent.ParameterValues().Read("x") - 0.3f) < 0.000002f && std::abs(child_parameters.Entries()[1].Position - 10.4f) < 0.000003f, "queued publication rejects before changing parent or child parameter state");
+	scheduler.Stop("difference");
+	controls.UpdateWithTimelines(0, scheduler);
+	Require(parent.ParameterValues().Read("x") == 0 && parent.ParameterValues().Read("y") == 0 && parent.ParameterValues().Read("unclamped") == 5 && child_parameters.Entries()[0].Position == 10 && child_parameters.Entries()[1].Position == 10 && child_parameters.Entries()[2].Position == 15, "stopping the actual difference owner restores the retained base values without a sticky clamped publication");
+	Require(manager.ReferenceCount(project) == 1 && cache.Count() == 0 && scheduler.ActiveCount() == 0, "difference/clamp phases retain actual resource ownership and do not create graphics or playback owners");
+}
+
 int main() {
 	try {
+		TestDifferencePlaybackSurvivesFinalPairClamp();
 		TestSkipNamedOrderExtensionsAndDeferredPublication();
 		TestAnimatingScalarAndExactTimelineMask();
 		TestAnimatingSelectorQueueIsReadOnly();
