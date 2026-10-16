@@ -16,6 +16,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string_view>
 #include <variant>
 
 namespace sgre::scene {
@@ -343,7 +344,10 @@ namespace sgre::scene {
 		const bool empty_frame = frame.Hidden || frame.Attributes.Source.empty() || frame.Attributes.Source.front() == '\0';
 		// Native521bf0 still transfers the real separate root after initial525880 lookup failure.
 		const bool empty_child = (empty_frame || slots.HasInitialUnselectedTarget()) && (selected_child == nullptr || selected_child->Nodes().empty()) && names.CurrentMotion.empty() && names.RequestedMotion.empty();
-		if (!empty_child && (empty_frame || !child.Commands().SelectedProject() || child.Commands().CachedTimeline() != child.Commands().SelectedProject()->Timeline || names.CurrentCharacter != frame.Attributes.Source.substr(0, frame.Attributes.Source.find('\0')) || (names.CurrentMotion != frame.Attributes.Icon.substr(0, frame.Attributes.Icon.find('\0')) && !slots.HasClonedSelectedTarget()))) {
+		// Native510c00 leaves CurrentMotion empty; JOIN can move that selected player under fresh incoming slots.
+		// The actual published child graph proves the retained selection independently of the old slot receipt.
+		const bool retained_selected_child = names.CurrentMotion.empty() && names.RequestedMotion == std::string_view(frame.Attributes.Icon).substr(0, frame.Attributes.Icon.find('\0')) && selected_child != nullptr && selected_child->m_Published && !selected_child->m_Mutating && selected_child->m_EnclosingChild == &child && selected_child->m_EnclosingParticle == nullptr && selected_child->m_ContainingSelected == &m_Selected && &selected_child->m_Commands == &child.Commands() && &selected_child->m_Root == &child.Root() && &selected_child->m_Timeline == child.Commands().CachedTimeline() && selected_child->m_CommandSelectionSerial == child.Commands().SelectionSerial();
+		if (!empty_child && (empty_frame || !child.Commands().SelectedProject() || child.Commands().CachedTimeline() != child.Commands().SelectedProject()->Timeline || names.CurrentCharacter != frame.Attributes.Source.substr(0, frame.Attributes.Source.find('\0')) || (names.CurrentMotion != frame.Attributes.Icon.substr(0, frame.Attributes.Icon.find('\0')) && !slots.HasClonedSelectedTarget() && !retained_selected_child))) {
 			throw std::runtime_error("motion child deformation transfer requires its actual current selected control/command target");
 		}
 		const auto* parameters = local->ParameterBindings();

@@ -645,8 +645,52 @@ static void TestNestedResetThenJoin() {
 	Require(!child.IsLive() && fixture.Runtime->Identifiers().LiveCount() == 0, "reset/re-entry must detach actual callbacks and release all selected IDs");
 }
 
+static void TestCopiedSelectedChildJoin() {
+	Fixture fixture(false, false, true);
+	auto source = fixture.Attach();
+	source.SetVisible(true);
+	source.Play("show");
+	source.Progress(0);
+	source.Progress(2);
+	auto clone = sgre::scene::MotionPlayerTask::AttachClone(*fixture.Runtime, fixture.Tasks, source, false, [](const auto&) {
+		throw std::runtime_error("action-free copied child JOIN fixture delivered an event");
+	});
+	const auto* scene = clone.GenericPlayer()->Scene();
+	const auto reference = scene->FindLayer("child-player");
+	Require(reference.has_value(), "copied JOIN fixture requires its real selected child before continuation");
+	const auto child = scene->LayerChild(*reference).Borrow();
+	const auto child_serial = clone.ChildCommands(child).SelectionSerial();
+	const auto* child_timeline = clone.ChildCommands(child).CachedTimeline();
+	Require(clone.ChildCommands(child).Names().CurrentMotion.empty() && clone.ChildCommands(child).Names().RequestedMotion == "show", "native copy must retain the selected child atom and requested name while leaving CurrentMotion empty");
+	{
+		auto retired = fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Extract(source.Handle());
+		retired.Release();
+	}
+	Require(!source.IsLive() && child.IsLive(), "source-first retirement must leave the independent copied selected child alive");
+	clone.Progress(0);
+	clone.Progress(1);
+	Require(!clone.Commands().ClockState().TickAssigned, "genuine elapsed continuation must admit the native JOIN capture path");
+	clone.Play("hide", sgre::scene::MotionPlayFlags::Join);
+	clone.Progress(0);
+	const auto incoming = scene->FindLayer("child-player");
+	Require(incoming.has_value() && scene->LayerChild(*incoming).Borrow().SameTarget(child), "JOIN must retain the actual copied child under the new incoming node controls");
+	Require(clone.ChildCommands(child).Names().CurrentMotion.empty() && clone.ChildCommands(child).Names().RequestedMotion == "show" && clone.ChildCommands(child).CachedTimeline() == child_timeline && clone.ChildCommands(child).SelectionSerial() == child_serial, "same-request child Play must preserve the actual unnamed selection instead of reselecting or synthesizing a current name");
+	Require(!scene->Packets().Nodes().empty(), "the retained unnamed child must complete actual inherited transfer and row publication");
+	fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+	Reject([&] {
+		clone.Progress(0);
+	},
+	    "queued");
+	fixture.Runtime->SceneContext().Clear();
+	clone.Progress(1);
+	Require(child.IsLive() && clone.ChildCommands(child).SelectionSerial() == child_serial, "a later real phase must continue the same retained selection without replacing its owner");
+	fixture.Tasks.Clear();
+	Require(!clone.IsLive() && !child.IsLive() && fixture.Runtime->Identifiers().LiveCount() == 0, "copied JOIN retirement must release both selected trees and every actual child identifier");
+}
+
 int main() {
 	try {
+		TestCopiedSelectedChildJoin();
 		TestNestedPlayerJoin(false);
 		TestNestedPlayerJoin(true);
 		TestNestedResetThenJoin();
