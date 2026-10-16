@@ -7,6 +7,7 @@
 #include <iostream>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -288,7 +289,8 @@ static void TestStrictOwnersPoolsAndMalformedBacking() {
 	const auto bytes = fixture.Bytes;
 	const auto document = fixture.Document;
 	for (std::size_t length = 0; length < bytes.size(); ++length) {
-		const sgre::io::PublishedPsbFile file(std::vector<std::uint8_t>(bytes.begin(), bytes.begin() + length), document);
+		const auto prefix = std::span(bytes).first(length);
+		const sgre::io::PublishedPsbFile file(std::vector<std::uint8_t>(prefix.begin(), prefix.end()), document);
 		const auto definitions = sgre::resource::ReadSoundArchiveDefinitions(file.Document());
 		RequireFailure([&] {
 			static_cast<void>(sgre::audio::ReadBufferedSoundSourceData(file, definitions.at("selected"), 0, 1));

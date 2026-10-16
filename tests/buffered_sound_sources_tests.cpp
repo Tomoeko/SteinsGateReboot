@@ -473,6 +473,61 @@ static void TestExplicitWmaDomainAndRealConsumption() {
 	Require(sources.DecodedBytes() == 0 && !sources.Inspect(address).RecoveredSchedule.Exists, "unsupported replacement may not retain nominal ready source state");
 }
 
+static void TestAdpcmSampleStorageCapacityAndAccounting() {
+	const sgre::audio::BufferedSoundSourceLimits defaults;
+	// Whole original sound metadata supplies these decoded-float extents, independently from the default policy.
+	constexpr std::size_t kLargestWholeSource = 119451648;
+	constexpr std::size_t kLargestOtherWholeSource = 16217488;
+	constexpr std::size_t kStereoStreamingRing = 32768 * 2 * sizeof(float);
+	Require(defaults.MaxSourceDecodedBytes >= kLargestWholeSource && defaults.MaxTotalDecodedBytes >= 2 * kLargestWholeSource + 6 * kLargestOtherWholeSource + 32 * kStereoStreamingRing, "default sample capacity rejects the recovered long source or overlapping sound owners");
+	const std::array<std::array<std::size_t, 2>, 4> invalid_sizes{{{0, 32}, {257 * 1024 * 1024, 32}, {16, 0}, {16, 513 * 1024 * 1024}}};
+	for (const auto& boundary : invalid_sizes) {
+		sgre::audio::BufferedSoundSourceLimits invalid;
+		invalid.MaxSourceDecodedBytes = boundary[0];
+		invalid.MaxTotalDecodedBytes = boundary[1];
+		RequireFailure([&] {
+			sgre::audio::BufferedSoundSources rejected(invalid);
+		},
+		    "bounded positive sample-storage limits");
+	}
+
+	// Two genuine decoded ADPCM owners exhaust a small independently selected aggregate bound exactly.
+	SourceFixture adpcm(2, 1, 8, {0, 16, 0, 0xe8, 3, 0x18, 0xfc, 0x17});
+	sgre::audio::BufferedSoundSourceLimits limits;
+	limits.MaxSourceDecodedBytes = 16;
+	limits.MaxTotalDecodedBytes = 32;
+	sgre::audio::BufferedSoundSources sources(limits);
+	sources.Prepare(Address(0), adpcm.Data());
+	sources.Prepare(Address(1), adpcm.Data());
+	Require(sources.DecodedBytes() == 32, "two live ADPCM allocations must share the same exact aggregate ledger");
+	RequireFailure([&] {
+		sources.Prepare(Address(2), adpcm.Data());
+	},
+	    "sample-storage budget is exhausted");
+	Require(sources.DecodedBytes() == 32 && sources.Inspect(Address(0)).Samples.CallbackActive && sources.Inspect(Address(1)).Samples.CallbackActive && !sources.Inspect(Address(2)).RecoveredSchedule.Exists, "aggregate rejection must retain both real source owners without fabricated replacement readiness");
+	sources.Commit();
+	for (const auto address : {Address(0), Address(1)}) {
+		std::array<float, 4> output{};
+		Require(sources.ConsumeFrames(address, output) == 4 && output == std::array<float, 4>{-1000.0f / 32768, 1000.0f / 32768, 1016.0f / 32768, 1128.0f / 32768}, "overlapping ADPCM owners lost their independently decoded sample sequence");
+	}
+	Require(sources.DecodedBytes() == 32, "callback completion must not pretend retained idle buffers were freed");
+	sources.Retire(Address(0));
+	Require(sources.DecodedBytes() == 16, "actual source retirement must return its precise decoded allocation");
+	sources.Prepare(Address(2), adpcm.Data());
+	Require(sources.DecodedBytes() == 32 && sources.Inspect(Address(2)).Samples.CallbackActive, "freed aggregate capacity must permit a real subsequent source");
+	sources.Retire(Address(1));
+	sources.Retire(Address(2));
+	Require(sources.DecodedBytes() == 0, "retired ADPCM sources leaked sample-storage accounting");
+
+	limits.MaxSourceDecodedBytes = 15;
+	sgre::audio::BufferedSoundSources narrow(limits);
+	RequireFailure([&] {
+		narrow.Prepare(Address(), adpcm.Data());
+	},
+	    "ADPCM decoded audio exceeds its allocation limit");
+	Require(narrow.DecodedBytes() == 0 && !narrow.Inspect(Address()).RecoveredSchedule.Exists, "per-source rejection must happen before readiness or allocation publication");
+}
+
 int main() {
 	try {
 		TestOwnedPcmConsumptionAndPause();
@@ -482,7 +537,8 @@ int main() {
 		TestFlushReuseAndFailureRetirement();
 		TestStrictPoolsLimitsAndOwners();
 		TestExplicitWmaDomainAndRealConsumption();
-		std::cout << "decoded buffered sources: 7 fixture groups passed\n";
+		TestAdpcmSampleStorageCapacityAndAccounting();
+		std::cout << "decoded buffered sources: 8 fixture groups passed\n";
 
 		return 0;
 	} catch (const std::exception& error) {

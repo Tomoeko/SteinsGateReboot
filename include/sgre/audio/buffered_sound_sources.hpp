@@ -19,8 +19,9 @@ namespace sgre::audio {
 	};
 
 	struct BufferedSoundSourceLimits {
-		std::size_t MaxSourceDecodedBytes = 64 * 1024 * 1024;
-		std::size_t MaxTotalDecodedBytes = 256 * 1024 * 1024;
+		// The portable float buffers include original long ADPCM cues and overlapping source owners.
+		std::size_t MaxSourceDecodedBytes = 128 * 1024 * 1024;
+		std::size_t MaxTotalDecodedBytes = 512 * 1024 * 1024;
 		WmaStreamSourceLimits Streaming;
 	};
 
