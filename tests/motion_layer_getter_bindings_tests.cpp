@@ -416,6 +416,57 @@ static void TestRetainedNumericPosition() {
 	Require(std::get<float>(fixture.Read(shape, "left")) == 4, "copied shape bounds remain independent after the live coordinate target retires");
 }
 
+static void TestRetainedLayerVisibility() {
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	auto& outer = FixtureField(FixtureField(document->Root, "object"), "outer");
+	auto& timeline = FixtureField(FixtureField(outer, "motion"), "main");
+	auto& layer = std::get<sgre::resource::PsbArray>(FixtureField(timeline, "layer").Data)[0];
+	auto& frames = std::get<sgre::resource::PsbArray>(FixtureField(layer, "frameList").Data);
+	auto absent = frames.back();
+	FixtureField(absent, "time") = Atom(4.0);
+	frames.insert(frames.begin() + 1, std::move(absent));
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	std::size_t query = 0;
+	const auto require_visibility = [&](bool visible, bool branch_visible) {
+		const auto actual_visible = std::get<bool>(fixture.Read(getter, "visible"));
+		const auto actual_branch = std::get<bool>(fixture.Call(getter, "getBranchVisible"));
+		const auto actual_layer = std::get<bool>(fixture.Call(getter, "getLayerVisible"));
+		Require(actual_visible == visible && actual_branch == branch_visible && actual_layer == (visible && branch_visible), "retained visibility query " + std::to_string(query) + ": expected " + std::to_string(visible) + "/" + std::to_string(branch_visible) + ", received " + std::to_string(actual_visible) + "/" + std::to_string(actual_branch) + "/" + std::to_string(actual_layer));
+		++query;
+	};
+	require_visibility(true, true);
+	fixture.Second().Update();
+	require_visibility(false, false);
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	require_visibility(false, false);
+	fixture.Second().Update();
+	require_visibility(true, true);
+	static_cast<void>(fixture.Call(motion, "setOpacity", {std::int32_t{0}}));
+	require_visibility(true, true);
+	fixture.Second().Update();
+	// Native active visibility is independent of the separate opacity byte.
+	require_visibility(true, true);
+	static_cast<void>(fixture.Call(motion, "setOpacity", {std::int32_t{255}}));
+	fixture.Second().Update();
+	require_visibility(true, true);
+	static_cast<void>(fixture.Call(motion, "progress", {8.0f}));
+	require_visibility(false, true);
+	fixture.Second().Draw(0);
+	require_visibility(false, true);
+	fixture.Secondary->SceneContext().Clear();
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(getter, "getVisible"));
+	},
+	    "retired");
+}
+
 static void TestActualScriptProgress() {
 	Fixture fixture;
 	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
@@ -1330,6 +1381,7 @@ int main() {
 		TestAllSnapshotMapsAndContainment();
 		TestEmptyActualChildCatalogueCount();
 		TestRetainedNumericPosition();
+		TestRetainedLayerVisibility();
 		TestActualScriptProgress();
 		TestNativeConstructorsAndArgumentGuards();
 		std::cout << "Motion layer getter: real recursive map, weak generation borrow and independent shape snapshots PASS\n";

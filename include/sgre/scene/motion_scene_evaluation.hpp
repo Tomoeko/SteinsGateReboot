@@ -103,6 +103,7 @@ namespace sgre::scene {
 		[[nodiscard]] const MotionChildConstructionState& LayerChild(const MotionSceneLayerReference& reference) const;
 		// Native Getter left/top read retained numeric coordinates independently of deformed shape bounds.
 		[[nodiscard]] std::array<float, 3> LayerCoordinate(const MotionSceneLayerReference& reference) const;
+		[[nodiscard]] MotionLayerVisibility LayerVisibility(const MotionSceneLayerReference& reference) const;
 		[[nodiscard]] std::uint64_t GraphGeneration() const noexcept;
 
 	private:

@@ -350,7 +350,22 @@ namespace sgre::script {
 				}
 				return SquirrelNativeResult::ReturnValue(result);
 			}));
-			static constexpr std::array<std::string_view, 14> unsupported{"getVisible", "getBranchVisible", "getLayerVisible", "getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "containsArea"};
+			static constexpr std::array<std::string_view, 3> visibility_methods{"getVisible", "getBranchVisible", "getLayerVisible"};
+			for (std::size_t index = 0; index != visibility_methods.size(); ++index) {
+				const auto method = visibility_methods[index];
+				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, index](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+					const auto owner = weak.lock();
+					if (!owner || arguments.empty()) {
+						throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
+					}
+					const auto& record = owner->Getter(arguments[0]);
+					const auto state = ActualScene(record.Task, record.Child).LayerVisibility(record.Layer);
+					const std::array<bool, 3> values{state.Visible, state.BranchVisible, state.Visible && state.BranchVisible};
+
+					return SquirrelNativeResult::ReturnValue(values[index]);
+				}));
+			}
+			static constexpr std::array<std::string_view, 11> unsupported{"getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "containsArea"};
 			for (const auto method : unsupported) {
 				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, method](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
 					const auto owner = weak.lock();

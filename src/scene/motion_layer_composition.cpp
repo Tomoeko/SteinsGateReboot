@@ -178,6 +178,11 @@ namespace sgre::scene {
 
 		m_Overrides.resize(timeline.Layers.size());
 		m_Layers.resize(timeline.Layers.size());
+		for (auto& layer : m_Layers) {
+			// Native50dca0 initializes evaluated +355/+356 before the first numeric phase.
+			layer.Active = true;
+			layer.Visible = true;
+		}
 		m_OverrideDirty.resize(timeline.Layers.size(), true);
 		m_Changes.resize(timeline.Layers.size());
 		if (selected != nullptr) {
@@ -403,6 +408,14 @@ namespace sgre::scene {
 			throw std::runtime_error("motion retained numeric coordinate requires its exact live owner and selected layer");
 		}
 		return m_Layers[layer].Hierarchy.Attributes.Coordinate;
+	}
+
+	MotionLayerVisibility MotionLayerComposition::RetainedVisibility(std::uint32_t layer) const {
+		RequireSelectedOwner(false);
+		if (layer >= m_Layers.size() || (m_SelectedOwner != nullptr && m_SelectedOwner->m_CompositionOwner != this)) {
+			throw std::runtime_error("motion retained visibility requires its exact live owner and selected layer");
+		}
+		return {m_Layers[layer].Active, m_Layers[layer].Visible};
 	}
 
 	bool MotionLayerComposition::Changed(std::uint32_t layer) const {

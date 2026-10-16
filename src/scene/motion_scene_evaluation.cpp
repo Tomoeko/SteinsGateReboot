@@ -1866,6 +1866,18 @@ namespace sgre::scene {
 		throw std::runtime_error("motion coordinate getter context is no longer current");
 	}
 
+	MotionLayerVisibility MotionSceneEvaluation::LayerVisibility(const MotionSceneLayerReference& reference) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			const auto* context = entry.Actual;
+			if (context != nullptr && context->Identity == reference.ContextIdentity) {
+				return context->Composition->RetainedVisibility(reference.NativeOrdinal - 1);
+			}
+		}
+		throw std::runtime_error("motion visibility getter context is no longer current");
+	}
+
 	MotionShapeSnapshot MotionSceneEvaluation::Shape(const MotionSceneLayerReference& reference) const {
 		const auto& state = *m_Implementation;
 		const auto& node = state.ResolveLayer(reference);

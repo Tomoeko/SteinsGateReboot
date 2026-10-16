@@ -29,6 +29,11 @@ namespace sgre::scene {
 		bool FlipY = false;
 	};
 
+	struct MotionLayerVisibility {
+		bool Visible = true;
+		bool BranchVisible = true;
+	};
+
 	struct MotionComposedLayer {
 		MotionHierarchyState Hierarchy;
 		std::array<float, 3> Displacement{};
@@ -62,6 +67,7 @@ namespace sgre::scene {
 		[[nodiscard]] std::span<const MotionComposedLayer> Layers() const noexcept;
 		// Raw native getters read owned numeric words before initial composition and while newer input remains pending.
 		[[nodiscard]] std::array<float, 3> RetainedCoordinate(std::uint32_t layer) const;
+		[[nodiscard]] MotionLayerVisibility RetainedVisibility(std::uint32_t layer) const;
 		// The normal conditional phase exposes the actual native Changed gate consumed by geometry.
 		[[nodiscard]] bool Changed(std::uint32_t layer) const;
 		[[nodiscard]] const MotionLocalFrames& LocalFrames() const;
