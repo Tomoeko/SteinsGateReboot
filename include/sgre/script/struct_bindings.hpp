@@ -31,6 +31,7 @@ namespace sgre::script {
 		// Borrow the actual live schema owner; the caller keeps this exact VM document receiver alive through use.
 		[[nodiscard]] resource::StructStorage& BorrowStructStorage(const SquirrelValue& instance);
 		[[nodiscard]] std::size_t CharacterArraySize(const SquirrelValue& instance) const;
+		[[nodiscard]] std::vector<std::uint8_t> ReadCharacterArray(const SquirrelValue& instance) const;
 		void StoreCharacterArray(const SquirrelValue& instance, std::span<const std::uint8_t> bytes);
 
 	private:

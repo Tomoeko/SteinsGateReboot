@@ -484,6 +484,10 @@ namespace sgre::script {
 		m_Implementation->Value(instance).Value.WriteCharacterArray(bytes);
 	}
 
+	std::vector<std::uint8_t> ScriptStructBindings::ReadCharacterArray(const SquirrelValue& instance) const {
+		return m_Implementation->Value(instance).Value.ReadCharacterArray();
+	}
+
 	SquirrelValue ScriptStructBindings::ValueClass() const {
 		return m_Implementation->ValueClass;
 	}

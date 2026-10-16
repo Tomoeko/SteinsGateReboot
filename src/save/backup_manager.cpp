@@ -26,8 +26,8 @@ namespace sgre::save {
 		bool ResetAllSegments = true;
 		std::vector<LoadInput> Inputs;
 		std::vector<BackupFileReadResult> Results;
-		std::optional<BackupFileWriteRequest> SaveInput;
-		std::optional<BackupFileWriteResult> SaveResult;
+		std::vector<BackupFileWriteRequest> SaveInputs;
+		std::vector<BackupFileWriteResult> SaveResults;
 		std::function<void()> Complete;
 		// Task destruction joins the worker before any borrowed input/result storage expires.
 		std::unique_ptr<core::BackgroundCallTask> Task;
@@ -203,19 +203,19 @@ namespace sgre::save {
 		m_Files = std::move(services);
 	}
 
-	void BackupManager::Load(std::span<const BackupLoadRequest> requests) {
+	void BackupManager::Load(std::span<const BackupFileSelection> requests) {
 		QueueLoad(requests, true);
 	}
 
 	void BackupManager::LoadSegment(std::uint32_t ordinal) {
 		RequireInputMutation();
 		static_cast<void>(Segment(ordinal));
-		BackupLoadRequest request;
+		BackupFileSelection request;
 		request.SegmentId = ordinal;
 		QueueLoad(std::span(&request, 1), false);
 	}
 
-	void BackupManager::QueueLoad(std::span<const BackupLoadRequest> requests, bool reset_all_segments) {
+	void BackupManager::QueueLoad(std::span<const BackupFileSelection> requests, bool reset_all_segments) {
 		RequireInputMutation();
 		if (m_Profile != BackupProfile::Adventure || !m_Files || !InitSuccess() || requests.size() > 65536) {
 			throw std::runtime_error("Adventure backup load requires its real initialized directory/codec and bounded native requests");
@@ -275,41 +275,80 @@ namespace sgre::save {
 		AppendJob(std::move(job));
 	}
 
+	void BackupManager::Save(std::span<const BackupFileSelection> requests) {
+		QueueSave(requests, true);
+	}
+
 	void BackupManager::SaveSegment(std::uint32_t ordinal) {
 		RequireInputMutation();
-		if (m_Profile != BackupProfile::Adventure || !m_Files || !m_Files->Encrypt || !m_Files->ReadTimestamp || !InitSuccess()) {
-			throw std::runtime_error("Adventure segment save requires its actual initialized directory, encryption and timestamp services");
-		}
-		const auto& segment = Segment(ordinal);
-		if (segment.Storage().RootSize() > 160 * 1024 * 1024) {
-			throw std::runtime_error("Adventure segment save exceeds its bounded actual Struct extent");
-		}
+		static_cast<void>(Segment(ordinal));
+		BackupFileSelection request;
+		request.SegmentId = ordinal;
+		QueueSave(std::span(&request, 1), false);
+	}
 
+	void BackupManager::QueueSave(std::span<const BackupFileSelection> requests, bool reset_all_segments) {
+		RequireInputMutation();
+		if (m_Profile != BackupProfile::Adventure || !m_Files || !m_Files->Encrypt || !m_Files->ReadTimestamp || !InitSuccess() || requests.size() > 65536) {
+			throw std::runtime_error("Adventure save requires its initialized directory, encryption, timestamp services and bounded native requests");
+		}
 		auto job = std::make_unique<BackupJob>();
-		job->SaveInput.emplace();
-		auto& input = *job->SaveInput;
-		input.SegmentId = ordinal;
-		input.FileId = segment.Metadata().FileId;
-		input.EnableMetaData = m_EnableMetaData;
-		input.SecureFileId = m_SecureFileId;
-		// Serialize on the Struct owner thread; workers borrow this job's immutable snapshot.
-		input.Bytes = segment.Storage().Serialize();
+		job->ResetAllSegments = reset_all_segments;
+		std::vector<std::int32_t> selected_file_ids;
+		selected_file_ids.reserve(m_Segments.size());
+		for (const auto& segment : m_Segments) {
+			selected_file_ids.push_back(segment->Metadata().FileId);
+		}
+		std::size_t total_bytes = 0;
+		const auto add_input = [&](std::uint32_t ordinal, std::int32_t file_id) {
+			if (ordinal >= m_Segments.size()) {
+				return;
+			}
+			const auto& segment = *m_Segments[ordinal];
+			constexpr std::size_t kMaximumPublicationBytes = 160 * 1024 * 1024;
+			if (segment.Storage().RootSize() > kMaximumPublicationBytes - total_bytes) {
+				throw std::runtime_error("Adventure save exceeds its bounded aggregate Struct extent");
+			}
+			if (file_id >= 0) {
+				selected_file_ids[ordinal] = file_id;
+			}
+			BackupFileWriteRequest input;
+			input.SegmentId = ordinal;
+			input.FileId = selected_file_ids[ordinal];
+			input.EnableMetaData = m_EnableMetaData;
+			input.SecureFileId = m_SecureFileId;
+			// Serialize on the Struct owner thread; workers consume this job's immutable snapshots.
+			input.Bytes = segment.Storage().Serialize();
+			total_bytes += input.Bytes.size();
+			job->SaveInputs.push_back(std::move(input));
+		};
+		if (requests.empty()) {
+			for (std::uint32_t ordinal = 0; ordinal < m_Segments.size(); ++ordinal) {
+				add_input(ordinal, -1);
+			}
+		} else {
+			for (const auto& request : requests) {
+				add_input(request.SegmentId, request.FileId);
+			}
+		}
+		job->SaveResults.reserve(job->SaveInputs.size());
 		auto* actual_job = job.get();
 		job->Complete = [this, actual_job] {
 			PublishSave(*actual_job);
 		};
 		job->Task = std::make_unique<core::BackgroundCallTask>(m_Background, core::BackgroundCallLane::BelowNormal, [this, actual_job] {
-			try {
-				actual_job->SaveInput->Timestamp = m_Files->ReadTimestamp();
-				actual_job->SaveResult = WriteAdventureBackupFiles(m_Files->Directory, *actual_job->SaveInput, m_Files->Encrypt);
-			} catch (const std::exception& error) {
-				actual_job->SaveResult.emplace();
-				actual_job->SaveResult->Error = error.what();
-				throw;
-			} catch (...) {
-				actual_job->SaveResult.emplace();
-				actual_job->SaveResult->Error = "Adventure backup worker failed before physical completion";
-				throw;
+			for (auto& input : actual_job->SaveInputs) {
+				auto& result = actual_job->SaveResults.emplace_back();
+				try {
+					input.Timestamp = m_Files->ReadTimestamp();
+					result = WriteAdventureBackupFiles(m_Files->Directory, input, m_Files->Encrypt);
+				} catch (const std::exception& error) {
+					result.Error = error.what();
+					throw;
+				} catch (...) {
+					result.Error = "Adventure backup worker failed before physical completion";
+					throw;
+				}
 			}
 		});
 		AppendJob(std::move(job));
@@ -317,20 +356,35 @@ namespace sgre::save {
 
 	void BackupManager::PublishSave(const BackupJob& job) {
 		RequireOwner();
-		if (!job.SaveInput || !job.SaveResult || job.SaveInput->SegmentId >= m_Segments.size()) {
-			throw std::runtime_error("Adventure segment save completion lost its actual worker input/results");
+		if (job.SaveResults.size() > job.SaveInputs.size()) {
+			throw std::runtime_error("Adventure save completion lost its actual ordered input/results");
 		}
-		auto& segment = *m_Segments[job.SaveInput->SegmentId];
-		const auto& result = *job.SaveResult;
-		// Native075a40 clears only this segment; Crypted is a load result, not the encryption configuration.
-		segment.m_Success.store(false, std::memory_order_release);
-		segment.m_NoSpace.store(result.NoSpace, std::memory_order_release);
-		segment.m_Broken.store(false, std::memory_order_release);
-		segment.m_NoFile.store(false, std::memory_order_release);
-		segment.m_Crypted.store(false, std::memory_order_release);
-		segment.m_Offline.store(false, std::memory_order_release);
-		segment.m_LastError = result.Error;
-		segment.m_Success.store(result.Success, std::memory_order_release);
+		// Native0761c0 initializes every batch result, then075a40 updates each requested segment in order.
+		if (job.ResetAllSegments) {
+			for (auto& segment : m_Segments) {
+				segment->m_Success.store(true, std::memory_order_release);
+				segment->m_NoSpace.store(false, std::memory_order_release);
+				segment->m_Broken.store(false, std::memory_order_release);
+				segment->m_NoFile.store(false, std::memory_order_release);
+				segment->m_Crypted.store(false, std::memory_order_release);
+				segment->m_Offline.store(false, std::memory_order_release);
+				segment->m_LastError.clear();
+			}
+		}
+		for (std::size_t index = 0; index != job.SaveResults.size(); ++index) {
+			const auto& input = job.SaveInputs[index];
+			auto& segment = *m_Segments[input.SegmentId];
+			const auto& result = job.SaveResults[index];
+			segment.m_Metadata.FileId = input.FileId;
+			segment.m_Success.store(false, std::memory_order_release);
+			segment.m_NoSpace.store(result.NoSpace, std::memory_order_release);
+			segment.m_Broken.store(false, std::memory_order_release);
+			segment.m_NoFile.store(false, std::memory_order_release);
+			segment.m_Crypted.store(false, std::memory_order_release);
+			segment.m_Offline.store(false, std::memory_order_release);
+			segment.m_LastError = result.Error;
+			segment.m_Success.store(result.Success, std::memory_order_release);
+		}
 	}
 
 	void BackupManager::PublishLoad(const BackupJob& job) {
@@ -432,7 +486,7 @@ namespace sgre::save {
 			}
 			failure = std::current_exception();
 		}
-		if (publish && found->second->Complete && (!failure || found->second->SaveResult)) {
+		if (publish && found->second->Complete && (!failure || !found->second->SaveResults.empty())) {
 			try {
 				auto complete = std::exchange(found->second->Complete, {});
 				complete();

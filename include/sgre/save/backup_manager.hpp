@@ -91,10 +91,11 @@ namespace sgre::save {
 		// Configure before native segments; the actual directory and codec enclose every pending file job.
 		void ConfigureFiles(BackupFileServices services);
 		// Native empty input means every actual segment. No alternate Struct target is fabricated.
-		void Load(std::span<const BackupLoadRequest> requests = {});
+		void Load(std::span<const BackupFileSelection> requests = {});
 		// Native SQAdvBackupSegment autoload queues only this manager-owned segment and preserves other results.
 		void LoadSegment(std::uint32_t ordinal);
 		void SaveSegment(std::uint32_t ordinal);
+		void Save(std::span<const BackupFileSelection> requests = {});
 		[[nodiscard]] bool NoSpace() const noexcept;
 		[[nodiscard]] bool Broken() const noexcept;
 		[[nodiscard]] bool NoFile() const noexcept;
@@ -119,7 +120,8 @@ namespace sgre::save {
 	private:
 		class BackupJob;
 		void AppendJob(std::unique_ptr<BackupJob> job);
-		void QueueLoad(std::span<const BackupLoadRequest> requests, bool reset_all_segments);
+		void QueueLoad(std::span<const BackupFileSelection> requests, bool reset_all_segments);
+		void QueueSave(std::span<const BackupFileSelection> requests, bool reset_all_segments);
 		void PublishLoad(const BackupJob& job);
 		void PublishSave(const BackupJob& job);
 		void ExecuteInitialize();

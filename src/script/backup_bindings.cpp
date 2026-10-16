@@ -61,6 +61,7 @@ namespace sgre::script {
 			// Actual mutable Struct receivers enclose Owner even during constructor unwind or binding destruction.
 			std::vector<SquirrelHostRoot> StructOwners;
 			std::unique_ptr<save::BackupManager> Owner;
+			std::string DialogName;
 		};
 
 		struct SegmentRecord {
@@ -251,15 +252,15 @@ namespace sgre::script {
 			return instance;
 		}
 
-		void LoadAdventure(std::span<const SquirrelValue> arguments) {
+		void TransferAdventure(std::span<const SquirrelValue> arguments, bool saving) {
 			if (arguments.empty() || arguments.size() > 2) {
 				throw std::runtime_error("invalid argument.");
 			}
 			auto& manager = Manager(arguments[0]);
-			std::vector<save::BackupLoadRequest> requests;
+			std::vector<save::BackupFileSelection> requests;
 			if (arguments.size() == 2) {
 				if (Vm.Type(arguments[1]) != SquirrelValueType::Array || Vm.Length(arguments[1]) > 65536) {
-					throw std::runtime_error("Adventure backup load requires its bounded actual FileData array");
+					throw std::runtime_error("Adventure backup transfer requires its bounded actual FileData array");
 				}
 				const auto count = Vm.Length(arguments[1]);
 				requests.reserve(count);
@@ -268,7 +269,7 @@ namespace sgre::script {
 					if (Vm.Type(entry) != SquirrelValueType::Table) {
 						throw std::runtime_error("Adventure backup FileData entry requires its actual table");
 					}
-					save::BackupLoadRequest request;
+					save::BackupFileSelection request;
 					request.SegmentId = static_cast<std::uint32_t>(index);
 					if (Vm.HasSlot(entry, std::string("segmentId"))) {
 						request.SegmentId = std::bit_cast<std::uint32_t>(BackupInteger(Vm.ReadSlot(entry, std::string("segmentId"))));
@@ -288,7 +289,11 @@ namespace sgre::script {
 				}
 			}
 
-			manager.Owner->Load(requests);
+			if (saving) {
+				manager.Owner->Save(requests);
+			} else {
+				manager.Owner->Load(requests);
+			}
 		}
 
 		void Install() {
@@ -400,6 +405,21 @@ namespace sgre::script {
 				});
 				InstallSegmentMethods(method, segment_class);
 			}
+			method(AdventureManagerClass, "setDialogName", [](Implementation& state, auto arguments) {
+				RequireBackupArguments(arguments, 2);
+				const auto text = BackupString(arguments[1]);
+				if (text.size() > 1024 * 1024) {
+					throw std::runtime_error("Adventure Backup dialog name exceeds its bounded string domain");
+				}
+				state.Manager(arguments[0]).DialogName = text;
+
+				return SquirrelNativeResult::NoValues();
+			});
+			method(AdventureManagerClass, "getDialogName", [](Implementation& state, auto arguments) {
+				RequireBackupArguments(arguments, 1);
+
+				return SquirrelNativeResult::ReturnValue(state.Manager(arguments[0]).DialogName);
+			});
 			method(AdventureSegmentClass, "getSegmentId", [](Implementation& state, auto arguments) {
 				RequireBackupArguments(arguments, 1);
 
@@ -430,19 +450,15 @@ namespace sgre::script {
 				return SquirrelNativeResult::ReturnValue(false);
 			});
 			method(AdventureManagerClass, "autoload", [](Implementation& state, auto arguments) {
-				state.LoadAdventure(arguments);
+				state.TransferAdventure(arguments, false);
 
 				return SquirrelNativeResult::NoValues();
 			});
-			for (const auto name : {"autosave"}) {
-				method(AdventureManagerClass, name, [name](Implementation& state, auto arguments) -> SquirrelNativeResult {
-					if (arguments.empty()) {
-						throw std::runtime_error("invalid argument.");
-					}
-					static_cast<void>(state.Manager(arguments[0]));
-					throw std::runtime_error(std::string("AdvBackupManager.") + name + " requires its actual recovered batch/metadata file producer");
-				});
-			}
+			method(AdventureManagerClass, "autosave", [](Implementation& state, auto arguments) {
+				state.TransferAdventure(arguments, true);
+
+				return SquirrelNativeResult::NoValues();
+			});
 			method(AdventureManagerClass, "getNospace", [](Implementation& state, auto arguments) {
 				RequireBackupArguments(arguments, 1);
 

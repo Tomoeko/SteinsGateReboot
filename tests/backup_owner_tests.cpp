@@ -223,6 +223,12 @@ static void TestActualAdventureProfile() {
 	const auto segment = Call(vm, manager, "addSegment", std::array<sgre::script::SquirrelValue, 2>{document, std::int32_t{1}});
 	const auto segment_pin = vm.Retain(segment);
 	Require(vm.IsInstanceOf(segment, fixture.Backups.AdventureSegmentClass()) && !vm.IsInstanceOf(segment, fixture.Backups.SegmentClass()) && std::get<bool>(Call(vm, segment, "getSuccess")), "native Adventure segment class/default success differ from the ordinary profile");
+	Require(sgre::script::StringText(vm.ReadSlot(manager, std::string("dialogName"))).empty(), "native Adventure manager dialog title starts independently empty");
+	vm.AssignSlot(segment, std::string("dialogName"), std::string("authored fixture save dialog"));
+	vm.AssignSlot(manager, std::string("dialogName"), vm.ReadSlot(segment, std::string("dialogName")));
+	Require(sgre::script::StringText(vm.ReadSlot(manager, std::string("dialogName"))) == "authored fixture save dialog", "original doSaveSegment must copy the segment title into the actual Adventure manager through Object properties");
+	vm.AssignSlot(segment, std::string("dialogName"), std::string("changed segment title"));
+	Require(sgre::script::StringText(Call(vm, manager, "getDialogName")) == "authored fixture save dialog", "native manager owns its copied dialog string independently of a segment wrapper");
 	Require(std::get<std::int32_t>(Call(vm, segment, "getSegmentId")) == 0 && !std::get<bool>(Call(vm, segment, "getCrypted")), "native Adventure ordinal and crypted-result byte start from the real constructor state");
 	static_cast<void>(Call(vm, manager, "setEnableMetaData", std::array<sgre::script::SquirrelValue, 1>{0.5f}));
 	Require(std::get<bool>(Call(vm, manager, "getEnableMetaData")), "Adventure metadata setter must mutate its real owner with native VM truth");
@@ -466,6 +472,70 @@ static void TestActualAdventureSegmentLoad() {
 	fixture.Close();
 }
 
+static void TestActualAdventureBatchSave() {
+	BackupFileFixture files;
+	BackupVmFixture fixture;
+	auto& vm = fixture.Vm;
+	std::atomic<std::size_t> timestamps = 0;
+	sgre::save::BackupFileServices services;
+	services.Directory = files.Directory();
+	services.Decrypt = sgre::platform::DecryptBackupBytes;
+	services.Encrypt = sgre::platform::EncryptBackupBytes;
+	services.ReadTimestamp = [&] {
+		Require(std::this_thread::get_id() != fixture.OwnerThread, "batch timestamps must be read by the genuine background task");
+		++timestamps;
+
+		return std::int64_t{0x123456789};
+	};
+	fixture.Backups.ConfigureFiles(services);
+	const auto manager = vm.CreateInstance(fixture.Backups.AdventureManagerClass());
+	static_cast<void>(Call(vm, manager, "constructor"));
+	const auto manager_pin = vm.Retain(manager);
+	fixture.Layers.AttachBaseFrame(manager, fixture.Renderer);
+	const auto schema = fixture.Psb.WrapDocument(Schema());
+	std::array<sgre::script::SquirrelValue, 3> documents;
+	std::array<sgre::script::SquirrelValue, 3> segments;
+	for (std::size_t index = 0; index != documents.size(); ++index) {
+		documents[index] = vm.CreateInstance(fixture.Structs.StructClass());
+		static_cast<void>(Call(vm, documents[index], "constructor", std::array<sgre::script::SquirrelValue, 1>{schema}));
+		fixture.Structs.BorrowStructStorage(documents[index]).Unserialize(std::array<std::uint8_t, 4>{static_cast<std::uint8_t>(index + 1), 2, 3, 4});
+		segments[index] = Call(vm, manager, "addSegment", std::array<sgre::script::SquirrelValue, 2>{documents[index], std::int32_t{32}});
+	}
+	static_cast<void>(Call(vm, manager, "init"));
+	fixture.Drain(manager);
+	static_cast<void>(Call(vm, manager, "setEnableMetaData", std::array<sgre::script::SquirrelValue, 1>{true}));
+	static_cast<void>(Call(vm, manager, "autosave"));
+	Require(timestamps == 0 && !std::filesystem::exists(files.Directory() / "data_000_0000.bin"), "queueing a batch must defer all physical writes to its actual camera/background task");
+	fixture.Drain(manager);
+	Require(timestamps == 3 && std::get<bool>(Call(vm, manager, "getSuccess")), "empty native FileData input must save every actual segment in one manager job");
+	for (std::uint32_t ordinal = 0; ordinal != documents.size(); ++ordinal) {
+		sgre::save::BackupFileReadRequest request;
+		request.SegmentId = ordinal;
+		request.RootBytes = 4;
+		request.EnableMetaData = true;
+		const auto read = sgre::save::ReadAdventureBackupFiles(files.Directory(), request, services.Decrypt);
+		Require(read.Success && read.Bytes == std::vector<std::uint8_t>{static_cast<std::uint8_t>(ordinal + 1), 2, 3, 4}, "each actual batch file and metadata must independently load and verify its original Struct bytes");
+	}
+	static_cast<void>(Call(vm, segments[2], "setFileId", std::array<sgre::script::SquirrelValue, 1>{std::int32_t{31}}));
+	static_cast<void>(Call(vm, segments[2], "autoload"));
+	fixture.Drain(manager);
+	Require(std::get<bool>(Call(vm, segments[2], "getNofile")), "unselected segment failure must precede batch result reset");
+	const auto entry = [&](std::int32_t ordinal, std::int32_t file) {
+		const auto value = vm.CreateTable();
+		vm.NewSlot(value, std::string("segmentId"), ordinal);
+		vm.NewSlot(value, std::string("fileId"), file);
+
+		return value;
+	};
+	const auto selections = vm.CreateArray(std::array<sgre::script::SquirrelValue, 4>{entry(0, 7), entry(0, -1), entry(1, 9), entry(1000, 0)});
+	static_cast<void>(Call(vm, manager, "autosave", std::array<sgre::script::SquirrelValue, 1>{selections}));
+	fixture.Drain(manager);
+	Require(timestamps == 6 && std::get<std::int32_t>(Call(vm, segments[0], "getFileId")) == 7 && std::get<std::int32_t>(Call(vm, segments[1], "getFileId")) == 9, "batch must retain request order, reuse a previous duplicate file ID and skip out-of-range segment ordinals");
+	Require(std::get<bool>(Call(vm, segments[2], "getSuccess")) && !std::get<bool>(Call(vm, segments[2], "getNofile")) && std::get<std::int32_t>(Call(vm, segments[2], "getFileId")) == 31, "native batch reset must clear even unselected result flags while retaining their selected file IDs");
+	Require(std::filesystem::exists(files.Directory() / "data_000_0007.bin") && std::filesystem::exists(files.Directory() / "data_001_0009.bin"), "normal save selections must produce the requested physical slot files");
+	fixture.Close();
+}
+
 static void TestActualAdventureSegmentSave() {
 	BackupFileFixture files;
 	BackupVmFixture fixture;
@@ -569,6 +639,7 @@ int main() {
 		TestActualAdventureFileLoad();
 		TestActualAdventureSegmentLoad();
 		TestActualAdventureSegmentSave();
+		TestActualAdventureBatchSave();
 #endif
 		std::cout << "PASS genuine ordinary and Adventure Backup VM/Base/Struct/job metadata, ordinary Init success and failed-retry reset, low-byte count, own-camera extraction, actual file/metadata/MD5/AES load, missing/corrupt results, cancelled publication and exception retirement\n";
 

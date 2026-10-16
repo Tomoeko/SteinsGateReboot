@@ -237,7 +237,16 @@ namespace sgre::script {
 				throw std::runtime_error("invalid argument.");
 			}
 
-			owner.Record(arguments[0]).Image->RestorePixels(owner.Binary.Bytes(arguments[1]));
+			if (owner.Structs == nullptr) {
+				throw std::runtime_error("RawImage.restore requires its actual Struct character-array service");
+			}
+			const auto size = owner.Structs->CharacterArraySize(arguments[1]);
+			auto& image = *owner.Record(arguments[0]).Image;
+			const auto pixels = std::size_t(image.Width()) * image.Height();
+			if (size != pixels * 3 && size != pixels * 4) {
+				throw std::runtime_error("char array size mismatch.");
+			}
+			image.RestorePixels(owner.Structs->ReadCharacterArray(arguments[1]));
 
 			return SquirrelNativeResult::NoValues();
 		});

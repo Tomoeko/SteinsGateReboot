@@ -42,11 +42,29 @@ static SquirrelValue Call(sgre::script::SquirrelVm& vm, const SquirrelValue& rec
 	return vm.Invoke(vm.GetSlot(receiver, std::string(name)), arguments).Value;
 }
 
+static SquirrelValue CharacterArray(sgre::script::SquirrelVm& vm, sgre::script::ScriptPsbBindings& psb, sgre::script::ScriptStructBindings& structs, std::span<const std::uint8_t> bytes) {
+	const auto atom = [](auto value) {
+		sgre::resource::PsbValue result;
+		result.Data = std::move(value);
+
+		return result;
+	};
+	auto schema = std::make_shared<sgre::resource::PsbDocument>();
+	schema->Root = atom(sgre::resource::PsbObject{{"root", atom(sgre::resource::PsbObject{{"pixels", atom(sgre::resource::PsbArray{atom(std::int64_t{10}), atom(static_cast<std::int64_t>(bytes.size()))})}})}});
+	const auto document = vm.Invoke(structs.StructClass(), std::array<SquirrelValue, 2>{vm.RootTable(), psb.WrapDocument(schema)}).Value;
+	structs.BorrowStructStorage(document).Unserialize(bytes);
+
+	return vm.ReadSlot(Call(vm, document, "getRoot"), std::string("pixels"));
+}
+
 static void TestGenuineClassesAndMutablePixels() {
 	sgre::script::SquirrelVm vm;
 	sgre::script::ScriptObjectBindings objects(vm);
 	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptPsbBindings psb(vm, objects);
+	sgre::script::ScriptStructBindings structs(vm, objects, psb, binary);
 	sgre::script::ScriptRawImageBindings images(vm, objects, binary);
+	images.ConfigureStorageOwners(structs);
 	const auto derived = vm.CreateClass(images.RawImageClass());
 	const std::array<SquirrelValue, 3> arguments{vm.RootTable(), std::int32_t(2), std::int32_t(1)};
 	const auto image = vm.Invoke(derived, arguments).Value;
@@ -54,8 +72,8 @@ static void TestGenuineClassesAndMutablePixels() {
 	Require(Call(vm, image, "getWidth") == SquirrelValue{std::int32_t(2)} && Call(vm, image, "getHeight") == SquirrelValue{std::int32_t(1)} && Call(vm, image, "getUpdate") == SquirrelValue{true}, "native scalar getters return one value and initial update is true");
 	Require(std::holds_alternative<std::monostate>(Call(vm, image, "clearUpdate")), "clearUpdate returns status zero with no value");
 	const auto bytes = std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{1, 2, 3, 0, 10, 20, 30, 64});
-	const auto input = binary.WrapBuffer(bytes);
-	Require(std::holds_alternative<std::monostate>(Call(vm, image, "restore", {input})), "restore consumes real retained Binary bytes and returns no value");
+	const auto input = CharacterArray(vm, psb, structs, *bytes);
+	Require(std::holds_alternative<std::monostate>(Call(vm, image, "restore", {input})), "restore consumes the real typed Struct character array and returns no value");
 	const auto color = std::bit_cast<std::int32_t>(std::uint32_t{0xaabbccdd});
 	static_cast<void>(Call(vm, image, "fill", {std::int32_t(0), std::int32_t(0), std::int32_t(2), std::int32_t(1), color, std::string("false")}));
 	Require(images.Image(image).StorePixels(true) == std::vector<std::uint8_t>{1, 2, 3, 0, 0xaa, 0xbb, 0xcc, 64}, "native truth conversion treats a nonempty string as true and preserves alpha/transparent pixels");
@@ -103,10 +121,13 @@ static void TestLimitsErrorsAndExplicitRelease() {
 	sgre::script::SquirrelVm vm;
 	sgre::script::ScriptObjectBindings objects(vm);
 	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptPsbBindings psb(vm, objects);
+	sgre::script::ScriptStructBindings structs(vm, objects, psb, binary);
 	sgre::script::ScriptRawImageLimits limits;
 	limits.MaxInstances = 1;
 	limits.MaxPixelBytes = 8;
 	sgre::script::ScriptRawImageBindings images(vm, objects, binary, limits);
+	images.ConfigureStorageOwners(structs);
 	const std::array<SquirrelValue, 3> arguments{vm.RootTable(), std::int32_t(2), std::int32_t(1)};
 	const auto image = vm.Invoke(images.RawImageClass(), arguments).Value;
 	RequireError([&] {
@@ -118,11 +139,11 @@ static void TestLimitsErrorsAndExplicitRelease() {
 		static_cast<void>(vm.Invoke(images.RawImageClass(), incomplete));
 	},
 	    "invalid argument");
-	const auto input = binary.WrapBuffer(std::make_shared<const std::vector<std::uint8_t>>(5, 0));
+	const auto input = CharacterArray(vm, psb, structs, std::array<std::uint8_t, 5>{});
 	RequireError([&] {
 		static_cast<void>(Call(vm, image, "restore", {input}));
 	},
-	    "byte count");
+	    "char array size mismatch");
 	RequireError([&] {
 		static_cast<void>(Call(vm, image, "fill", {std::int32_t(-1), std::int32_t(0), std::int32_t(1), std::int32_t(1), std::int32_t(0)}));
 	},
@@ -191,6 +212,10 @@ static void TestStoreUsesMutableCharacterArrays() {
 	for (std::int32_t index = 0; index != 6; ++index) {
 		Require(vm.ReadSlot(rgb, index) == SquirrelValue{index + 1}, "RGB storage must preserve the independent byte-order vector");
 	}
+	const auto restored = vm.Invoke(images.RawImageClass(), std::array<SquirrelValue, 3>{vm.RootTable(), std::int32_t{2}, std::int32_t{1}}).Value;
+	Require(std::holds_alternative<std::monostate>(Call(vm, restored, "restore", {rgba})) && images.Image(restored).StorePixels(true) == images.Image(image).StorePixels(true), "saved RGBA thumbnail must restore through the same actual character-array owner");
+	static_cast<void>(Call(vm, restored, "restore", {rgb}));
+	Require(images.Image(restored).StorePixels(true) == std::vector<std::uint8_t>{1, 2, 3, 255, 4, 5, 6, 255}, "saved RGB thumbnail restoration must recover opaque alpha");
 	Require(vm.ReadSlot(rgba, std::int32_t{3}) == SquirrelValue{std::int32_t{-1}} && vm.ReadSlot(rgba, std::int32_t{7}) == SquirrelValue{std::int32_t{-128}}, "RGBA storage must preserve alpha bytes and the destination schema's signed reads");
 	const auto before = structs.BorrowStructStorage(document).Serialize();
 	RequireError([&] {

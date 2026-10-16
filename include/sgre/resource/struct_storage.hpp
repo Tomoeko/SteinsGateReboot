@@ -48,6 +48,7 @@ namespace sgre::resource {
 		void Clear();
 		[[nodiscard]] bool IsFlags() const;
 		[[nodiscard]] bool IsCharacterArray() const;
+		[[nodiscard]] std::vector<std::uint8_t> ReadCharacterArray() const;
 		void WriteCharacterArray(std::span<const std::uint8_t> bytes);
 		[[nodiscard]] std::uint32_t CountFlags() const;
 		[[nodiscard]] std::uint32_t CountFlags(std::span<const std::uint32_t> indices) const;

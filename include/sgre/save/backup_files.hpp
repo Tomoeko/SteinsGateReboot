@@ -22,7 +22,7 @@ namespace sgre::save {
 		std::function<std::int64_t()> ReadTimestamp;
 	};
 
-	struct BackupLoadRequest {
+	struct BackupFileSelection {
 		std::uint32_t SegmentId = 0;
 		std::int32_t FileId = -1;
 	};

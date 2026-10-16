@@ -520,6 +520,15 @@ namespace sgre::resource {
 		std::copy(bytes.begin(), bytes.end(), destination.begin());
 	}
 
+	std::vector<std::uint8_t> StructValue::ReadCharacterArray() const {
+		if (!IsCharacterArray()) {
+			throw std::runtime_error("require char array.");
+		}
+		const auto source = m_Owner->Range(m_Offset, Length());
+
+		return {source.begin(), source.end()};
+	}
+
 	std::uint32_t StructValue::CountFlags() const {
 		if (!IsFlags()) {
 			throw std::runtime_error("structvalue is not flags.");
