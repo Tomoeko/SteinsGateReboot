@@ -35,6 +35,10 @@ namespace sgre::script {
 		Semicolon,
 		Equal,
 		NotEqual,
+		Less,
+		Greater,
+		LessEqual,
+		GreaterEqual,
 		Not,
 		And,
 		Or,
@@ -138,6 +142,14 @@ namespace sgre::script {
 					Fail(token.Offset, "unsupported operator in recovered expression grammar");
 				}
 				token.Kind = SourceTokenKind::Equal;
+				break;
+			case '<':
+			case '>':
+				token.Kind = value == '<' ? SourceTokenKind::Less : SourceTokenKind::Greater;
+				if (m_Position < m_Source.size() && m_Source[m_Position] == '=') {
+					++m_Position;
+					token.Kind = value == '<' ? SourceTokenKind::LessEqual : SourceTokenKind::GreaterEqual;
+				}
 				break;
 			case '!':
 				token.Kind = SourceTokenKind::Not;
@@ -559,22 +571,34 @@ namespace sgre::script {
 			return result;
 		}
 
-		SourceOperand Equality(SourceFunctionState& state) {
+		SourceOperand Comparison(SourceFunctionState& state) {
 			auto left = Unary(state);
-			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual) {
+			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual || m_Token.Kind == SourceTokenKind::Less || m_Token.Kind == SourceTokenKind::Greater || m_Token.Kind == SourceTokenKind::LessEqual || m_Token.Kind == SourceTokenKind::GreaterEqual) {
 				const auto operation = m_Token.Kind;
 				m_Token = m_Lexer.Next();
 				const auto left_value = Materialize(state, left);
 				const auto right_value = Materialize(state, Unary(state));
 				left = {};
 				left.Register = Allocate(state);
-				Emit(state, operation == SourceTokenKind::Equal ? 15 : 16, left.Register, right_value, left_value);
+				if (operation == SourceTokenKind::Equal || operation == SourceTokenKind::NotEqual) {
+					Emit(state, operation == SourceTokenKind::Equal ? 15 : 16, left.Register, right_value, left_value);
+				} else {
+					std::uint8_t relation = 0;
+					if (operation == SourceTokenKind::Less) {
+						relation = 3;
+					} else if (operation == SourceTokenKind::LessEqual) {
+						relation = 4;
+					} else if (operation == SourceTokenKind::GreaterEqual) {
+						relation = 2;
+					}
+					Emit(state, 40, left.Register, right_value, left_value, relation);
+				}
 			}
 			return left;
 		}
 
 		SourceOperand LogicalAnd(SourceFunctionState& state) {
-			const auto left = Equality(state);
+			const auto left = Comparison(state);
 			if (!Accept(SourceTokenKind::And)) {
 				return left;
 			}

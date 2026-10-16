@@ -6,6 +6,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -362,6 +363,70 @@ static void TestCommaActionSuspensionAndRegisteredCompilation() {
 	Require(std::get<std::int32_t>(vm.Resume().Value) == 79 && trace == "waitcontacts", "nested tail-call continuation must run after the original wait resumes");
 }
 
+static void TestRelationalOperatorsAndNativePrecedence() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	const std::array<std::pair<std::string_view, bool>, 12> cases{{{"return 1<2;", true}, {"return 1>2;", false}, {"return 2<1;", false}, {"return 2>1;", true}, {"return 1<=2;", true}, {"return 1>=2;", false}, {"return 2<=1;", false}, {"return 2>=1;", true}, {"return 2<=2;", true}, {"return 2>=2;", true}, {"return 2<2;", false}, {"return 2>2;", false}}};
+	for (const auto& [source, expected] : cases) {
+		Require(std::get<bool>(Run(vm, source, receiver)) == expected, "relational expression differs at an original strict/inclusive boundary");
+	}
+	vm.NewSlot(receiver, std::string("maximum"), std::numeric_limits<std::int32_t>::max());
+	vm.NewSlot(receiver, std::string("minimum"), std::numeric_limits<std::int32_t>::min());
+	Require(std::get<bool>(Run(vm, "return maximum<minimum;", receiver)), "compiled relation must retain the VM's native wrapped integer difference");
+	vm.NewSlot(receiver, std::string("fraction"), 1.5f);
+	Require(std::get<bool>(Run(vm, "return fraction>1;", receiver)) && std::get<bool>(Run(vm, "return \"alpha\"<\"beta\";", receiver)), "compiled relation must preserve existing mixed numeric and string ordering");
+	std::string trace;
+	for (const auto& [name, value] : std::array<std::pair<std::string, std::int32_t>, 2>{{{"left", 7}, {"right", 6}}}) {
+		vm.NewSlot(receiver, name, vm.CreateNativeClosure(name, [&, name, value](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+			Require(arguments.size() == 1 && arguments[0] == receiver, "relational operand call lost its actual receiver");
+			trace += name;
+			return sgre::script::SquirrelNativeResult::ReturnValue(value);
+		}));
+	}
+	Require(std::get<bool>(Run(vm, "return left()>=right();", receiver)) && trace == "leftright", "comparison operands must execute once in left-to-right order");
+	for (const auto& [source, expected] : std::array<std::pair<std::string_view, std::vector<std::uint8_t>>, 3>{{{"return a==b<c;", {15, 40}}, {"return a<b==c;", {40, 15}}, {"return a<b>=c;", {40, 40}}}}) {
+		const auto program = CompileSquirrelSource(vm, source, "native-comparison-precedence");
+		std::vector<std::uint8_t> comparisons;
+		for (const auto& instruction : program.MainFunction.Instructions) {
+			if (instruction.Opcode == 15 || instruction.Opcode == 16 || instruction.Opcode == 40) {
+				comparisons.push_back(instruction.Opcode);
+			}
+		}
+		Require(comparisons == expected, "original equality and relational operators must share one left-associative level");
+	}
+	for (const auto source : {"return 1<;", "return 1>=;", "return 1<<2;", "return 1>>2;", "return 1<=>2;"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "relation-error"));
+		},
+		    "relation-error");
+	}
+}
+
+static void TestActualDialogThresholdCompilation() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto receiver = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("isDialog"), false);
+	const auto compiler = vm.GetSlot(vm.RootTable(), std::string("compilestring"));
+	std::array<SquirrelValue, 2> conditions;
+	for (std::size_t index = 0; index < conditions.size(); ++index) {
+		const std::array<SquirrelValue, 2> compile_arguments{vm.RootTable(), std::string("return isDialog && choiceNum>=") + std::to_string(index + 1)};
+		conditions[index] = vm.Invoke(compiler, compile_arguments).Value;
+	}
+	const std::array<SquirrelValue, 1> arguments{receiver};
+	for (const auto& condition : conditions) {
+		Require(!std::get<bool>(vm.Invoke(condition, arguments).Value), "inactive dialog must short-circuit before looking up an absent choice count");
+	}
+	vm.SetSlot(receiver, std::string("isDialog"), true);
+	vm.NewSlot(receiver, std::string("choiceNum"), std::int32_t{0});
+	for (std::int32_t count = 0; count <= 3; ++count) {
+		vm.SetSlot(receiver, std::string("choiceNum"), count);
+		for (std::size_t index = 0; index < conditions.size(); ++index) {
+			Require(std::get<bool>(vm.Invoke(conditions[index], arguments).Value) == (count >= static_cast<std::int32_t>(index + 1)), "original dialog choice condition must observe the current receiver count at each inclusive threshold");
+		}
+	}
+}
+
 static void TestUnsupportedGrammarAndDiagnostics() {
 	SquirrelVm vm;
 	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "local value = 1; return value;", "this.value = 1;", "return 1 + 2;", "if (true) return 1;", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
@@ -503,6 +568,8 @@ int main() {
 		TestLogicalConditionalAndRootExpressions();
 		TestCommaExpressionsAndArgumentBoundaries();
 		TestCommaActionSuspensionAndRegisteredCompilation();
+		TestRelationalOperatorsAndNativePrecedence();
+		TestActualDialogThresholdCompilation();
 		TestUnsupportedGrammarAndDiagnostics();
 		TestNulBoundaryAndCompilerLimits();
 		TestActualCompilestringRegistration();
