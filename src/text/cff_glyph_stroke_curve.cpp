@@ -106,7 +106,7 @@ namespace sgre::text {
 		return parameters;
 	}
 
-	static void AppendOffsetQuadratic(CffStrokeCurveSides& output, const StrokeQuadratic& curve, double radius) {
+	static void AppendOffsetQuadratic(CffStrokeCurveSides& output, const StrokeQuadratic& curve, double radius, bool direct_conic = false) {
 		// Native434D9A skips an equal-endpoint reduced piece without changing its completed normal.
 		if (SameStrokeCurvePoint(curve[0], curve[2])) {
 			return;
@@ -123,7 +123,7 @@ namespace sgre::text {
 		if (!std::isfinite(squared_normal) || squared_normal == 0) {
 			throw std::runtime_error("CFF stroke quadratic reaches native nonfinite reversing-normal controls");
 		}
-		const auto control_offset = ScaleStrokePoint(sum_normal, (radius + radius) / squared_normal);
+		const auto control_offset = direct_conic ? StrokePoint{sum_normal.X * (radius + radius) / squared_normal, sum_normal.Y * (radius + radius) / squared_normal} : ScaleStrokePoint(sum_normal, (radius + radius) / squared_normal);
 		const auto endpoint_offset = ScaleStrokePoint(last_normal, radius);
 		CffGlyphPathCommand left;
 		left.Kind = CffGlyphPathCommandKind::QuadraticTo;
@@ -251,6 +251,69 @@ namespace sgre::text {
 		}
 		result.StartNormal = StrokeNormal(tangent);
 		ReduceStrokeCubic(result, cubic, width_pixels * 0.5);
+
+		return result;
+	}
+
+	CffStrokeCurveSides PrepareCffGlyphStrokeQuadratic(const std::array<CffGlyphPathPoint, 3>& quadratic, double width_pixels) {
+		if (!std::isfinite(width_pixels) || width_pixels <= 0 || width_pixels > 65534) {
+			throw std::runtime_error("CFF stroke conic requires a finite bounded positive native pixel width");
+		}
+		for (const auto point : quadratic) {
+			if (!std::isfinite(point.X) || !std::isfinite(point.Y) || std::abs(point.X) > 1048576 || std::abs(point.Y) > 1048576) {
+				throw std::runtime_error("CFF stroke conic requires finite bounded translated coordinates");
+			}
+		}
+		const auto first = SubtractStrokePoints(quadratic[1], quadratic[0]);
+		const auto last = SubtractStrokePoints(quadratic[2], quadratic[1]);
+		if (StrokeDot(first, first) < 1.0000000000000001e-20 || StrokeDot(last, last) < 1.0000000000000001e-20) {
+			throw std::runtime_error("CFF nonflat conic requires its native bounded endpoint tangents");
+		}
+		CffStrokeCurveSides result;
+		result.StartNormal = StrokeNormal(first);
+		std::size_t parameter_count = 0;
+		const auto radius = width_pixels * .5;
+		const auto parameters = StrokeCurvatureParameters(quadratic, radius, parameter_count);
+		auto previous_left = quadratic[0];
+		auto previous_right = quadratic[1];
+		auto previous_end = quadratic[0];
+		for (std::size_t index = 0; index < parameter_count; ++index) {
+			const auto parameter = parameters[index];
+			// Native4308EF retains the original-curve tangent pair, not a normalized tail.
+			const auto control = InterpolateStrokePoint(previous_left, previous_right, parameter);
+			const auto left = InterpolateStrokePoint(quadratic[0], quadratic[1], parameter);
+			const auto right = InterpolateStrokePoint(quadratic[1], quadratic[2], parameter);
+			const auto end = InterpolateStrokePoint(left, right, parameter);
+			StrokeQuadratic current{previous_end, control, end};
+			previous_left = left;
+			previous_right = right;
+			previous_end = end;
+			for (std::size_t piece = 0;; ++piece) {
+				if (piece == kMaximumStrokeCurvePieces) {
+					throw std::runtime_error("CFF direct conic exceeds its bounded subdivision work");
+				}
+				const auto initial = ScaleStrokePoint(SubtractStrokePoints(current[1], current[0]), 2);
+				const auto delta = SubtractStrokePoints(ScaleStrokePoint(SubtractStrokePoints(current[2], current[1]), 2), initial);
+				const auto mixed = delta.Y * initial.Y + delta.X * initial.X;
+				double split = 1;
+				if (mixed != 0) {
+					const auto cross = delta.X * initial.Y - delta.Y * initial.X;
+					const auto squared_initial = initial.Y * initial.Y + initial.X * initial.X;
+					const auto numerator = squared_initial * kStrokeAngleCondition;
+					const auto denominator = std::abs(cross) - mixed * kStrokeAngleCondition;
+					const auto split_parameter = numerator / denominator;
+					if (split_parameter > 1.0000000000000001e-5 && split_parameter < .99999) {
+						split = split_parameter;
+					}
+				}
+				auto [offset_piece, rest] = SplitStrokeQuadratic(current, split);
+				AppendOffsetQuadratic(result, offset_piece, radius, true);
+				if (split == 1) {
+					break;
+				}
+				current = rest;
+			}
+		}
 
 		return result;
 	}

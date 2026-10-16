@@ -112,10 +112,11 @@ namespace sgre::text {
 			throw std::runtime_error("CFF glyph stroke input must begin at its actual contour move");
 		}
 		for (const auto& command : commands) {
-			if (command.Kind != CffGlyphPathCommandKind::MoveTo && command.Kind != CffGlyphPathCommandKind::LineTo && command.Kind != CffGlyphPathCommandKind::CubicTo) {
-				throw std::runtime_error("CFF glyph stroke input requires its measured move/line/cubic decomposition with native open flags");
+			if (command.Kind != CffGlyphPathCommandKind::MoveTo && command.Kind != CffGlyphPathCommandKind::LineTo && command.Kind != CffGlyphPathCommandKind::CubicTo && command.Kind != CffGlyphPathCommandKind::QuadraticTo) {
+				throw std::runtime_error("CFF glyph stroke input requires its measured move/line/conic/cubic decomposition with native open flags");
 			}
-			const auto count = command.Kind == CffGlyphPathCommandKind::CubicTo ? std::size_t(3) : std::size_t(1);
+			const auto count = command.Kind == CffGlyphPathCommandKind::CubicTo ? std::size_t(3) : command.Kind == CffGlyphPathCommandKind::QuadraticTo ? std::size_t(2)
+			                                                                                                                                            : std::size_t(1);
 			for (std::size_t index = 0; index < count; ++index) {
 				const auto point = command.Points[index];
 				if (!std::isfinite(point.X) || !std::isfinite(point.Y) || std::abs(point.X) > 1048576 || std::abs(point.Y) > 1048576) {
@@ -211,6 +212,30 @@ namespace sgre::text {
 		return result;
 	}
 
+	static std::optional<StrokeCubicLineFallback> PrepareStrokeConicLineFallback(const std::array<CffGlyphPathPoint, 3>& conic) {
+		const CffGlyphPathPoint first{conic[1].X - conic[0].X, conic[1].Y - conic[0].Y};
+		const CffGlyphPathPoint second{conic[2].X - conic[1].X, conic[2].Y - conic[1].Y};
+		const auto cross = second.X * first.Y - second.Y * first.X;
+		if (std::abs(cross) > 1e-10) {
+			return std::nullopt;
+		}
+		StrokeCubicLineFallback result;
+		const auto opposite = -first.Y * second.Y - second.X * first.X;
+		if (opposite > 0) {
+			const auto squared_first = first.X * first.X + first.Y * first.Y;
+			const auto chord_projection = (conic[2].Y - conic[0].Y) * first.Y + (conic[2].X - conic[0].X) * first.X;
+			const auto parameter = squared_first / ((squared_first + squared_first) - chord_projection);
+			if (parameter > 0 && parameter < 1) {
+				const auto x = ((second.X - first.X) * parameter + (first.X + first.X)) * parameter + conic[0].X;
+				const auto y = ((second.Y - first.Y) * parameter + (first.Y + first.Y)) * parameter + conic[0].Y;
+				result.Points[result.Count++] = {x, y};
+			}
+		}
+		result.Points[result.Count++] = conic[2];
+
+		return result;
+	}
+
 	static bool AppendStrokePathLine(StrokeContourSides& sides, CffGlyphPathPoint& current, CffGlyphPathPoint& normal, CffGlyphPathPoint end, double width_pixels) {
 		const auto next_normal = PrepareStrokeLineNormal(current, end);
 		if (!next_normal) {
@@ -283,6 +308,47 @@ namespace sgre::text {
 			}
 			if (command.Kind == CffGlyphPathCommandKind::LineTo) {
 				AppendStrokePathLine(sides, current, normal, command.Points[0], width_pixels);
+				continue;
+			}
+			if (command.Kind == CffGlyphPathCommandKind::QuadraticTo) {
+				const std::array<CffGlyphPathPoint, 3> conic{current, command.Points[0], command.Points[1]};
+				if (const auto fallback = PrepareStrokeConicLineFallback(conic)) {
+					for (std::size_t index = 0; index < fallback->Count; ++index) {
+						if (index == 0) {
+							if (!AppendStrokePathLine(sides, current, normal, fallback->Points[index], width_pixels)) {
+								break;
+							}
+						} else {
+							AppendStrokeCubicCuspLine(sides, current, normal, fallback->Points[index], width_pixels);
+						}
+					}
+					continue;
+				}
+				const CffGlyphPathPoint first_tangent{conic[1].X - conic[0].X, conic[1].Y - conic[0].Y};
+				const CffGlyphPathPoint last_tangent{conic[2].X - conic[1].X, conic[2].Y - conic[1].Y};
+				if (first_tangent.X * first_tangent.X + first_tangent.Y * first_tangent.Y < 1.0000000000000001e-20 || last_tangent.X * last_tangent.X + last_tangent.Y * last_tangent.Y < 1.0000000000000001e-20) {
+					current = command.Points[1];
+					continue;
+				}
+				const auto curve = PrepareCffGlyphStrokeQuadratic(conic, width_pixels);
+				if (curve.Left.empty() || curve.Right.empty()) {
+					throw std::runtime_error("CFF direct conic stroke has no measured nonflat offset pieces");
+				}
+				if (sides.Left.empty()) {
+					BeginStrokeSides(sides, current, curve.StartNormal, radius);
+				} else {
+					StrokeSegmentJoinInput join;
+					join.Center = current;
+					join.NextTangentEnd = command.Points[0];
+					join.IncomingNormal = normal;
+					join.OutgoingNormal = curve.StartNormal;
+					join.Width = width_pixels;
+					AppendStrokeSegmentJoin(sides, join);
+				}
+				AppendStrokePathCommands(sides.Left, curve.Left);
+				AppendStrokePathCommands(sides.Right, curve.Right);
+				normal = curve.EndNormal;
+				current = command.Points[1];
 				continue;
 			}
 			const std::array<CffGlyphPathPoint, 4> cubic{current, command.Points[0], command.Points[1], command.Points[2]};

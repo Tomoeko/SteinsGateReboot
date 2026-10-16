@@ -190,10 +190,35 @@ static void TestHintedCurveThroughOwnedPathAndFill() {
 	    "real conic fill produced no CPU coverage");
 	const auto stroke = sgre::text::CffGlyphStrokeInput::Prepare(glyph, 1);
 	Require(stroke.has_value(), "conic stroke wrapper lost its owned source path");
-	RequireFailure([&] {
-		static_cast<void>(sgre::text::PrepareCffGlyphStroke(stroke->Commands(), stroke->WidthPixels()));
-	},
-	    "measured move/line/cubic decomposition");
+	const auto expanded = sgre::text::PrepareCffGlyphStroke(stroke->Commands(), stroke->WidthPixels());
+	Require(!expanded.empty() && std::ranges::any_of(expanded, [](const auto& command) {
+		return command.Kind == sgre::text::CffGlyphPathCommandKind::QuadraticTo;
+	}),
+	    "actual conic stroke lost its direct quadratic contour");
+	const auto stroked = sgre::text::PreparedCffGlyphRaster::PrepareStroke(*stroke, expanded);
+	const auto stroke_image = Rasterize(stroked);
+	bool alpha_present = false;
+	for (std::size_t offset = 3; offset < stroke_image.Pixels.size(); offset += 4) {
+		alpha_present = alpha_present || stroke_image.Pixels[offset] != 0;
+	}
+	Require(alpha_present && stroke_image.Upload && !stroke_image.Locked && stroke_image.Packing.PenXPixels > 0, "actual conic stroke failed its CPU atlas coverage or owner publication");
+	SamePath(*glyph.PreparedPath, expected_path);
+
+	std::optional<sgre::text::PreparedCffGlyphRaster> retired_raster;
+	std::weak_ptr<const std::vector<std::uint8_t>> retired_bytes;
+	{
+		auto source = std::make_shared<const std::vector<std::uint8_t>>(Font(glyphs));
+		retired_bytes = source;
+		sgre::text::VectorFont retired_font(source);
+		retired_font.SetSize(16);
+		source.reset();
+		const auto retired_glyph = retired_font.PrepareGlyph(0);
+		const auto retired_input = sgre::text::CffGlyphStrokeInput::Prepare(retired_glyph, 1);
+		Require(retired_input.has_value(), "source-first conic stroke lost its real input");
+		retired_raster = sgre::text::PreparedCffGlyphRaster::PrepareStroke(*retired_input, sgre::text::PrepareCffGlyphStroke(retired_input->Commands(), retired_input->WidthPixels()));
+	}
+	Require(retired_bytes.expired() && retired_raster.has_value(), "prepared conic raster retained its source font or lost its coverage owner");
+	SameRaster(*retired_raster, stroked);
 }
 
 static void TestSourceFirstRetirementAndLineStroke() {
