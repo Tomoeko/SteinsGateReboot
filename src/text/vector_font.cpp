@@ -91,6 +91,8 @@ namespace sgre::text {
 	    : m_Bytes(ValidateFontBytes(std::move(bytes))), m_Font(*m_Bytes), m_Configuration(ResolveVectorFontConfiguration(mode, std::move(language))) {
 		if (m_Font.OutlineKind() == resource::SfntOutlineKind::Cff) {
 			m_Cff = std::make_unique<CffGlyphFont>(m_Font);
+		} else {
+			m_TrueType = std::make_unique<TrueTypeGlyphFont>(m_Font);
 		}
 
 		m_NormalizationFont = std::make_unique<VectorFontNormalizationFont>(m_Bytes, m_Font);
@@ -103,9 +105,17 @@ namespace sgre::text {
 		return *m_NormalizationFont;
 	}
 
-	void VectorFont::BindDefaultCffMetricServices() {
+	void VectorFont::BindDefaultMetricServices() {
 		BindMetricServices(VectorFontMetricScaleSign::Nonnegative, VectorFontMetricScaleSign::Nonnegative);
-		m_DefaultCffLayoutScale = true;
+		m_DefaultLayoutScale = true;
+	}
+
+	void VectorFont::BindDefaultCffMetricServices() {
+		if (!m_Cff) {
+			throw std::runtime_error("default CFF metric services require the actual normalized CFF owner");
+		}
+
+		BindDefaultMetricServices();
 	}
 
 	void VectorFont::BindMetricServices(VectorFontMetricScaleSign actual_initial_hb_x_sign, VectorFontMetricScaleSign actual_initial_hb_y_sign) {

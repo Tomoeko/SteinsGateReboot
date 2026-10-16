@@ -4,6 +4,7 @@
 #include "sgre/resource/sfnt.hpp"
 #include "sgre/text/cff_glyph_font.hpp"
 #include "sgre/text/glyph_run.hpp"
+#include "sgre/text/truetype_glyph_font.hpp"
 #include "sgre/text/vector_font_metric_services.hpp"
 
 #include <cstdint>
@@ -49,7 +50,7 @@ namespace sgre::text {
 
 	class VectorFont {
 	public:
-		// Owns the raw resource pin. SFNT and CFF readers borrow these immutable bytes.
+		// Owns the raw resource pin. Outline readers borrow these immutable bytes.
 		VectorFont(std::shared_ptr<const std::vector<std::uint8_t>> bytes, std::int32_t mode = 0, std::string language = "en");
 		~VectorFont();
 		VectorFont(const VectorFont&) = delete;
@@ -59,7 +60,9 @@ namespace sgre::text {
 
 		[[nodiscard]] const resource::SfntFont& Font() const;
 		[[nodiscard]] VectorFontNormalizationFont& NormalizationFont();
-		// Default fresh CFF construction proves nonnegative HB signs; current positive-size admission is still required.
+		// Fresh CFF and TrueType construction proves zero HB scales; positive-size admission is still required.
+		void BindDefaultMetricServices();
+		// Keeps the existing explicit CFF admission available to callers that require that outline kind.
 		void BindDefaultCffMetricServices();
 		// One-time applied-domain binding requires actual initialized HB scale signs; no initial FT size is guessed.
 		void BindMetricServices(VectorFontMetricScaleSign actual_initial_hb_x_sign, VectorFontMetricScaleSign actual_initial_hb_y_sign);
@@ -84,8 +87,9 @@ namespace sgre::text {
 		resource::SfntFont m_Font;
 		VectorFontConfiguration m_Configuration;
 		VectorFontSizeState m_Size;
-		bool m_DefaultCffLayoutScale = false;
+		bool m_DefaultLayoutScale = false;
 		std::unique_ptr<CffGlyphFont> m_Cff;
+		std::unique_ptr<TrueTypeGlyphFont> m_TrueType;
 		std::unique_ptr<VectorFontMetricServices> m_MetricServices;
 		std::unique_ptr<VectorFontNormalizationFont> m_NormalizationFont;
 		std::unique_ptr<UnicodeNormalizationBuffer> m_InputBuffer;

@@ -48,7 +48,7 @@ namespace sgre::text {
 		const auto script = UnitScriptTag(m_Configuration.Script);
 		static_cast<void>(ResolveVectorFontLayoutLanguageTag(m_Configuration));
 		if (!m_MetricServices) {
-			BindDefaultCffMetricServices();
+			BindDefaultMetricServices();
 		}
 		auto& normalization = *m_NormalizationFont;
 		auto& face = normalization.Face();

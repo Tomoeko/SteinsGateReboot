@@ -12,8 +12,8 @@ namespace sgre::text {
 			throw std::runtime_error("flags-2 font metrics require actual initialized HB scale signs");
 		}
 
-		if (!actual_font.m_Cff || !Font().VerticalMetrics(0)) {
-			throw std::runtime_error("flags-2 font metrics require the actual normalized CFF owner and original vertical tables");
+		if ((!actual_font.m_Cff && !actual_font.m_TrueType) || !Font().VerticalMetrics(0)) {
+			throw std::runtime_error("flags-2 font metrics require the actual outline owner and original vertical tables");
 		}
 		static_cast<void>(RequireAppliedPixelSize());
 	}
@@ -34,7 +34,7 @@ namespace sgre::text {
 	std::int32_t VectorFontMetricServices::RequireAppliedPixelSize() const {
 		const auto& size = m_Font.SizeState();
 		if (!size.RequestedHeight26Dot6 || size.Word == 0 || size.Word > 2000 || *size.RequestedHeight26Dot6 != static_cast<std::int32_t>(size.Word * 64)) {
-			throw std::runtime_error("flags-2 font metrics require the current applied positive supported CFF size; initial/failed FT size preservation remains unrecovered");
+			throw std::runtime_error("flags-2 font metrics require the current applied positive supported size; initial/failed FT size preservation remains unrecovered");
 		}
 
 		return static_cast<std::int32_t>(size.Word);
@@ -90,10 +90,17 @@ namespace sgre::text {
 			return {};
 		}
 
-		const auto glyph = m_Font.m_Cff->PrepareUnhintedGlyph(glyph_index, RequireAppliedPixelSize());
 		VectorFontGlyphOrigin result;
-		result.X26Dot6 = ApplyOriginSign(glyph.Outline.Metrics.VerticalOriginX26Dot6, m_XNegative);
-		result.Y26Dot6 = ApplyOriginSign(glyph.Outline.Metrics.VerticalOriginY26Dot6, m_YNegative);
+		if (m_Font.m_Cff) {
+			const auto glyph = m_Font.m_Cff->PrepareUnhintedGlyph(glyph_index, RequireAppliedPixelSize());
+			result.X26Dot6 = ApplyOriginSign(glyph.Outline.Metrics.VerticalOriginX26Dot6, m_XNegative);
+			result.Y26Dot6 = ApplyOriginSign(glyph.Outline.Metrics.VerticalOriginY26Dot6, m_YNegative);
+		} else {
+			const auto scale = PrepareVectorFontScale(RequireAppliedPixelSize(), Font().UnitsPerEm());
+			const auto glyph = m_Font.m_TrueType->PrepareUnhintedGlyph(glyph_index, scale, scale);
+			result.X26Dot6 = ApplyOriginSign(glyph.Metrics.VerticalOriginX26Dot6, m_XNegative);
+			result.Y26Dot6 = ApplyOriginSign(glyph.Metrics.VerticalOriginY26Dot6, m_YNegative);
+		}
 
 		return result;
 	}

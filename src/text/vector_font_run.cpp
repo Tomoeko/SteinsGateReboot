@@ -107,7 +107,7 @@ namespace sgre::text {
 	}
 
 	static void ApplyRunPairValues(GlyphPositionRow& row, const std::array<std::int16_t, 4>& values, std::uint16_t units_per_em) {
-		// Fresh native CFF construction publishes HB scales0/0; FT SetSize never changes them.
+		// Fresh native CFF and TrueType construction publishes HB scales0/0; FT SetSize never changes them.
 		// Live flags-2 advance callbacks remain independently sized. Device/variation values are not admitted.
 		row.XOffset26Dot6 += ScaleRunLayoutValue(values[0], 0, units_per_em);
 		row.YOffset26Dot6 += ScaleRunLayoutValue(values[1], 0, units_per_em);
@@ -121,10 +121,10 @@ namespace sgre::text {
 		const auto script = RunScriptTag(m_Configuration.Script);
 		static_cast<void>(ResolveVectorFontLayoutLanguageTag(m_Configuration));
 		if (!m_MetricServices) {
-			BindDefaultCffMetricServices();
+			BindDefaultMetricServices();
 		}
-		if (!m_DefaultCffLayoutScale) {
-			throw std::runtime_error("VectorFont whole-run layout requires actual fresh-CFF zero HB scale provenance");
+		if (!m_DefaultLayoutScale) {
+			throw std::runtime_error("VectorFont whole-run layout requires actual fresh-owner zero HB scale provenance");
 		}
 		auto& normalization = *m_NormalizationFont;
 		auto& face = normalization.Face();

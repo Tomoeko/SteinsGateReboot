@@ -829,6 +829,7 @@ if(SGRE_BUILD_TESTS)
 		voice_allocation
 		sfnt
 		truetype_outline
+		truetype_vector_font_metric
 		voice_uniqueness
 		squirrel_lifetime
 		sound_volume
