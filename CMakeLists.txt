@@ -88,6 +88,7 @@ add_library(sgre_resource
 	src/resource/sfnt.cpp
 	src/resource/truetype_outline.cpp
 	src/text/truetype_glyph_font.cpp
+	src/text/truetype_glyph_path.cpp
 	src/text/truetype_program.cpp
 	src/text/truetype_stack_program.cpp
 	src/resource/opentype_layout.cpp
@@ -831,6 +832,7 @@ if(SGRE_BUILD_TESTS)
 		voice_allocation
 		sfnt
 		truetype_outline
+		truetype_glyph_path
 		truetype_program
 		truetype_stack_program
 		truetype_control_program

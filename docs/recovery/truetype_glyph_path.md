@@ -1,0 +1,9 @@
+# TrueType quadratic glyph paths
+
+Reference: `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`; Binary Ninja view `candidate:view:1:UEU`. All addresses are executable virtual addresses.
+
+Original outline decomposition `0x14039D930` emits implicit conic starts and endpoints, including closing quadratics. Consecutive off-curve points use a wrapped signed 32-bit sum followed by integer division toward zero. Callback `0x140089450` converts already scaled 26.6 points to downward-positive pixels. The portable component borrows those scaled points and owns its output, reusing the existing path representation and quadratic command already consumed by the first-party raster pipeline. It does not load, scale or hint a glyph.
+
+Native path bounds `0x1404255E0` / `0x140424BC0` include quadratic extrema rather than the control-point box. They clamp each derivative root with MAXSD(root,0) then MINSD(root,1), mapping a constant-axis NaN to zero, and evaluate de Casteljau steps in the original order. Empty outlines and multiple contours preserve their original path structure. Invalid contour storage and unsupported tags reject before traversal. An explicit first-party guard rejects INT_MIN Y; the original callback wraps its 32-bit negation for that extreme.
+
+Five independent sanitizer groups pass. A separate probe executes unchanged original decomposition, callbacks, path storage and bounds for 11 synthetic outlines plus 72 retained native hinted outlines from the four phone fonts. All 83 portable command streams, used and unused point words, and bounds match exactly. The native probe checks 80 executed blocks/3,338 bytes against the preserved executable; fresh static analysis independently checks six ranges/3,998 bytes. Prepared scaled outlines are inputs to this comparison, including the retained hinted points. Portable hinting, complete flags-8 rendering, native raster pixels and phone completion remain open.
