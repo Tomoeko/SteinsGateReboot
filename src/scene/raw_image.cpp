@@ -2,6 +2,9 @@
 
 #include "sgre/scene/raw_texture_restore.hpp"
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <cstddef>
 #include <stdexcept>
 
@@ -83,6 +86,95 @@ namespace sgre::scene {
 			}
 		}
 
+		m_Updated = true;
+	}
+
+	void RawImage::FillAlpha() {
+		for (std::size_t offset = 3; offset < m_Pixels.size(); offset += 4) {
+			m_Pixels[offset] = 255;
+		}
+		m_Updated = true;
+	}
+
+	void RawImage::BoxBlur(std::uint32_t horizontal_radius, std::uint32_t vertical_radius, std::uint32_t iterations) {
+		static constexpr std::size_t kMaximumBlurPixelVisits = 256 * 1024 * 1024;
+		if (horizontal_radius > m_Width / 2 || vertical_radius > m_Height / 2 || iterations == 0 || iterations > kMaximumBlurPixelVisits / (m_Pixels.size() / 4)) {
+			throw std::runtime_error("raw image blur requires in-bounds radii and a bounded positive iteration count");
+		}
+		std::vector<std::uint8_t> source(m_Pixels.size());
+		std::vector<std::array<std::uint32_t, 4>> columns(m_Width);
+		for (std::uint32_t iteration = 0; iteration < iterations; ++iteration) {
+			std::copy(m_Pixels.begin(), m_Pixels.end(), source.begin());
+			std::fill(columns.begin(), columns.end(), std::array<std::uint32_t, 4>{});
+			const auto add_row = [&](std::uint32_t row, bool subtract) {
+				for (std::size_t column = 0; column < m_Width; ++column) {
+					const auto offset = (static_cast<std::size_t>(row) * m_Width + column) * 4;
+					for (std::size_t channel = 0; channel < 4; ++channel) {
+						if (subtract) {
+							columns[column][channel] -= source[offset + channel];
+						} else {
+							columns[column][channel] += source[offset + channel];
+						}
+					}
+				}
+			};
+			for (std::uint32_t row = 0; row <= vertical_radius; ++row) {
+				add_row(row, false);
+			}
+			for (std::uint32_t row = 0; row < m_Height; ++row) {
+				std::array<std::uint32_t, 4> sums{};
+				for (std::uint32_t column = 0; column <= horizontal_radius; ++column) {
+					for (std::size_t channel = 0; channel < 4; ++channel) {
+						sums[channel] += columns[column][channel];
+					}
+				}
+				const auto first_row = row > vertical_radius ? row - vertical_radius : 0;
+				const auto last_row = std::min(m_Height, row + vertical_radius + 1);
+				for (std::uint32_t column = 0; column < m_Width; ++column) {
+					const auto first_column = column > horizontal_radius ? column - horizontal_radius : 0;
+					const auto last_column = std::min(m_Width, column + horizontal_radius + 1);
+					const auto count = static_cast<std::uint64_t>(last_column - first_column) * (last_row - first_row);
+					const auto reciprocal = (std::uint64_t{1} << 32) / count;
+					const auto offset = (static_cast<std::size_t>(row) * m_Width + column) * 4;
+					for (std::size_t channel = 0; channel < 4; ++channel) {
+						m_Pixels[offset + channel] = static_cast<std::uint8_t>((static_cast<std::uint64_t>(sums[channel]) * reciprocal) >> 32);
+						if (column >= horizontal_radius) {
+							sums[channel] -= columns[column - horizontal_radius][channel];
+						}
+						if (column + horizontal_radius + 1 < m_Width) {
+							sums[channel] += columns[column + horizontal_radius + 1][channel];
+						}
+					}
+				}
+				if (row >= vertical_radius) {
+					add_row(row - vertical_radius, true);
+				}
+				if (row + vertical_radius + 1 < m_Height) {
+					add_row(row + vertical_radius + 1, false);
+				}
+			}
+		}
+		m_Updated = true;
+	}
+
+	void RawImage::AdjustLevel(const std::array<std::int32_t, 6>& endpoints) {
+		std::array<std::array<std::uint8_t, 256>, 3> tables{};
+		for (std::size_t channel = 0; channel < 3; ++channel) {
+			const auto first = std::bit_cast<std::uint32_t>(endpoints[channel * 2]);
+			const auto delta = std::bit_cast<std::uint32_t>(endpoints[channel * 2 + 1]) - first;
+			std::uint32_t accumulator = 0;
+			for (auto& entry : tables[channel]) {
+				// Native236250 uses unsigned MUL/division, then signed clipping after the wrapping add.
+				const auto value = std::bit_cast<std::int32_t>(accumulator / 255u + first);
+				entry = static_cast<std::uint8_t>(std::clamp(value, 0, 255));
+				accumulator += delta;
+			}
+		}
+		for (std::size_t offset = 0; offset < m_Pixels.size(); offset += 4) {
+			m_Pixels[offset] = tables[2][m_Pixels[offset]];
+			m_Pixels[offset + 1] = tables[1][m_Pixels[offset + 1]];
+			m_Pixels[offset + 2] = tables[0][m_Pixels[offset + 2]];
+		}
 		m_Updated = true;
 	}
 

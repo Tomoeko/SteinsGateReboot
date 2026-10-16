@@ -64,6 +64,40 @@ static void TestGenuineClassesAndMutablePixels() {
 	vm.RethrowReleaseFailure();
 }
 
+static void TestBackgroundFilterCallbacks() {
+	sgre::script::SquirrelVm vm;
+	sgre::script::ScriptObjectBindings objects(vm);
+	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptRawImageBindings images(vm, objects, binary);
+	const std::array<SquirrelValue, 3> arguments{vm.RootTable(), std::int32_t(3), std::int32_t(1)};
+	const auto image = vm.Invoke(images.RawImageClass(), arguments).Value;
+	static_cast<void>(Call(vm, image, "fill", {std::int32_t(0), std::int32_t(0), std::int32_t(3), std::int32_t(1), std::int32_t(-1)}));
+	Require(std::holds_alternative<std::monostate>(Call(vm, image, "boxBlur", {std::int32_t(1), std::int32_t(0)})), "native blur defaults to one iteration and returns no values");
+	Require(images.Image(image).StorePixels(true)[4] == 254, "blur callback must update the actual retained image");
+	Require(std::holds_alternative<std::monostate>(Call(vm, image, "fillAlpha")), "fillAlpha requires only its receiver and returns no values");
+	Require(images.Image(image).StorePixels(true)[7] == 255, "fillAlpha callback must update the same image's alpha");
+	Require(std::holds_alternative<std::monostate>(Call(vm, image, "adjustLevel", {std::int32_t(32), std::int32_t(224), std::int32_t(32), std::int32_t(224), std::int32_t(32), std::int32_t(224)})), "six-endpoint level callback returns no values");
+	Require(images.Image(image).StorePixels(true) == std::vector<std::uint8_t>{224, 224, 224, 255, 223, 223, 223, 255, 224, 224, 224, 255}, "level callback preserves alpha while mapping each actual RGB channel");
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "fillAlpha", {std::int32_t(1)}));
+	},
+	    "invalid argument");
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "boxBlur", {std::int32_t(-1), std::int32_t(0)}));
+	},
+	    "nonnegative radii");
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "boxBlur", {std::int32_t(0), std::int32_t(0), std::int32_t(0)}));
+	},
+	    "positive iteration");
+	RequireError([&] {
+		static_cast<void>(Call(vm, image, "adjustLevel", {std::int32_t(32), std::int32_t(224)}));
+	},
+	    "invalid argument");
+	vm.Close();
+	vm.RethrowReleaseFailure();
+}
+
 static void TestLimitsErrorsAndExplicitRelease() {
 	sgre::script::SquirrelVm vm;
 	sgre::script::ScriptObjectBindings objects(vm);
@@ -132,6 +166,7 @@ static void TestAutomaticNativeRetirement() {
 
 int main() {
 	try {
+		TestBackgroundFilterCallbacks();
 		TestGenuineClassesAndMutablePixels();
 		TestLimitsErrorsAndExplicitRelease();
 		TestAutomaticNativeRetirement();

@@ -2,6 +2,7 @@
 
 #include "sgre/script/binary_bindings.hpp"
 
+#include <array>
 #include <bit>
 #include <cstdint>
 #include <exception>
@@ -172,6 +173,40 @@ namespace sgre::script {
 			region.Height = std::bit_cast<std::uint32_t>(RawImageInteger(arguments, 4));
 			const auto color = std::bit_cast<std::uint32_t>(RawImageInteger(arguments, 5));
 			owner.Record(arguments[0]).Image->Fill(region, color, RawImageTruth(arguments, 6));
+
+			return SquirrelNativeResult::NoValues();
+		});
+		method("fillAlpha", [](Implementation& owner, auto arguments) {
+			if (arguments.size() != 1) {
+				throw std::runtime_error("invalid argument.");
+			}
+			owner.Record(arguments[0]).Image->FillAlpha();
+
+			return SquirrelNativeResult::NoValues();
+		});
+		method("boxBlur", [](Implementation& owner, auto arguments) {
+			if (arguments.size() != 3 && arguments.size() != 4) {
+				throw std::runtime_error("invalid argument.");
+			}
+			const auto horizontal = RawImageInteger(arguments, 1);
+			const auto vertical = RawImageInteger(arguments, 2);
+			const auto iterations = arguments.size() == 4 ? RawImageInteger(arguments, 3) : 1;
+			if (horizontal < 0 || vertical < 0 || iterations <= 0) {
+				throw std::runtime_error("raw image blur requires nonnegative radii and a positive iteration count");
+			}
+			owner.Record(arguments[0]).Image->BoxBlur(static_cast<std::uint32_t>(horizontal), static_cast<std::uint32_t>(vertical), static_cast<std::uint32_t>(iterations));
+
+			return SquirrelNativeResult::NoValues();
+		});
+		method("adjustLevel", [](Implementation& owner, auto arguments) {
+			if (arguments.size() != 7) {
+				throw std::runtime_error("invalid argument.");
+			}
+			std::array<std::int32_t, 6> endpoints{};
+			for (std::size_t index = 0; index < endpoints.size(); ++index) {
+				endpoints[index] = RawImageInteger(arguments, index + 1);
+			}
+			owner.Record(arguments[0]).Image->AdjustLevel(endpoints);
 
 			return SquirrelNativeResult::NoValues();
 		});

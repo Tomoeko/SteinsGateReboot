@@ -85,8 +85,42 @@ static void TestAliasedInputAndFailureAtomicity() {
 	});
 }
 
+static void TestNativeBackgroundFilters() {
+	sgre::scene::RawImage image(3, 1);
+	image.Fill({0, 0, 3, 1}, 0xffffffff);
+	image.ClearUpdated();
+	image.BoxBlur(1, 0);
+	Require(image.StorePixels(true) == std::vector<std::uint8_t>{255, 255, 255, 255, 254, 254, 254, 254, 255, 255, 255, 255} && image.IsUpdated(), "native blur uses a truncated reciprocal, including a one-level loss for a three-pixel white window");
+	image.ClearUpdated();
+	image.FillAlpha();
+	Require(image.StorePixels(true)[7] == 255 && image.IsUpdated(), "fillAlpha replaces every alpha byte while retaining filtered RGB");
+	const std::array<std::uint8_t, 12> input{0, 128, 255, 17, 128, 255, 0, 98, 255, 0, 128, 254};
+	image.RestorePixels(input);
+	image.ClearUpdated();
+	image.AdjustLevel({32, 224, 255, 0, 0, 255});
+	Require(image.StorePixels(true) == std::vector<std::uint8_t>{32, 255, 255, 17, 128, 255, 0, 98, 224, 255, 128, 254} && image.IsUpdated(), "RGB endpoint tables preserve native unsigned ramp division, signed clipping and every alpha byte");
+	image.ClearUpdated();
+	const auto before = image.StorePixels(true);
+	RequireError([&] {
+		image.BoxBlur(2, 0);
+	});
+	RequireError([&] {
+		image.BoxBlur(0, 1);
+	});
+	RequireError([&] {
+		image.BoxBlur(0, 0, 0);
+	});
+	RequireError([&] {
+		image.BoxBlur(0, 0, 0xffffffff);
+	});
+	Require(before == image.StorePixels(true) && !image.IsUpdated(), "blur rejects unsupported extents/work before modifying pixels or update state");
+	image.BoxBlur(0, 0, 2);
+	Require(before == image.StorePixels(true) && image.IsUpdated(), "zero-radius iterations retain every channel while marking updated");
+}
+
 int main() {
 	try {
+		TestNativeBackgroundFilters();
 		TestZeroedConstructionAndPackedFill();
 		TestAlphaPreservingFillAndSerialization();
 		TestAliasedInputAndFailureAtomicity();

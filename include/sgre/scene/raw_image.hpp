@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <span>
 #include <vector>
@@ -29,6 +30,11 @@ namespace sgre::scene {
 		[[nodiscard]] std::span<const std::uint8_t> BgraPixels() const noexcept;
 		// Packed color is RRGGBBAA. Opaque-only fill replaces RGB where existing alpha is nonzero.
 		void Fill(RawImageRegion region, std::uint32_t rrggbbaa, bool opaque_only = false);
+		void FillAlpha();
+		// Native box windows shrink at image edges and use a truncated 32-bit reciprocal.
+		void BoxBlur(std::uint32_t horizontal_radius, std::uint32_t vertical_radius, std::uint32_t iterations = 1);
+		// Per-channel output endpoints in RGB order; existing alpha is preserved.
+		void AdjustLevel(const std::array<std::int32_t, 6>& endpoints);
 		// Native restore accepts exactly packed RGB or RGBA bytes and copies input before conversion.
 		void RestorePixels(std::span<const std::uint8_t> rgb_or_rgba);
 		[[nodiscard]] std::vector<std::uint8_t> StorePixels(bool include_alpha) const;
