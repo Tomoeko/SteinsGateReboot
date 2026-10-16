@@ -912,6 +912,31 @@ namespace sgre::resource {
 		return std::nullopt;
 	}
 
+	bool OpenTypeLayoutFont::LookupRequiresFollowingGlyph(std::size_t lookup_index) const {
+		if (lookup_index >= m_Lookups.size()) {
+			throw std::runtime_error("OpenType isolated positioning lookup index exceeds its actual list");
+		}
+		const auto& lookup = m_Lookups[lookup_index];
+		if (m_AdmittedMetadata || m_Kind != OpenTypeLayoutKind::Positioning || m_FeatureVariationsOffset != 0 || !lookup.Present || lookup.Type != 9 || (lookup.Flags & ~0x10U) != 0 || lookup.SubtableOffsets.empty()) {
+			return false;
+		}
+		std::size_t work = 0;
+		for (const auto extension : lookup.SubtableOffsets) {
+			AddLayoutRecords(work, 1);
+			if (LayoutWord(m_LayoutBytes, extension) != 1 || LayoutWord(m_LayoutBytes, extension + 2) != 2) {
+				return false;
+			}
+			const auto target = LayoutOffset(m_LayoutBytes, extension, LayoutDoubleWord(m_LayoutBytes, extension + 4), 2);
+			const auto format = LayoutWord(m_LayoutBytes, target);
+			if (format != 1 && format != 2) {
+				return false;
+			}
+			static_cast<void>(LayoutRange(m_LayoutBytes, target, format == 1 ? 10 : 16));
+		}
+		// Native400bb0/400ce0 request one following glyph;404f80 rejects before filters/values when none exists.
+		return true;
+	}
+
 	bool OpenTypeLayoutFont::CanApplyPairPositioning(std::size_t lookup_index) const {
 		if (m_AdmittedMetadata || m_Kind != OpenTypeLayoutKind::Positioning || m_FeatureVariationsOffset != 0 || lookup_index >= m_Lookups.size()) {
 			return false;

@@ -88,6 +88,7 @@ add_library(sgre_resource
 	src/resource/sfnt.cpp
 	src/resource/truetype_outline.cpp
 	src/text/truetype_glyph_font.cpp
+	src/text/truetype_program.cpp
 	src/resource/opentype_layout.cpp
 	src/resource/cff.cpp
 	src/resource/cff_driver_hints.cpp
@@ -829,6 +830,7 @@ if(SGRE_BUILD_TESTS)
 		voice_allocation
 		sfnt
 		truetype_outline
+		truetype_program
 		truetype_vector_font_metric
 		voice_uniqueness
 		squirrel_lifetime
@@ -863,6 +865,7 @@ if(SGRE_BUILD_TESTS)
 		text_font_request
 		text_font_measurement
 		text_vector_unit_measurement
+		text_vector_unit_extension_pair
 		text_content_owner
 		text_markup_font_reset
 		text_ruby_content

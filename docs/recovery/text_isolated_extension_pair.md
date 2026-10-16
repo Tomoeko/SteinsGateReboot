@@ -1,0 +1,11 @@
+# Isolated extension PairPos
+
+Target: original `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+Original unit measurement `0x140088320` shapes one UTF-16 input, then sums the actual resulting position rows. The existing admitted neutral base-glyph path requires exactly one resulting record. Native PairPos format 1 (`0x140400BB0`) and format 2 (`0x140400CE0`) request one following input through `0x140404F80`. The iterator first checks current index + required count against the buffer length (`0x140404F9E..0x140404FAB`); a one-record buffer returns false before second-glyph filtering or pair values. This cardinality proof does not depend on HB scale, zero adjustments, device data or the absence of kerning.
+
+The unit consumer now recognizes only clean positioning extension format 1 subtables that all target PairPos format 1 or 2, with flags zero or MarkFilteringSet. It retains the existing mask/coverage order and all other unit preconditions. Mixed targets, other positioning, unsupported flags and feature variations retain their execution gate. Whole-run shaping and actual PairPos filtering/value/device execution are unchanged. Header offsets and work remain bounded; no new owner or cache is added.
+
+The actual phone failure selected SarasaUiJ, J / glyph 263, size 33, Latin/en/LTR, lookup 6, extension type 9, flags 16, with 91 PairPos subtables. This is an observed recovery boundary, not a character-specific runtime branch. Size 33 was observed at a 1280×720 render target; physical render width does not establish the logical SCWIDTH size calculation. Earlier 22/44 hinted-loader cases are diagnostic sizes. Hinting/rasterization remains a separate frontier.
+
+The four focused sanitizer groups and five connected unit/run/layout/lookup suites pass with coherent headers. The actual mail replay clears the former positioning rejection and reaches a separate TextRender preparation/draw boundary. A bounded original whole-unit execution comparison remains open; the first probe reached its observation time limit during original shaping. This does not establish complete GPOS support.

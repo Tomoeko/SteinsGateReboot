@@ -133,6 +133,9 @@ namespace sgre::resource {
 		// Consecutive base glyphs only: flags-zero format1 ligatures, original rule order, at most64 components.
 		[[nodiscard]] bool CanApplyLigatureSubstitution(std::size_t lookup_index) const;
 		[[nodiscard]] std::optional<OpenTypeLigatureMatch> MatchLigatureSubstitution(std::size_t lookup_index, std::span<const std::uint32_t> glyphs, std::size_t& work) const;
+		// True proves an actual one-record buffer cannot apply a clean extension PairPos lookup.
+		// This inspects only known headers; it does not execute filtering/device values or admit a run.
+		[[nodiscard]] bool LookupRequiresFollowingGlyph(std::size_t lookup_index) const;
 		// Flags-zero PairPos formats1/2 without device/variation values; design-unit values retain field order.
 		[[nodiscard]] bool CanApplyPairPositioning(std::size_t lookup_index) const;
 		[[nodiscard]] std::optional<OpenTypePairAdjustment> MatchPairPositioning(std::size_t lookup_index, std::uint32_t first, std::uint32_t second, std::size_t& work) const;

@@ -102,11 +102,11 @@ namespace sgre::text {
 		}
 		for (const auto& lookup : plan.Positioning.Lookups) {
 			// Original pair execution cannot find a second input in this actual one-record buffer.
-			// Other covered positioning remains gated; this does not admit a multi-unit run.
+			// Extension PairPos is excluded only after the same mask/coverage checks; other execution stays gated.
 			if (positioning.Lookups()[lookup.Index].Type == 2) {
 				continue;
 			}
-			if ((glyph.Mask & lookup.Mask) != 0 && positioning.LookupInputCoversGlyph(lookup.Index, glyph.GlyphIndex)) {
+			if ((glyph.Mask & lookup.Mask) != 0 && positioning.LookupInputCoversGlyph(lookup.Index, glyph.GlyphIndex) && !positioning.LookupRequiresFollowingGlyph(lookup.Index)) {
 				throw std::runtime_error("VectorFont unit measurement requires unrecovered covered positioning execution");
 			}
 		}
