@@ -1,6 +1,7 @@
 #include "sgre/text/truetype_stack_program.hpp"
 
 #include "sgre/text/truetype_control_program.hpp"
+#include "sgre/text/truetype_point_program.hpp"
 #include "sgre/text/truetype_program.hpp"
 #include "sgre/text/truetype_state_program.hpp"
 
@@ -744,6 +745,420 @@ namespace sgre::text {
 		return true;
 	}
 
+	static constexpr std::uint32_t kMaximumPointVisits = 4000000;
+	static constexpr std::size_t kMaximumHintPoints = 32767;
+
+	struct TrueTypePointExecution {
+		TrueTypePointState& State;
+		std::uint32_t Visits = 0;
+	};
+
+	static bool PositiveHintAxis(const TrueTypeAxisVector& vector) {
+		return (vector.X == 0x4000 && vector.Y == 0) || (vector.X == 0 && vector.Y == 0x4000);
+	}
+
+	static void RequireHintAxes(const TrueTypeGraphicsState& graphics) {
+		if (!PositiveHintAxis(graphics.Projection) || !PositiveHintAxis(graphics.DualProjection) || !PositiveHintAxis(graphics.Freedom)) {
+			throw std::runtime_error("TrueType point execution requires recovered positive unit-axis vectors");
+		}
+	}
+
+	static void VisitHintPoint(TrueTypePointExecution& execution, std::uint32_t offset) {
+		if (++execution.Visits > kMaximumPointVisits) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InstructionLimit, offset, "TrueType point traversal exceeds the bounded owner work limit");
+		}
+	}
+
+	static std::int32_t HintCoordinate(const TrueTypeHintPoint& point, bool x_axis) {
+		return x_axis ? point.X : point.Y;
+	}
+
+	static std::int32_t& HintCoordinate(TrueTypeHintPoint& point, bool x_axis) {
+		return x_axis ? point.X : point.Y;
+	}
+
+	static std::int32_t ProjectHintPoint(const TrueTypeHintPoint& point, const TrueTypeAxisVector& vector) {
+		return HintCoordinate(point, vector.X != 0);
+	}
+
+	static TrueTypeHintPoint SubtractHintPoints(const TrueTypeHintPoint& first, const TrueTypeHintPoint& second) {
+		return {SubtractWords(first.X, second.X), SubtractWords(first.Y, second.Y)};
+	}
+
+	static TrueTypeHintZone& SelectedHintZone(TrueTypePointState& points, const TrueTypeGraphicsState& graphics, std::size_t selector) {
+		const auto zone = graphics.ZonePointers[selector];
+		if (zone > 1) {
+			throw std::runtime_error("TrueType point zone selector has no actual twilight or glyph owner");
+		}
+
+		return points.Zones[zone];
+	}
+
+	static bool HintPointValid(const TrueTypeHintZone& zone, std::uint32_t point, bool strict, std::uint32_t offset) {
+		if (point < zone.Current.size()) {
+			return true;
+		}
+		if (strict) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "TrueType point index exceeds its selected actual zone");
+		}
+
+		return false;
+	}
+
+	static void MoveHintPoint(TrueTypeHintZone& zone, std::uint16_t point, std::int32_t distance, const TrueTypeInterpreterState& state, const TrueTypePointState& points) {
+		const auto& freedom = state.Graphics.Freedom;
+		const bool version40 = state.Metrics.InterpreterVersion == 40;
+		if (freedom.X != 0) {
+			if (state.Metrics.InterpreterVersion == 35 || (version40 && !state.BackwardCompatibility)) {
+				zone.Current[point].X = AddWords(zone.Current[point].X, distance);
+			}
+			zone.Tags[point] |= 8;
+		}
+		if (freedom.Y != 0) {
+			if (!version40 || !state.BackwardCompatibility || !points.IupX || !points.IupY) {
+				zone.Current[point].Y = AddWords(zone.Current[point].Y, distance);
+			}
+			zone.Tags[point] |= 16;
+		}
+	}
+
+	static void ShiftHintPoint(TrueTypeHintZone& zone, std::uint16_t point, std::int32_t distance, const TrueTypeInterpreterState& state, const TrueTypePointState& points) {
+		const auto& freedom = state.Graphics.Freedom;
+		const bool compatibility = state.Metrics.InterpreterVersion == 40 && state.BackwardCompatibility;
+		if (freedom.X != 0) {
+			if (!compatibility) {
+				zone.Current[point].X = AddWords(zone.Current[point].X, distance);
+			}
+			zone.Tags[point] |= 8;
+		}
+		if (freedom.Y != 0) {
+			if (!compatibility || !points.IupX || !points.IupY) {
+				zone.Current[point].Y = AddWords(zone.Current[point].Y, distance);
+			}
+			zone.Tags[point] |= 16;
+		}
+	}
+
+	static std::int32_t DivideHintFixed(std::int32_t numerator, std::int32_t denominator) {
+		const bool negative = (numerator < 0) != (denominator < 0);
+		const auto divisor = static_cast<std::uint64_t>(static_cast<std::int64_t>(AbsoluteWord(denominator)));
+		std::uint32_t quotient = 0x7fffffff;
+		if (divisor != 0) {
+			const auto magnitude = static_cast<std::uint64_t>(static_cast<std::int64_t>(AbsoluteWord(numerator)));
+			quotient = static_cast<std::uint32_t>(((magnitude << 16) + (divisor >> 1)) / divisor);
+		}
+
+		return WordValue(negative ? 0u - quotient : quotient);
+	}
+
+	static void InterpolateHintRange(TrueTypeHintZone& zone, std::size_t begin, std::size_t end, std::size_t first, std::size_t second, bool x_axis, TrueTypePointExecution& execution, std::uint32_t offset) {
+		if (begin > end) {
+			return;
+		}
+		if (HintCoordinate(zone.Unscaled[first], x_axis) > HintCoordinate(zone.Unscaled[second], x_axis)) {
+			std::swap(first, second);
+		}
+
+		const auto first_original = HintCoordinate(zone.Original[first], x_axis);
+		const auto second_original = HintCoordinate(zone.Original[second], x_axis);
+		const auto first_current = HintCoordinate(zone.Current[first], x_axis);
+		const auto second_current = HintCoordinate(zone.Current[second], x_axis);
+		const auto first_unscaled = HintCoordinate(zone.Unscaled[first], x_axis);
+		const auto second_unscaled = HintCoordinate(zone.Unscaled[second], x_axis);
+		const auto first_delta = SubtractWords(first_current, first_original);
+		const auto second_delta = SubtractWords(second_current, second_original);
+		const bool degenerate = first_current == second_current || first_unscaled == second_unscaled;
+		std::optional<std::int32_t> slope;
+		for (auto index = begin; index <= end; ++index) {
+			VisitHintPoint(execution, offset);
+			const auto original = HintCoordinate(zone.Original[index], x_axis);
+			auto& current = HintCoordinate(zone.Current[index], x_axis);
+			if (original <= first_original) {
+				current = AddWords(original, first_delta);
+			} else if (original >= second_original) {
+				current = AddWords(original, second_delta);
+			} else if (degenerate) {
+				current = first_current;
+			} else {
+				if (!slope) {
+					slope = DivideHintFixed(SubtractWords(second_current, first_current), SubtractWords(second_unscaled, first_unscaled));
+				}
+				current = AddWords(first_current, MultiplyFixed(SubtractWords(HintCoordinate(zone.Unscaled[index], x_axis), first_unscaled), *slope));
+			}
+		}
+	}
+
+	static void InterpolateHintContour(TrueTypeHintZone& zone, std::size_t begin, std::size_t end, bool x_axis, TrueTypePointExecution& execution, std::uint32_t offset) {
+		const auto mask = x_axis ? 8 : 16;
+		auto first = begin;
+		while (first <= end) {
+			VisitHintPoint(execution, offset);
+			if ((zone.Tags[first] & mask) != 0) {
+				break;
+			}
+			++first;
+		}
+		if (first > end) {
+			return;
+		}
+
+		auto previous = first;
+		for (auto index = first + 1; index <= end; ++index) {
+			VisitHintPoint(execution, offset);
+			if ((zone.Tags[index] & mask) != 0) {
+				InterpolateHintRange(zone, previous + 1, index - 1, previous, index, x_axis, execution, offset);
+				previous = index;
+			}
+		}
+		if (first == previous) {
+			const auto delta = SubtractWords(HintCoordinate(zone.Current[first], x_axis), HintCoordinate(zone.Original[first], x_axis));
+			if (delta != 0) {
+				for (auto index = begin; index <= end; ++index) {
+					VisitHintPoint(execution, offset);
+					if (index != first) {
+						auto& value = HintCoordinate(zone.Current[index], x_axis);
+						value = AddWords(value, delta);
+					}
+				}
+			}
+		} else {
+			InterpolateHintRange(zone, previous + 1, end, previous, first, x_axis, execution, offset);
+			if (first > begin) {
+				InterpolateHintRange(zone, begin, first - 1, previous, first, x_axis, execution, offset);
+			}
+		}
+	}
+
+	static void InterpolateHintPoints(std::uint8_t opcode, TrueTypeInterpreterState& state, TrueTypePointExecution& execution, std::uint32_t offset) {
+		auto& points = execution.State;
+		const bool x_axis = (opcode & 1) != 0;
+		if (state.Metrics.InterpreterVersion == 40 && state.BackwardCompatibility) {
+			if (points.IupX && points.IupY) {
+				return;
+			}
+			(x_axis ? points.IupX : points.IupY) = true;
+		}
+
+		auto& zone = points.Zones[1];
+		std::size_t begin = 0;
+		for (const auto contour_end : zone.ContourEnds) {
+			const auto end = std::size_t(contour_end) - zone.FirstPoint;
+			InterpolateHintContour(zone, begin, end, x_axis, execution, offset);
+			begin = end + 1;
+		}
+	}
+
+	static void ShiftHintContour(std::uint8_t opcode, std::int32_t contour_word, TrueTypeInterpreterState& state, TrueTypePointExecution& execution, bool strict, std::uint32_t offset) {
+		auto& points = execution.State;
+		auto& target = SelectedHintZone(points, state.Graphics, 2);
+		const bool twilight = state.Graphics.ZonePointers[2] == 0;
+		const auto contour = static_cast<std::uint16_t>(contour_word);
+		if (!StateReferenceValid(std::int32_t(contour), twilight ? 1 : target.ContourEnds.size(), strict, offset)) {
+			return;
+		}
+
+		const bool first_reference = (opcode & 1) != 0;
+		auto& source = SelectedHintZone(points, state.Graphics, first_reference ? 0 : 1);
+		const auto reference = state.Graphics.ReferencePoints[first_reference ? 1 : 2];
+		if (!HintPointValid(source, reference, strict, offset)) {
+			return;
+		}
+
+		const auto delta = ProjectHintPoint(SubtractHintPoints(source.Current[reference], source.Original[reference]), state.Graphics.Projection);
+		const auto begin = twilight || contour == 0 ? std::size_t(0) : std::size_t(target.ContourEnds[contour - 1]) - target.FirstPoint + 1;
+		const auto end = twilight ? target.Current.size() : std::size_t(target.ContourEnds[contour]) - target.FirstPoint + 1;
+		for (auto index = begin; index < end; ++index) {
+			VisitHintPoint(execution, offset);
+			if (&source != &target || index != reference) {
+				ShiftHintPoint(target, static_cast<std::uint16_t>(index), delta, state, points);
+			}
+		}
+	}
+
+	static void ExecuteHintLoop(std::uint8_t opcode, std::int32_t distance, TrueTypeStackProgramResult& operands, TrueTypeInterpreterState& state, TrueTypePointExecution& execution, bool strict, std::uint32_t offset) {
+		auto& graphics = state.Graphics;
+		auto& points = execution.State;
+		auto& reference_zone = SelectedHintZone(points, graphics, 0);
+		const bool align = opcode == 0x3c;
+		if (graphics.Loop > static_cast<std::int64_t>(operands.Stack.size()) || (align && graphics.ReferencePoints[0] >= reference_zone.Current.size())) {
+			graphics.Loop = 1;
+			if (strict) {
+				throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "TrueType variable point group lacks its complete indices or reference point");
+			}
+			return;
+		}
+
+		auto& target = SelectedHintZone(points, graphics, align ? 1 : 2);
+		const bool compatibility = state.Metrics.InterpreterVersion == 40 && state.BackwardCompatibility;
+		const bool twilight = std::ranges::find(graphics.ZonePointers, std::uint16_t(0)) != graphics.ZonePointers.end();
+		while (graphics.Loop > 0) {
+			VisitHintPoint(execution, offset);
+			const auto point = static_cast<std::uint16_t>(operands.Stack.back());
+			operands.Stack.pop_back();
+			if (HintPointValid(target, point, strict, offset)) {
+				if (align) {
+					const auto delta = ProjectHintPoint(SubtractHintPoints(target.Current[point], reference_zone.Current[graphics.ReferencePoints[0]]), graphics.Projection);
+					MoveHintPoint(target, point, NegateWord(delta), state, points);
+				} else if (!compatibility || twilight || ((!points.IupX || !points.IupY) && ((points.Composite && graphics.Freedom.Y != 0) || (target.Tags[point] & 16) != 0))) {
+					ShiftHintPoint(target, point, distance, state, points);
+				}
+			}
+			--graphics.Loop;
+		}
+		graphics.Loop = 1;
+	}
+
+	static std::optional<StackEffect> PointStackEffect(std::uint8_t opcode) {
+		if (opcode == 0x30 || opcode == 0x31 || opcode == 0x3c) {
+			return StackEffect{0, 0};
+		}
+		if (opcode == 0x2e || opcode == 0x2f || opcode == 0x35 || opcode == 0x38) {
+			return StackEffect{1, 0};
+		}
+		if (opcode == 0x3e || opcode == 0x3f || opcode == 0x48) {
+			return StackEffect{2, 0};
+		}
+		if (opcode == 0x46 || opcode == 0x47) {
+			return StackEffect{1, 1};
+		}
+		if (opcode == 0x49 || opcode == 0x4a) {
+			return StackEffect{2, 1};
+		}
+
+		return std::nullopt;
+	}
+
+	static void ExecutePointKernel(const TrueTypeInstruction& instruction, std::span<std::int32_t> arguments, TrueTypeInterpreterState& state, TrueTypePointExecution& execution, bool strict) {
+		const auto opcode = instruction.Opcode;
+		auto& graphics = state.Graphics;
+		auto& points = execution.State;
+		const auto offset = instruction.Offset;
+		if (opcode == 0x30 || opcode == 0x31) {
+			InterpolateHintPoints(opcode, state, execution, offset);
+			return;
+		}
+		if (opcode == 0x35) {
+			ShiftHintContour(opcode, arguments[0], state, execution, strict, offset);
+			return;
+		}
+
+		VisitHintPoint(execution, offset);
+		const auto point = static_cast<std::uint16_t>(arguments[0]);
+		auto& target = SelectedHintZone(points, graphics, opcode >= 0x46 && opcode <= 0x48 ? 2 : 0);
+		if (opcode == 0x49 || opcode == 0x4a) {
+			auto& second_zone = SelectedHintZone(points, graphics, 1);
+			const auto second_point = static_cast<std::uint16_t>(arguments[1]);
+			if (!HintPointValid(target, point, strict, offset) || !HintPointValid(second_zone, second_point, strict, offset)) {
+				arguments[0] = 0;
+				return;
+			}
+			if (opcode == 0x49) {
+				arguments[0] = ProjectHintPoint(SubtractHintPoints(target.Current[point], second_zone.Current[second_point]), graphics.Projection);
+			} else if (graphics.ZonePointers[0] == 0 || graphics.ZonePointers[1] == 0) {
+				arguments[0] = ProjectHintPoint(SubtractHintPoints(target.Original[point], second_zone.Original[second_point]), graphics.DualProjection);
+			} else {
+				auto delta = SubtractHintPoints(target.Unscaled[point], second_zone.Unscaled[second_point]);
+				if (points.OriginalXScale16Dot16 == points.OriginalYScale16Dot16) {
+					arguments[0] = MultiplyFixed(ProjectHintPoint(delta, graphics.DualProjection), points.OriginalXScale16Dot16);
+				} else {
+					delta.X = MultiplyFixed(delta.X, points.OriginalXScale16Dot16);
+					delta.Y = MultiplyFixed(delta.Y, points.OriginalYScale16Dot16);
+					arguments[0] = ProjectHintPoint(delta, graphics.DualProjection);
+				}
+			}
+			return;
+		}
+		if (opcode == 0x46 || opcode == 0x47) {
+			const auto full_point = static_cast<std::uint32_t>(arguments[0]);
+			arguments[0] = HintPointValid(target, full_point, strict, offset) ? ProjectHintPoint(opcode == 0x46 ? target.Current[full_point] : target.Original[full_point], opcode == 0x46 ? graphics.Projection : graphics.DualProjection) : 0;
+			return;
+		}
+		if (opcode == 0x3e || opcode == 0x3f) {
+			const bool valid = point < target.Current.size() && static_cast<std::uint32_t>(arguments[1]) < state.ControlValues.size();
+			if (!valid) {
+				graphics.ReferencePoints[0] = point;
+				graphics.ReferencePoints[1] = point;
+				if (strict) {
+					throw TrueTypeProgramError(TrueTypeProgramFailure::InvalidReference, offset, "TrueType MIAP point or CVT index has no actual owner");
+				}
+				return;
+			}
+
+			auto distance = state.ControlValues[static_cast<std::uint32_t>(arguments[1])];
+			if (graphics.ZonePointers[0] == 0) {
+				target.Original[point] = {graphics.Freedom.X != 0 ? distance : 0, graphics.Freedom.Y != 0 ? distance : 0};
+				target.Current[point] = target.Original[point];
+			}
+			const auto current = ProjectHintPoint(target.Current[point], graphics.Projection);
+			if (opcode == 0x3f) {
+				if (AbsoluteWord(SubtractWords(distance, current)) > graphics.ControlValueCutIn) {
+					distance = current;
+				}
+				distance = RoundStateDistance(graphics, distance, state.Metrics.Compensation[0]);
+			}
+			MoveHintPoint(target, point, SubtractWords(distance, current), state, points);
+			graphics.ReferencePoints[0] = point;
+			graphics.ReferencePoints[1] = point;
+			return;
+		}
+		if (!HintPointValid(target, point, strict, offset)) {
+			return;
+		}
+		if (opcode == 0x48) {
+			const auto current = ProjectHintPoint(target.Current[point], graphics.Projection);
+			MoveHintPoint(target, point, SubtractWords(arguments[1], current), state, points);
+			if (graphics.ZonePointers[2] == 0) {
+				target.Original[point] = target.Current[point];
+			}
+			return;
+		}
+
+		const auto current = opcode == 0x2f ? ProjectHintPoint(target.Current[point], graphics.Projection) : 0;
+		const auto delta = opcode == 0x2f ? SubtractWords(RoundStateDistance(graphics, current, state.Metrics.Compensation[0]), current) : 0;
+		MoveHintPoint(target, point, delta, state, points);
+		graphics.ReferencePoints[0] = point;
+		graphics.ReferencePoints[1] = point;
+	}
+
+	static bool ExecutePointInstruction(const TrueTypeInstruction& instruction, TrueTypeStackLimits limits, TrueTypeStackProgramResult& operands, TrueTypeInterpreterState& state, TrueTypePointExecution& execution) {
+		const auto effect = PointStackEffect(instruction.Opcode);
+		if (!effect) {
+			return false;
+		}
+		RequireHintAxes(state.Graphics);
+		const auto arguments = ControlOperands(operands, effect->Pop, limits.StrictStackUnderflow, instruction.Offset);
+		const auto new_top = arguments + effect->Push;
+		if (new_top > operands.StackCapacity) {
+			throw TrueTypeProgramError(TrueTypeProgramFailure::StackOverflow, instruction.Offset, "TrueType point instruction exceeds actual operand capacity");
+		}
+		if (instruction.Opcode == 0x38 || instruction.Opcode == 0x3c) {
+			const auto distance = instruction.Opcode == 0x38 ? operands.Stack[arguments] : 0;
+			operands.Stack.resize(arguments);
+			ExecuteHintLoop(instruction.Opcode, distance, operands, state, execution, limits.StrictStackUnderflow, instruction.Offset);
+		} else {
+			ExecutePointKernel(instruction, std::span(operands.Stack).subspan(arguments), state, execution, limits.StrictStackUnderflow);
+			operands.Stack.resize(new_top);
+		}
+
+		return true;
+	}
+
+	static void RequireHintZone(const TrueTypeHintZone& zone) {
+		const auto count = zone.Current.size();
+		if (count > kMaximumHintPoints || zone.Original.size() != count || zone.Unscaled.size() != count || zone.Tags.size() != count || zone.ContourEnds.size() > kMaximumHintPoints || zone.FirstPoint > 0xffff) {
+			throw std::runtime_error("TrueType point zone lacks exact bounded coordinate, tag, or contour owners");
+		}
+
+		std::size_t previous = 0;
+		for (std::size_t index = 0; index < zone.ContourEnds.size(); ++index) {
+			const auto end = std::size_t(zone.ContourEnds[index]);
+			if (end < zone.FirstPoint || end - zone.FirstPoint >= count || (index != 0 && end <= previous)) {
+				throw std::runtime_error("TrueType point zone contour indices exceed their actual ordered point owner");
+			}
+			previous = end;
+		}
+	}
+
 	static std::uint32_t SkipControlBranch(std::span<const std::uint8_t> code, const TrueTypeInstruction& origin, bool stop_at_else, TrueTypeControlProgramResult& result) {
 		auto offset = origin.Offset + origin.ByteCount;
 		std::uint32_t depth = 1;
@@ -780,7 +1195,7 @@ namespace sgre::text {
 		return target;
 	}
 
-	static TrueTypeControlProgramResult ExecuteControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack, TrueTypeInterpreterState* state) {
+	static TrueTypeControlProgramResult ExecuteControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack, TrueTypeInterpreterState* state, TrueTypePointExecution* points) {
 		const std::array ranges{font.Program(), code.Preparation, code.Glyph};
 		for (const auto range : ranges) {
 			if (range.size() > kMaximumStackProgramBytes) {
@@ -879,6 +1294,8 @@ namespace sgre::text {
 				if (taken) {
 					next_offset = RelativeControlJump(offset, distance, arguments, std::span(calls).first(call_depth));
 				}
+			} else if (state && points && ExecutePointInstruction(instruction, stack_limits, result.Operands, *state, *points)) {
+				// Point kernels preserve the shared control clock and actual zone aliases.
 			} else if (state && ExecuteStateInstruction(instruction, stack_limits, result.Operands, *state)) {
 				// State kernels share the original fixed-group preflight and control clock.
 			} else {
@@ -902,7 +1319,7 @@ namespace sgre::text {
 	}
 
 	TrueTypeControlProgramResult ExecuteTrueTypeControlProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
-		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, nullptr);
+		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, nullptr, nullptr);
 	}
 
 	TrueTypeControlProgramResult ExecuteTrueTypeStateProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, TrueTypeInterpreterState& state, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
@@ -915,7 +1332,29 @@ namespace sgre::text {
 
 		state.BackwardCompatibility = state.Metrics.InterpreterVersion == 40 && !state.Metrics.FaceIsTricky && (state.Graphics.InstructionControl & 4) == 0;
 
-		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, &state);
+		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, &state, nullptr);
+	}
+
+	TrueTypeControlProgramResult ExecuteTrueTypePointProgram(const TrueTypeFontProgram& font, TrueTypeProgramCode code, TrueTypeProgramRange entry, TrueTypeInterpreterState& state, TrueTypePointState& points, bool strict_stack_underflow, std::span<const std::int32_t> initial_stack) {
+		if (state.Storage.size() > 0xffff || state.ControlValues.size() > kMaximumStackProgramBytes / sizeof(std::int32_t) || static_cast<std::uint8_t>(state.Graphics.Round) > 7) {
+			throw std::runtime_error("TrueType point execution lacks bounded valid persistent interpreter state");
+		}
+		RequireHintAxes(state.Graphics);
+		for (const auto selector : state.Graphics.ZonePointers) {
+			if (selector > 1) {
+				throw std::runtime_error("TrueType point execution requires actual twilight or glyph zone selectors");
+			}
+		}
+		for (const auto& zone : points.Zones) {
+			RequireHintZone(zone);
+		}
+
+		state.BackwardCompatibility = state.Metrics.InterpreterVersion == 40 && !state.Metrics.FaceIsTricky && (state.Graphics.InstructionControl & 4) == 0;
+		points.IupX = false;
+		points.IupY = false;
+		TrueTypePointExecution execution{points};
+
+		return ExecuteControlProgram(font, code, entry, strict_stack_underflow, initial_stack, &state, &execution);
 	}
 
 } // namespace sgre::text
