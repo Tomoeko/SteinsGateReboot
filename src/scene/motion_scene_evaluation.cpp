@@ -1345,11 +1345,58 @@ namespace sgre::scene {
 			}
 		}
 
-		void BuildCatalogue() const {
+		void BuildCatalogue(const MotionPlayerCommands* actual_player = nullptr) const {
 			RequireRoot();
 			Catalogue.clear();
 			Catalogue.push_back(CatalogueEntry{Root.get(), &Root->Commands, &Root->Root});
 			AppendCatalogueChildren(*Root);
+			if (actual_player != nullptr && actual_player != &Root->Commands) {
+				const auto found = std::find_if(Catalogue.begin(), Catalogue.end(), [actual_player](const auto& entry) {
+					return entry.Commands == actual_player;
+				});
+				if (found == Catalogue.end()) {
+					throw std::runtime_error("motion layer getter scope is not an actual current child player");
+				}
+
+				// Native516B90 starts its catalogue at the receiver plain player, including a root-only child.
+				const auto first = *found;
+				Catalogue.clear();
+				Catalogue.push_back(first);
+				if (first.Actual != nullptr) {
+					AppendCatalogueChildren(*first.Actual);
+				}
+			}
+		}
+
+		std::optional<MotionSceneLayerReference> FindLayer(std::string_view name, const MotionPlayerCommands* actual_player) const {
+			BuildCatalogue(actual_player);
+			std::uint32_t base = 0;
+			for (const auto& entry : Catalogue) {
+				const auto* context = entry.Actual;
+				const auto nodes = context == nullptr ? std::span<const MotionSelectedLayerNode>() : context->Selected.Nodes();
+				// Native516b90 skips map lookup at a root-only player, but always counts its root for later offsets.
+				const auto ordinal = nodes.empty() ? std::nullopt : ResolveMotionChildTargetIndex(*context->Timeline, name, nodes.size());
+				if (ordinal) {
+					if (*ordinal > std::numeric_limits<std::uint32_t>::max() - base) {
+						throw std::runtime_error("motion layer getter global ordinal exceeds its native word");
+					}
+					MotionSceneLayerReference result;
+					result.Owner = this;
+					result.RootSelectionSerial = Root->SelectionSerial;
+					result.GraphGeneration = Generation;
+					result.ContextIdentity = context->Identity;
+					result.ContextSelectionSerial = context->SelectionSerial;
+					result.NativeOrdinal = *ordinal;
+					result.GlobalOrdinal = base + *ordinal;
+					result.NodeIdentifier = *ordinal == 0 ? 0 : nodes[*ordinal - 1].Identifier;
+					return result;
+				}
+				if (nodes.size() + 1 > std::numeric_limits<std::uint32_t>::max() - base) {
+					throw std::runtime_error("motion layer getter global ordinal exceeds its native word");
+				}
+				base += static_cast<std::uint32_t>(nodes.size() + 1);
+			}
+			return std::nullopt;
 		}
 
 		const MotionSelectedLayerNode& ResolveLayer(const MotionSceneLayerReference& reference) const {
@@ -1690,35 +1737,11 @@ namespace sgre::scene {
 	}
 
 	std::optional<MotionSceneLayerReference> MotionSceneEvaluation::FindLayer(std::string_view name) const {
-		const auto& state = *m_Implementation;
-		state.BuildCatalogue();
-		std::uint32_t base = 0;
-		for (const auto& entry : state.Catalogue) {
-			const auto* context = entry.Actual;
-			const auto nodes = context == nullptr ? std::span<const MotionSelectedLayerNode>() : context->Selected.Nodes();
-			// Native516b90 skips map lookup at a root-only player, but always counts its root for later offsets.
-			const auto ordinal = nodes.empty() ? std::nullopt : ResolveMotionChildTargetIndex(*context->Timeline, name, nodes.size());
-			if (ordinal) {
-				if (*ordinal > std::numeric_limits<std::uint32_t>::max() - base) {
-					throw std::runtime_error("motion layer getter global ordinal exceeds its native word");
-				}
-				MotionSceneLayerReference result;
-				result.Owner = &state;
-				result.RootSelectionSerial = state.Root->SelectionSerial;
-				result.GraphGeneration = state.Generation;
-				result.ContextIdentity = context->Identity;
-				result.ContextSelectionSerial = context->SelectionSerial;
-				result.NativeOrdinal = *ordinal;
-				result.GlobalOrdinal = base + *ordinal;
-				result.NodeIdentifier = *ordinal == 0 ? 0 : nodes[*ordinal - 1].Identifier;
-				return result;
-			}
-			if (nodes.size() + 1 > std::numeric_limits<std::uint32_t>::max() - base) {
-				throw std::runtime_error("motion layer getter global ordinal exceeds its native word");
-			}
-			base += static_cast<std::uint32_t>(nodes.size() + 1);
-		}
-		return std::nullopt;
+		return m_Implementation->FindLayer(name, nullptr);
+	}
+
+	std::optional<MotionSceneLayerReference> MotionSceneEvaluation::FindLayer(std::string_view name, const MotionPlayerCommands& actual_player) const {
+		return m_Implementation->FindLayer(name, &actual_player);
 	}
 
 	std::uint32_t MotionSceneEvaluation::LayerType(const MotionSceneLayerReference& reference) const {

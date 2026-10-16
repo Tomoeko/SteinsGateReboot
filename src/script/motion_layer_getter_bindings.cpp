@@ -40,6 +40,7 @@ namespace sgre::script {
 			scene::MotionPlayerTask Task;
 			scene::MotionSceneLayerReference Layer;
 			std::optional<SquirrelObjectIdentity> OwningLayer;
+			std::optional<scene::MotionChildBorrow> Child;
 		};
 
 		struct ShapeRecord {
@@ -63,9 +64,12 @@ namespace sgre::script {
 		std::map<std::uint32_t, GetterRecord> Getters;
 		std::map<std::uint32_t, ShapeRecord> Shapes;
 
-		static const scene::MotionSceneEvaluation& ActualScene(const scene::MotionPlayerTask& task) {
+		static const scene::MotionSceneEvaluation& ActualScene(const scene::MotionPlayerTask& task, const std::optional<scene::MotionChildBorrow>& actual_child = {}) {
 			if (!task.IsLive()) {
 				throw std::runtime_error("MotionLayerGetter actual task has retired");
+			}
+			if (actual_child) {
+				static_cast<void>(task.ChildCommands(*actual_child));
 			}
 			const auto* player = task.GenericPlayer();
 			if (player == nullptr) {
@@ -185,12 +189,15 @@ namespace sgre::script {
 			return instance;
 		}
 
-		SquirrelValue CreateGetter(const scene::MotionPlayerTask& task, std::string_view name, std::optional<SquirrelObjectIdentity> actual_layer, const std::weak_ptr<Implementation>& weak) {
+		SquirrelValue CreateGetter(const scene::MotionPlayerTask& task, std::string_view name, std::optional<SquirrelObjectIdentity> actual_layer, std::optional<scene::MotionChildBorrow> actual_child, const std::weak_ptr<Implementation>& weak) {
+			if (actual_child) {
+				static_cast<void>(task.ChildCommands(*actual_child));
+			}
 			if (task.IsLive() && task.GenericPlayer() != nullptr && task.GenericPlayer()->Scene() == nullptr) {
 				return {};
 			}
-			const auto& actual = ActualScene(task);
-			const auto layer = actual.FindLayer(name);
+			const auto& actual = ActualScene(task, actual_child);
+			const auto layer = actual_child ? actual.FindLayer(name, task.ChildCommands(*actual_child)) : actual.FindLayer(name);
 			if (!layer) {
 				return {};
 			}
@@ -202,7 +209,7 @@ namespace sgre::script {
 			Objects.AttachInstance(instance);
 			const auto identity = Vm.BorrowObjectIdentity(instance);
 			try {
-				Getters.emplace(identity.Index, GetterRecord{identity, task, *layer, actual_layer});
+				Getters.emplace(identity.Index, GetterRecord{identity, task, *layer, actual_layer, actual_child});
 				Objects.ConfigureNativeRelease(instance, [weak, identity](const SquirrelValue&) {
 					if (const auto owner = weak.lock()) {
 						const auto found = owner->Getters.find(identity.Index);
@@ -220,12 +227,15 @@ namespace sgre::script {
 			return instance;
 		}
 
-		SquirrelValue CreateLayerMotion(const scene::MotionPlayerTask& task, std::string_view name, const SquirrelObjectIdentity& actual_layer) {
+		SquirrelValue CreateLayerMotion(const scene::MotionPlayerTask& task, std::string_view name, const SquirrelObjectIdentity& actual_layer, const std::optional<scene::MotionChildBorrow>& actual_child) {
+			if (actual_child) {
+				static_cast<void>(task.ChildCommands(*actual_child));
+			}
 			if (task.IsLive() && task.GenericPlayer() != nullptr && task.GenericPlayer()->Scene() == nullptr) {
 				return {};
 			}
-			const auto& actual = ActualScene(task);
-			const auto layer = actual.FindLayer(name);
+			const auto& actual = ActualScene(task, actual_child);
+			const auto layer = actual_child ? actual.FindLayer(name, task.ChildCommands(*actual_child)) : actual.FindLayer(name);
 			// Native2769A0 returns null for a missing name or any kind other than an actual child player.
 			if (!layer || actual.LayerType(*layer) != 3) {
 				return {};
@@ -259,7 +269,7 @@ namespace sgre::script {
 				}
 				const auto receiver = arguments[0];
 				const auto& record = owner->Getter(receiver);
-				const auto snapshot = ActualScene(record.Task).Shape(record.Layer);
+				const auto snapshot = ActualScene(record.Task, record.Child).Shape(record.Layer);
 
 				return SquirrelNativeResult::ReturnValue(owner->Snapshot(snapshot, weak));
 			}));
@@ -271,7 +281,7 @@ namespace sgre::script {
 				const auto receiver = arguments[0];
 				const auto& record = owner->Getter(receiver);
 
-				return SquirrelNativeResult::ReturnValue(static_cast<std::int32_t>(ActualScene(record.Task).LayerType(record.Layer)));
+				return SquirrelNativeResult::ReturnValue(static_cast<std::int32_t>(ActualScene(record.Task, record.Child).LayerType(record.Layer)));
 			}));
 			const std::array<std::string_view, 2> coordinate_methods{"getLeft", "getTop"};
 			for (std::size_t axis = 0; axis != coordinate_methods.size(); ++axis) {
@@ -283,7 +293,7 @@ namespace sgre::script {
 					}
 					const auto receiver = arguments[0];
 					const auto& record = owner->Getter(receiver);
-					const auto coordinate = ActualScene(record.Task).LayerCoordinate(record.Layer);
+					const auto coordinate = ActualScene(record.Task, record.Child).LayerCoordinate(record.Layer);
 
 					return SquirrelNativeResult::ReturnValue(coordinate[axis]);
 				}));
@@ -307,7 +317,7 @@ namespace sgre::script {
 				if (!owner->MakeChildMotion || !record.OwningLayer) {
 					throw std::runtime_error("MotionLayerGetter.getMotion requires its actual Layer-backed native wrapper factory");
 				}
-				const auto& actual = ActualScene(record.Task);
+				const auto& actual = ActualScene(record.Task, record.Child);
 				const auto child = actual.LayerChild(record.Layer).Borrow();
 
 				return SquirrelNativeResult::ReturnValue(owner->MakeChildMotion(*record.OwningLayer, record.Task, child));
@@ -343,11 +353,11 @@ namespace sgre::script {
 		return m_Implementation->ShapeClass;
 	}
 
-	SquirrelValue ScriptMotionLayerGetters::GetLayerMotion(const scene::MotionPlayerTask& task, std::string_view name, const SquirrelObjectIdentity& actual_layer) {
-		return m_Implementation->CreateLayerMotion(task, name, actual_layer);
+	SquirrelValue ScriptMotionLayerGetters::GetLayerMotion(const scene::MotionPlayerTask& task, std::string_view name, const SquirrelObjectIdentity& actual_layer, std::optional<scene::MotionChildBorrow> actual_child) {
+		return m_Implementation->CreateLayerMotion(task, name, actual_layer, actual_child);
 	}
 
-	SquirrelValue ScriptMotionLayerGetters::GetLayerGetter(const scene::MotionPlayerTask& task, std::string_view name, std::optional<SquirrelObjectIdentity> actual_layer) {
-		return m_Implementation->CreateGetter(task, name, actual_layer, m_Implementation);
+	SquirrelValue ScriptMotionLayerGetters::GetLayerGetter(const scene::MotionPlayerTask& task, std::string_view name, std::optional<SquirrelObjectIdentity> actual_layer, std::optional<scene::MotionChildBorrow> actual_child) {
+		return m_Implementation->CreateGetter(task, name, actual_layer, actual_child, m_Implementation);
 	}
 } // namespace sgre::script

@@ -100,6 +100,48 @@ static std::shared_ptr<const sgre::resource::PsbDocument> Document(std::uint32_t
 	return document;
 }
 
+static sgre::resource::PsbValue& FixtureField(sgre::resource::PsbValue& object, std::string_view name) {
+	for (auto& entry : std::get<sgre::resource::PsbObject>(object.Data)) {
+		if (entry.first == name) {
+			return entry.second;
+		}
+	}
+
+	throw std::runtime_error("borrowed-child fixture field is absent");
+}
+
+static std::shared_ptr<const sgre::resource::PsbDocument> NestedGetterDocument() {
+	using sgre::resource::PsbArray;
+	using sgre::resource::PsbObject;
+	auto outer = Timeline(false, 2, false);
+	auto inner = Timeline(true, 2, false);
+	auto deep = Timeline(true, 1, false);
+	FixtureField(outer, "layerIndexMap") = Atom(PsbObject{{"shared lookup key", Integer(0)}, {"outer only", Integer(0)}, {"child map key", Integer(1)}});
+	FixtureField(inner, "layerIndexMap") = Atom(PsbObject{{"shared lookup key", Integer(0)}, {"inner only", Integer(0)}, {"deep child key", Integer(1)}});
+	FixtureField(deep, "layerIndexMap") = Atom(PsbObject{{"deep shape key", Integer(0)}});
+	auto& inner_layers = std::get<PsbArray>(FixtureField(inner, "layer").Data);
+	FixtureField(inner_layers[0], "shape") = Integer(2);
+	auto& inner_frame = std::get<PsbArray>(FixtureField(inner_layers[0], "frameList").Data)[0];
+	FixtureField(FixtureField(inner_frame, "content"), "coord") = Atom(PsbArray{Atom(7.0), Atom(11.0), Atom(0.0)});
+	auto child = Layer(true, 0);
+	auto& child_frame = std::get<PsbArray>(FixtureField(child, "frameList").Data)[0];
+	FixtureField(FixtureField(child_frame, "content"), "src") = Atom(std::string("deep"));
+	inner_layers.push_back(std::move(child));
+	auto& inner_priority = std::get<PsbArray>(FixtureField(inner, "priority").Data)[0];
+	FixtureField(inner_priority, "content") = Atom(PsbArray{Integer(0), Integer(1)});
+	auto& deep_layer = std::get<PsbArray>(FixtureField(deep, "layer").Data)[0];
+	auto& deep_frame = std::get<PsbArray>(FixtureField(deep_layer, "frameList").Data)[0];
+	FixtureField(FixtureField(deep_frame, "content"), "coord") = Atom(PsbArray{Atom(3.0), Atom(5.0), Atom(0.0)});
+	const auto object = [](sgre::resource::PsbValue timeline) {
+		return Atom(PsbObject{{"type", Integer(0)}, {"motion", Atom(PsbObject{{"main", std::move(timeline)}})}});
+	};
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	FixtureField(document->Root, "label") = Atom(std::string("Authored scoped borrowed-child getters"));
+	FixtureField(document->Root, "object") = Atom(PsbObject{{"outer", object(std::move(outer))}, {"inner", object(std::move(inner))}, {"deep", object(std::move(deep))}});
+
+	return document;
+}
+
 static sgre::script::SquirrelVmLimits VmLimits() {
 	sgre::script::SquirrelVmLimits limits;
 	limits.ReclaimObjects = true;
@@ -108,7 +150,7 @@ static sgre::script::SquirrelVmLimits VmLimits() {
 
 class Fixture {
 public:
-	explicit Fixture(std::uint32_t shape = 2, bool empty_prefix = false)
+	explicit Fixture(std::uint32_t shape = 2, bool empty_prefix = false, std::shared_ptr<const sgre::resource::PsbDocument> document = {})
 	    : Vm(VmLimits()), Objects(Vm), Psb(Vm, Objects), Cache([this](auto, const auto&) -> sgre::render::SpriteTextureHandle {
 		      ++Uploads;
 		      throw std::runtime_error("actual shape owner must never upload a replacement atlas");
@@ -146,7 +188,7 @@ public:
 				return source == sgre::script::MotionLayerSource::Primary ? *Primary : *Secondary;
 			};
 			Bindings = std::make_unique<sgre::script::ScriptMotionBindings>(Vm, Objects, Layers, std::move(binding));
-			const auto psb = Psb.WrapDocument(Document(shape, empty_prefix), std::make_shared<const std::vector<std::uint8_t>>(64, 0));
+			const auto psb = Psb.WrapDocument(document ? std::move(document) : Document(shape, empty_prefix), std::make_shared<const std::vector<std::uint8_t>>(64, 0));
 			static_cast<void>(Call(Leaf, "registerMotionResource", {psb}));
 		} catch (...) {
 			const auto failure = std::current_exception();
@@ -808,8 +850,162 @@ static void TestDirectNamedChildMotion() {
 	    "owner layer already desructed");
 }
 
+static void TestBorrowedChildScopedGettersAndRetainedTransforms() {
+	Fixture fixture(2, false, NestedGetterDocument());
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "setCoord", {100.0f, 200.0f}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	const auto tick = task.Commands().ClockState().TickCount;
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	const auto getter = fixture.Call(child, "getLayerGetter", {std::string("shared lookup key\0tail", 22), fixture.Vm.CreateTable()});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto parent = fixture.Call(motion, "getLayerGetter", {std::string("shared lookup key")});
+	const auto parent_root = fixture.Vm.Retain(parent);
+	Require(std::get<std::int32_t>(fixture.Read(getter, "type")) == 1 && std::get<float>(fixture.Read(getter, "left")) == 107 && std::get<float>(fixture.Read(getter, "top")) == 211, "borrowed-child lookup must start at its actual selected catalogue and read composed inherited coordinates");
+	Require(std::get<float>(fixture.Read(parent, "left")) == 120 && std::get<float>(fixture.Read(parent, "top")) == 240, "the duplicate containing map key must remain a distinct real target");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(child, "getLayerGetter", {std::string("outer only")})) && !std::holds_alternative<std::monostate>(fixture.Call(motion, "getLayerGetter", {std::string("outer only")})), "borrowed lookup must not escape upward to a matching containing-only layer");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(child, "getLayerGetter", {std::string("absent")})), "a missing child-scoped map key returns null without a surrogate root lookup");
+	const auto shape = fixture.Read(getter, "shape");
+	const auto shape_root = fixture.Vm.Retain(shape);
+	Require(std::get<std::int32_t>(fixture.Read(shape, "type")) == 2 && std::get<float>(fixture.Read(shape, "left")) == 91 && std::get<float>(fixture.Read(shape, "top")) == 187 && std::get<float>(fixture.Read(shape, "width")) == 32 && std::get<float>(fixture.Read(shape, "height")) == 48, "child getter shape must snapshot the actual composed signed half extents");
+	static_cast<void>(fixture.Call(motion, "setCoord", {200.0f, 300.0f}));
+	Require(std::get<float>(fixture.Read(getter, "left")) == 107 && std::get<float>(fixture.Read(getter, "top")) == 211, "tail containing pose mutation cannot force child getter composition");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(std::get<float>(fixture.Read(getter, "left")) == 207 && std::get<float>(fixture.Read(getter, "top")) == 311 && std::get<float>(fixture.Read(shape, "left")) == 91, "a genuine containing phase updates the child numeric row while its independent snapshot remains unchanged");
+	Require(fixture.Second().Count() == 1 && fixture.Secondary->PlayerCount() == 1 && fixture.Secondary->Identifiers().LiveCount() == identifiers && task.Commands().ClockState().TickCount == tick && fixture.Uploads == 0, "readonly child getters create no task, selected UID, atlas upload or clock progress");
+}
+
+static void TestNestedBorrowedGetterMotionAndSourceFirstRetirement() {
+	Fixture fixture(2, false, NestedGetterDocument());
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setCoord", {100.0f, 200.0f}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	const auto getter = fixture.Call(child, "getLayerGetter", {std::string("deep child key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	Require(std::get<std::int32_t>(fixture.Read(getter, "type")) == 3, "borrowed lookup must retain the nested actual kind3 node");
+	const auto deep = fixture.Read(getter, "motion");
+	const auto deep_root = fixture.Vm.Retain(deep);
+	const auto alias = fixture.Call(child, "getLayerMotion", {std::string("deep child key")});
+	const auto alias_root = fixture.Vm.Retain(alias);
+	Require(deep != alias && fixture.Vm.IsInstanceOf(deep, fixture.Bindings->MotionClass()), "both real child-scoped routes wrap the same deeper player with separate VM instances");
+	static_cast<void>(fixture.Call(deep, "setVariable", {std::string("nested proof"), 9.0f}));
+	Require(std::get<float>(fixture.Call(alias, "getVariable", {std::string("nested proof")})) == 9 && std::get<float>(fixture.Call(child, "getVariable", {std::string("nested proof")})) == 0 && task.GetVariable("nested proof") == 0, "nested wrapper aliases must share the deeper player without redirecting state to either ancestor");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(child, "getLayerMotion", {std::string("shared lookup key")})), "child-scoped getLayerMotion must return null for an actual shape rather than wrapping its containing player");
+	const auto shape_getter = fixture.Call(deep, "getLayerGetter", {std::string("deep shape key")});
+	const auto shape_getter_root = fixture.Vm.Retain(shape_getter);
+	const auto shape = fixture.Read(shape_getter, "shape");
+	const auto shape_root = fixture.Vm.Retain(shape);
+	Require(std::get<float>(fixture.Read(shape_getter, "left")) == 103 && std::get<float>(fixture.Read(shape_getter, "top")) == 205 && std::get<std::int32_t>(fixture.Read(shape, "type")) == 1, "deeper getter reads its genuine inherited row and circle snapshot");
+	Require(fixture.Second().Count() == 1 && fixture.Secondary->PlayerCount() == 1 && fixture.Secondary->Identifiers().LiveCount() == identifiers, "nested getter factories cannot install another task, player registration or selected UID");
+	fixture.Bindings->NativeOwners().ReleaseInstance(child);
+	Require(std::get<std::int32_t>(fixture.Read(getter, "type")) == 3 && std::get<float>(fixture.Read(shape_getter, "left")) == 103, "retiring an intermediate borrowed VM wrapper must not retire its real selected subtree or derived getters");
+	fixture.Bindings->NativeOwners().ReleaseInstance(motion);
+	fixture.Second().Update();
+	Require(!task.IsLive() && fixture.Secondary->PlayerCount() == 0 && fixture.Secondary->Identifiers().LiveCount() == 0, "weak child getters and nested wrappers must not pin the actual source task or selected UIDs");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(shape_getter, "getLeft"));
+	},
+	    "retired");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(alias, "getVariable", {std::string("nested proof")}));
+	},
+	    "retirement");
+	fixture.Bindings->NativeOwners().ReleaseInstance(deep);
+	fixture.Bindings->NativeOwners().ReleaseInstance(alias);
+	fixture.Vm.ResetExecution();
+	static_cast<void>(fixture.Vm.CollectGarbage());
+	Require(std::get<float>(fixture.Read(shape, "x")) == 103 && std::get<float>(fixture.Read(shape, "y")) == 205 && std::get<bool>(fixture.Call(shape, "contains", {103.0f, 205.0f})), "independent copied shape survives source-first selected/task retirement and actual collection");
+}
+
+static void TestBorrowedChildGetterQueueAndExpiredSelectionGuards() {
+	Fixture fixture(2, false, NestedGetterDocument());
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	const auto getter = fixture.Call(child, "getLayerGetter", {std::string("shared lookup key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	const auto tick = task.Commands().ClockState().TickCount;
+	fixture.Second().Draw(0);
+	try {
+		Require(task.GenericPlayer()->Scene() != nullptr && fixture.Secondary->SceneContext().IsBorrowing(*task.GenericPlayer()->Scene()), "queue fixture must hold a genuine published scene borrow before guarded operations");
+		Require(std::get<float>(fixture.Read(getter, "left")) == 7 && std::get<float>(fixture.Read(getter, "top")) == 11, "existing readonly borrowed getter may inspect retained numeric state while the real scene is queued");
+		const auto queued_getter = fixture.Call(child, "getLayerGetter", {std::string("shared lookup key")});
+		const auto queued_getter_root = fixture.Vm.Retain(queued_getter);
+		Require(std::get<std::int32_t>(fixture.Read(queued_getter, "type")) == 1, "child query itself must preserve existing root-query admission while queued");
+		RequireFailure([&] {
+			static_cast<void>(fixture.Call(child, "setCoord", {9.0f, 10.0f}));
+		},
+		    "queued row borrows");
+		RequireFailure([&] {
+			static_cast<void>(fixture.Call(motion, "clear"));
+		},
+		    "queued");
+		RequireFailure([&] {
+			fixture.Bindings->NativeOwners().ReleaseInstance(motion);
+		},
+		    "idle");
+	} catch (...) {
+		fixture.Primary->SceneContext().Clear();
+		fixture.Secondary->SceneContext().Clear();
+		throw;
+	}
+	fixture.Primary->SceneContext().Clear();
+	fixture.Secondary->SceneContext().Clear();
+	Require(task.Commands().ClockState().TickCount == tick && fixture.Secondary->Identifiers().LiveCount() == identifiers && std::get<float>(fixture.Read(getter, "left")) == 7, "queued rejection preserves actual clock, selected IDs and numeric row before consumption");
+	static_cast<void>(fixture.Call(motion, "clear"));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(getter, "getShape"));
+	},
+	    "retired");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(child, "getLayerGetter", {std::string("shared lookup key")}));
+	},
+	    "retired");
+	Require(task.IsLive() && fixture.Secondary->Identifiers().LiveCount() == 0, "expired child-scope queries cannot recreate the cleared selected tree");
+	fixture.Bindings->NativeOwners().ReleaseInstance(child);
+}
+
+static void TestEmptyBorrowedChildLookupDoesNotEscapeToSibling() {
+	Fixture fixture(2, true);
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto empty = fixture.Call(motion, "getLayerMotion", {std::string("empty child map key")});
+	const auto empty_root = fixture.Vm.Retain(empty);
+	Require(!std::holds_alternative<std::monostate>(fixture.Call(motion, "getLayerGetter", {std::string("nested map key")})), "later selected sibling must genuinely contain the discriminating map entry");
+	Require(std::holds_alternative<std::monostate>(fixture.Call(empty, "getLayerGetter", {std::string("nested map key")})) && std::holds_alternative<std::monostate>(fixture.Call(empty, "getLayerMotion", {std::string("child map key")})), "a live root-only child has no layer catalogue and cannot search its containing or sibling player");
+	Require(fixture.Second().Count() == 1 && fixture.Secondary->PlayerCount() == 1 && fixture.Uploads == 0, "empty borrowed-child queries do not create a selected player, task or replacement texture");
+}
+
 int main() {
 	try {
+		TestBorrowedChildScopedGettersAndRetainedTransforms();
+		TestNestedBorrowedGetterMotionAndSourceFirstRetirement();
+		TestBorrowedChildGetterQueueAndExpiredSelectionGuards();
+		TestEmptyBorrowedChildLookupDoesNotEscapeToSibling();
 		TestDirectBorrowedSyncControls();
 		TestDirectBorrowedChildCoordinate();
 		TestDirectNamedChildMotion();

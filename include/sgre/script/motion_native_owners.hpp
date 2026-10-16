@@ -9,6 +9,7 @@
 #include <string_view>
 
 namespace sgre::script {
+	class ScriptMotionLayerGetters;
 
 	class ScriptMotionNativeOwners {
 	public:
@@ -34,6 +35,9 @@ namespace sgre::script {
 		// A copied weak task view never borrows storage inside a registry row. Detached VM properties supply their recovered defaults.
 		[[nodiscard]] scene::MotionPlayerTask Task(const SquirrelValue& instance) const;
 		[[nodiscard]] SquirrelObjectIdentity LayerIdentity(const SquirrelValue& instance) const;
+		// Getter dispatch preserves the actual borrowed child scope; Task() remains root-control-only.
+		[[nodiscard]] SquirrelValue GetLayerGetter(ScriptMotionLayerGetters& getters, const SquirrelValue& instance, std::string_view name) const;
+		[[nodiscard]] SquirrelValue GetLayerMotion(ScriptMotionLayerGetters& getters, const SquirrelValue& instance, std::string_view name) const;
 		// Native273300 wraps an existing kind3 player with release policy false and no new task/listener.
 		[[nodiscard]] SquirrelValue CreateBorrowedChild(const SquirrelObjectIdentity& layer, const scene::MotionPlayerTask& containing, const scene::MotionChildBorrow& child);
 		[[nodiscard]] const scene::MotionPlayerCommands& Commands(const SquirrelValue& instance) const;

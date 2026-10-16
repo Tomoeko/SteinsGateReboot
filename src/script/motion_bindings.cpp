@@ -298,12 +298,11 @@ namespace sgre::script {
 					throw std::runtime_error(method == MotionMethod::GetLayerMotion ? "Motion.getLayerMotion requires its actual string name" : "Motion.getLayerGetter requires its actual string name");
 				}
 				const auto name = StringText(arguments[1]);
-				const auto task = Owners->Task(instance);
 				if (method == MotionMethod::GetLayerMotion) {
-					return Getters->GetLayerMotion(task, name, Owners->LayerIdentity(instance));
+					return Owners->GetLayerMotion(*Getters, instance, name);
 				}
 
-				return Getters->GetLayerGetter(task, name, Owners->LayerIdentity(instance));
+				return Owners->GetLayerGetter(*Getters, instance, name);
 			}
 			switch (method) {
 			case MotionMethod::SetEventEnabled:

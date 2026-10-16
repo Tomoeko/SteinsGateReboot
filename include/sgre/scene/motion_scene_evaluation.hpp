@@ -91,6 +91,8 @@ namespace sgre::scene {
 		[[nodiscard]] std::span<const MotionStencilRowState* const> PacketRows() const;
 		[[nodiscard]] MotionSceneDrawState DrawState(const MotionStencilRowState& row) const;
 		[[nodiscard]] std::optional<MotionSceneLayerReference> FindLayer(std::string_view name) const;
+		// The actual child commands select a current catalogue subtree; no containing/sibling names leak into its lookup.
+		[[nodiscard]] std::optional<MotionSceneLayerReference> FindLayer(std::string_view name, const MotionPlayerCommands& actual_player) const;
 		[[nodiscard]] MotionShapeSnapshot Shape(const MotionSceneLayerReference& reference) const;
 		[[nodiscard]] std::uint32_t LayerType(const MotionSceneLayerReference& reference) const;
 		// Checked borrow of the actual kind3 player; no task/resource retain. Expires on its genuine retirement.
