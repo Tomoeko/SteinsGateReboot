@@ -363,6 +363,11 @@ namespace sgre::script {
 			if (detached) {
 				return {};
 			}
+			if (method == MotionMethod::SetVisible) {
+				RequireMotionArity(arguments, 2);
+				Owners->SetVisible(instance, MotionBooleanArgument(arguments[1]));
+				return {};
+			}
 			auto task = Owners->Task(instance);
 			switch (method) {
 			case MotionMethod::Play:
@@ -386,10 +391,6 @@ namespace sgre::script {
 			case MotionMethod::SetSpeed:
 				RequireMotionArity(arguments, 2);
 				task.SetSpeed(MotionNumberArgument(arguments[1]));
-				return {};
-			case MotionMethod::SetVisible:
-				RequireMotionArity(arguments, 2);
-				task.SetVisible(MotionBooleanArgument(arguments[1]));
 				return {};
 			default:
 				throw std::runtime_error("Motion native method is outside this recovered new-only adapter");

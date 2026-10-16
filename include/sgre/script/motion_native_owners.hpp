@@ -45,6 +45,7 @@ namespace sgre::script {
 		void SkipToSync(const SquirrelValue& instance);
 		void ReleaseSyncWait(const SquirrelValue& instance);
 		void SetCoordinate(const SquirrelValue& instance, resource::MotionPoint coordinate);
+		void SetVisible(const SquirrelValue& instance, bool visible);
 		void SetZoom(const SquirrelValue& instance, float horizontal, float vertical);
 		void SetOpacity(const SquirrelValue& instance, std::uint32_t opacity);
 		void SetAngleDegrees(const SquirrelValue& instance, float degrees);

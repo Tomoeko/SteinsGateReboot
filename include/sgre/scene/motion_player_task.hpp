@@ -62,6 +62,7 @@ namespace sgre::scene {
 		[[nodiscard]] float GetVariable(std::string_view identifier) const;
 		[[nodiscard]] std::vector<std::string> GetVariableKeys() const;
 		void SetVisible(bool visible);
+		void SetChildVisible(const MotionChildBorrow& child, bool visible);
 		void SetCoordinate(resource::MotionPoint coordinate);
 		void SetChildCoordinate(const MotionChildBorrow& child, resource::MotionPoint coordinate);
 		void SetCoordinate3(const std::array<float, 3>& coordinate);

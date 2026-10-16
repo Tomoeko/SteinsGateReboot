@@ -692,6 +692,45 @@ static void TestBorrowedChildRootAngles() {
 	Require(std::get<float>(fixture.Call(child, "getAngleRad")) == 0 && std::holds_alternative<std::monostate>(fixture.Call(child, "setAngleDeg", {true})), "actual Layer detach preserves the original borrowed wrapper angle defaults");
 }
 
+static void TestBorrowedChildVisibility() {
+	Fixture fixture(2, true);
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	fixture.Second().Update();
+	auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	const auto alias = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto alias_root = fixture.Vm.Retain(alias);
+	const auto sibling = fixture.Call(motion, "getLayerMotion", {std::string("empty child map key")});
+	const auto sibling_root = fixture.Vm.Retain(sibling);
+	const auto sibling_visible = fixture.Read(sibling, "visible");
+	const auto completed = fixture.Bindings->NativeOwners().Root(child).Frame().Hierarchy.Attributes.Hidden;
+	static_cast<void>(fixture.Call(child, "set", {std::string("visible"), false}));
+	Require(fixture.Read(alias, "visible") == sgre::script::SquirrelValue{false} && fixture.Read(sibling, "visible") == sibling_visible && task.Root().Overrides().Visible, "visible property assignment must target the exact borrowed child, shared by aliases and separate from parent/siblings");
+	Require(fixture.Bindings->NativeOwners().Root(child).Frame().Hierarchy.Attributes.Hidden == completed && fixture.Second().Count() == 1, "borrowed visibility must retain the completed pose and create no player task");
+	static_cast<void>(fixture.Call(alias, "setVisible", {true}));
+	Require(fixture.Read(child, "visible") == sgre::script::SquirrelValue{true}, "borrowed visible=true must use the same actual root override");
+	fixture.Second().Draw(0);
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(child, "setVisible", {false}));
+	},
+	    "queued row borrows");
+	Require(fixture.Read(alias, "visible") == sgre::script::SquirrelValue{true}, "queued child mutation must fail before changing visibility");
+	fixture.Secondary->SceneContext().Clear();
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(child, "setVisible", {false}));
+	},
+	    "retired");
+	Require(task.Root().Overrides().Visible, "an expired child setter must never redirect to the surviving parent");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	Require(fixture.Read(child, "visible") == sgre::script::SquirrelValue{false} && std::holds_alternative<std::monostate>(fixture.Call(child, "setVisible", {true})), "actual Layer detachment retains the native visible getter default and setter no-op");
+}
+
 static void TestBorrowedChildRootOpacity() {
 	Fixture fixture(2, true);
 	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
@@ -1284,6 +1323,7 @@ int main() {
 		TestBorrowedChildRootZoom();
 		TestBorrowedChildRootAngles();
 		TestBorrowedChildRootOpacity();
+		TestBorrowedChildVisibility();
 		TestActualClearAndExpiredChildBorrow();
 		TestBorrowedChildParametersAndLifetime();
 		TestRealMapSelectionAndSnapshotLifetime();

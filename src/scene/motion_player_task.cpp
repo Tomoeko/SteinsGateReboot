@@ -465,6 +465,14 @@ namespace sgre::scene {
 		owner->Root.SetCoordinate(coordinate);
 	}
 
+	void MotionPlayerTask::SetChildVisible(const MotionChildBorrow& child, bool visible) {
+		const auto owner = Require();
+		owner->RequireMutable();
+		const MotionTaskControlScope control(owner->Controlling);
+		static_cast<void>(ChildCommands(child));
+		child.Require().Root().SetVisible(visible);
+	}
+
 	void MotionPlayerTask::SetChildCoordinate(const MotionChildBorrow& child, resource::MotionPoint coordinate) {
 		const auto owner = Require();
 		owner->RequireMutable();

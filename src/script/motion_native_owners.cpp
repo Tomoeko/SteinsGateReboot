@@ -452,6 +452,16 @@ namespace sgre::script {
 		}
 	}
 
+	void ScriptMotionNativeOwners::SetVisible(const SquirrelValue& instance, bool visible) {
+		auto& record = m_Implementation->Record(instance);
+		static_cast<void>(Commands(instance));
+		if (record.Child) {
+			record.PlayerTask->SetChildVisible(*record.Child, visible);
+		} else {
+			record.PlayerTask->SetVisible(visible);
+		}
+	}
+
 	void ScriptMotionNativeOwners::SetAngleDegrees(const SquirrelValue& instance, float degrees) {
 		auto& record = m_Implementation->Record(instance);
 		static_cast<void>(Commands(instance));
