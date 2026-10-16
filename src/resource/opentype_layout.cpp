@@ -804,6 +804,59 @@ namespace sgre::resource {
 		return backtrack == 0 && input == 1 && lookahead == 0;
 	}
 
+	static bool CoveredClassChainMayApplyToIsolatedGlyph(std::span<const std::uint8_t> bytes, std::size_t table, std::uint32_t glyph_index, std::uint16_t glyph_count, std::size_t& work) {
+		const auto set_count = LayoutWord(bytes, table + 10);
+		AddLayoutRecords(work, set_count);
+		static_cast<void>(LayoutRange(bytes, table + 12, std::size_t(set_count) * 2));
+		std::uint16_t input_class = 0;
+		const auto class_relative = LayoutWord(bytes, table + 6);
+		if (class_relative != 0) {
+			const auto definition = LayoutOffset(bytes, table, class_relative, 4);
+			const auto classes = bytes.subspan(definition);
+			AddLayoutRecords(work, LayoutWord(classes, LayoutWord(classes, 0) == 1 ? 4 : 2));
+			ValidateGlyphClasses(classes, glyph_count, std::numeric_limits<std::uint16_t>::max());
+			input_class = ClassDefinitionValue(classes, glyph_index);
+		}
+		// Native3ff480 selects the first-input class, independently of coverage order.
+		if (input_class >= set_count) {
+			return false;
+		}
+		const auto relative = LayoutWord(bytes, table + 12 + std::size_t(input_class) * 2);
+		if (relative == 0) {
+			return false;
+		}
+		const auto set = LayoutOffset(bytes, table, relative, 2);
+		const auto rules = LayoutWord(bytes, set);
+		AddLayoutRecords(work, rules);
+		static_cast<void>(LayoutRange(bytes, set + 2, std::size_t(rules) * 2));
+		for (std::size_t index = 0; index < rules; ++index) {
+			const auto rule = LayoutOffset(bytes, set, LayoutWord(bytes, set + 2 + index * 2), 2);
+			const auto backtrack = LayoutWord(bytes, rule);
+			AddLayoutRecords(work, backtrack);
+			static_cast<void>(LayoutRange(bytes, rule + 2, std::size_t(backtrack) * 2));
+			const auto input_field = rule + 2 + std::size_t(backtrack) * 2;
+			const auto input = LayoutWord(bytes, input_field);
+			if (input == 0) {
+				throw std::runtime_error("OpenType chained class context requires an actual leading input");
+			}
+			AddLayoutRecords(work, input);
+			static_cast<void>(LayoutRange(bytes, input_field + 2, std::size_t(input - 1) * 2));
+			const auto lookahead_field = input_field + std::size_t(input) * 2;
+			const auto lookahead = LayoutWord(bytes, lookahead_field);
+			AddLayoutRecords(work, lookahead);
+			static_cast<void>(LayoutRange(bytes, lookahead_field + 2, std::size_t(lookahead) * 2));
+			const auto action_field = lookahead_field + 2 + std::size_t(lookahead) * 2;
+			const auto actions = LayoutWord(bytes, action_field);
+			AddLayoutRecords(work, actions);
+			static_cast<void>(LayoutRange(bytes, action_field + 2, std::size_t(actions) * 4));
+			// Native3ff740 forwards these counts to402450 before any nested action.
+			if (backtrack == 0 && input == 1 && lookahead == 0) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	bool OpenTypeLayoutFont::LookupMayApplyToIsolatedGlyph(std::size_t lookup_index, std::uint32_t glyph_index) const {
 		if (m_Kind != OpenTypeLayoutKind::Substitution || lookup_index >= m_Lookups.size() || glyph_index >= m_GlyphCount) {
 			throw std::runtime_error("OpenType isolated input requires an actual GSUB lookup and glyph index");
@@ -833,6 +886,10 @@ namespace sgre::resource {
 			const auto format = LayoutWord(m_LayoutBytes, table);
 			if (type == 4 && format == 1) {
 				if (CoveredLigatureMayApplyToIsolatedGlyph(m_LayoutBytes, table, *covered, work)) {
+					return true;
+				}
+			} else if (type == 6 && format == 2) {
+				if (CoveredClassChainMayApplyToIsolatedGlyph(m_LayoutBytes, table, glyph_index, m_GlyphCount, work)) {
 					return true;
 				}
 			} else if (type == 6 && format == 3) {

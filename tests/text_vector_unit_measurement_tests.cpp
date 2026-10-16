@@ -224,6 +224,139 @@ static void TestIsolatedLookupEligibility() {
 	    "range exceeds");
 }
 
+static std::vector<std::uint8_t> ClassChainSubtable(std::span<const std::vector<std::array<std::uint16_t, 3>>> sets, std::array<std::uint16_t, 2> input_classes = {1, 0}, bool ranges = false) {
+	auto bytes = Words({2, 0, 0, 0, 0, static_cast<std::uint16_t>(sets.size())});
+	bytes.resize(12 + sets.size() * 2);
+	const auto definition = static_cast<std::uint16_t>(bytes.size());
+	const auto classes = ranges ? Words({2, 2, 1, 1, input_classes[0], 2, 2, input_classes[1]}) : Words({1, 1, 2, input_classes[0], input_classes[1]});
+	bytes.insert(bytes.end(), classes.begin(), classes.end());
+	for (const auto field : {4U, 6U, 8U}) {
+		vector_font_test::WriteWord(bytes, field, definition);
+	}
+	vector_font_test::WriteWord(bytes, 2, static_cast<std::uint16_t>(bytes.size()));
+	const auto coverage = Words({1, 2, 1, 2});
+	bytes.insert(bytes.end(), coverage.begin(), coverage.end());
+	for (std::size_t index = 0; index < sets.size(); ++index) {
+		if (sets[index].empty()) {
+			continue;
+		}
+		const auto set = bytes.size();
+		vector_font_test::WriteWord(bytes, 12 + index * 2, static_cast<std::uint16_t>(set));
+		Word(bytes, static_cast<std::uint16_t>(sets[index].size()));
+		bytes.resize(bytes.size() + sets[index].size() * 2);
+		for (std::size_t rule = 0; rule < sets[index].size(); ++rule) {
+			vector_font_test::WriteWord(bytes, set + 2 + rule * 2, static_cast<std::uint16_t>(bytes.size() - set));
+			const auto& counts = sets[index][rule];
+			Word(bytes, counts[0]);
+			for (std::uint16_t count = 0; count < counts[0]; ++count) {
+				Word(bytes, 1);
+			}
+			Word(bytes, counts[1]);
+			for (std::uint16_t count = 1; count < counts[1]; ++count) {
+				Word(bytes, 1);
+			}
+			Word(bytes, counts[2]);
+			for (std::uint16_t count = 0; count < counts[2]; ++count) {
+				Word(bytes, 1);
+			}
+			// Keep a genuine nested action; missing context alone must prevent its execution.
+			Word(bytes, 1);
+			Word(bytes, 0);
+			Word(bytes, 0);
+		}
+	}
+	return bytes;
+}
+
+static void TestIsolatedClassChainSelection() {
+	const std::vector<std::vector<std::array<std::uint16_t, 3>>> sets{{{0, 1, 0}}, {{1, 1, 0}, {0, 1, 1}, {0, 2, 0}, {1, 1, 1}}};
+	for (const auto ranges : {false, true}) {
+		const std::array<std::vector<std::uint8_t>, 1> subtables{ClassChainSubtable(sets, {1, 0}, ranges)};
+		const auto bytes = std::make_shared<const std::vector<std::uint8_t>>(Font(true, false, false, IsolatedLookup(6, subtables)));
+		const sgre::resource::SfntFont sfnt(*bytes);
+		const sgre::resource::OpenTypeLayoutFont layout(sfnt);
+		Require(layout.LookupInputCoversGlyph(0, 1) && !layout.LookupMayApplyToIsolatedGlyph(0, 1), "class1 selects only rules requiring missing neighbors despite coverage index0 and possible class0");
+		Require(layout.LookupMayApplyToIsolatedGlyph(0, 2), "class0 is selected for the other covered glyph and retains its actual possible action");
+		sgre::text::VectorFont font(bytes);
+		font.SetSize(24);
+		Require(font.MeasureCodeUnit(u'A').Width == 1075.0f / 64 && font.InputBuffer().InputGlyphs().front().GlyphIndex == 1, "class chain eligibility preserves the genuine unit glyph and advance");
+		RequireFailure([&] {
+			static_cast<void>(font.MeasureCodeUnit(u'B'));
+		},
+		    "covered substitution");
+	}
+	for (const auto input_class : {0U, 3U}) {
+		const std::vector<std::vector<std::array<std::uint16_t, 3>>> sparse{{}, {{0, 1, 0}}};
+		const std::array<std::vector<std::uint8_t>, 1> subtables{ClassChainSubtable(sparse, {static_cast<std::uint16_t>(input_class), 1})};
+		const auto bytes = Font(true, false, false, IsolatedLookup(6, subtables));
+		const sgre::resource::SfntFont sfnt(bytes);
+		const sgre::resource::OpenTypeLayoutFont layout(sfnt);
+		Require(!layout.LookupMayApplyToIsolatedGlyph(0, 1), "null or out-of-array actual class set has no native rule to invoke");
+	}
+}
+
+static void TestIsolatedClassChainConservativeGates() {
+	const std::vector<std::vector<std::array<std::uint16_t, 3>>> impossible{{}, {{1, 1, 0}}};
+	const std::vector<std::vector<std::array<std::uint16_t, 3>>> possible{{}, {{1, 1, 0}, {0, 1, 0}}};
+	const auto blocked = ClassChainSubtable(impossible);
+	const auto admitted_action = ClassChainSubtable(possible);
+	for (const auto filtered : {false, true}) {
+		const std::array<std::vector<std::uint8_t>, 2> subtables{blocked, filtered ? blocked : admitted_action};
+		sgre::text::VectorFont font(std::make_shared<const std::vector<std::uint8_t>>(Font(true, false, false, IsolatedLookup(6, subtables, filtered ? 2 : 0))));
+		font.SetSize(24);
+		RequireFailure([&] {
+			static_cast<void>(font.MeasureCodeUnit(u'A'));
+		},
+		    "covered substitution");
+	}
+	auto extension = Words({1, 6, 0, 8});
+	extension.insert(extension.end(), blocked.begin(), blocked.end());
+	const std::array<std::vector<std::uint8_t>, 1> subtables{extension};
+	sgre::text::VectorFont font(std::make_shared<const std::vector<std::uint8_t>>(Font(true, false, false, IsolatedLookup(7, subtables))));
+	font.SetSize(24);
+	Require(font.MeasureCodeUnit(u'A').Width == 1075.0f / 64, "checked extension reaches the actual class-chain neighbor proof");
+	auto class_zero = ClassChainSubtable(possible);
+	vector_font_test::WriteWord(class_zero, 6, 0);
+	const std::array<std::vector<std::uint8_t>, 1> no_definition{class_zero};
+	const auto bytes = Font(true, false, false, IsolatedLookup(6, no_definition));
+	const sgre::resource::SfntFont sfnt(bytes);
+	const sgre::resource::OpenTypeLayoutFont layout(sfnt);
+	Require(!layout.LookupMayApplyToIsolatedGlyph(0, 1), "native null input class definition selects class0, whose set is empty");
+}
+
+static void TestIsolatedClassChainMalformedBounds() {
+	const std::vector<std::vector<std::array<std::uint16_t, 3>>> sets{{}, {{1, 1, 0}}};
+	const auto valid = ClassChainSubtable(sets);
+	for (const auto kind : {0, 1, 2, 3}) {
+		auto table = valid;
+		std::string_view expected;
+		if (kind == 0) {
+			table.resize(table.size() - 1);
+			expected = "range exceeds";
+		} else if (kind == 1) {
+			const auto set = std::size_t(table[14]) * 256 + table[15];
+			const auto rule = set + std::size_t(table[set + 2]) * 256 + table[set + 3];
+			vector_font_test::WriteWord(table, rule + 4, 0);
+			expected = "actual leading input";
+		} else if (kind == 2) {
+			vector_font_test::WriteWord(table, 14, 0xffff);
+			expected = "offset";
+		} else {
+			const auto definition = std::size_t(table[6]) * 256 + table[7];
+			vector_font_test::WriteWord(table, definition + 2, 3);
+			expected = "class range";
+		}
+		const std::array<std::vector<std::uint8_t>, 1> subtables{table};
+		const auto bytes = Font(true, false, false, IsolatedLookup(6, subtables));
+		const sgre::resource::SfntFont sfnt(bytes);
+		const sgre::resource::OpenTypeLayoutFont layout(sfnt);
+		RequireFailure([&] {
+			static_cast<void>(layout.LookupMayApplyToIsolatedGlyph(0, 1));
+		},
+		    expected);
+	}
+}
+
 static void TestExtensionSingleUnitMeasurement() {
 	auto extension = Words({1, 1, 0, 8});
 	const auto single = Words({2, 8, 1, 2, 1, 1, 1});
@@ -373,6 +506,9 @@ int main(int argc, char** argv) {
 		} else {
 			TestActualOwnedBufferAndLookupBoundaries();
 			TestIsolatedLookupEligibility();
+			TestIsolatedClassChainSelection();
+			TestIsolatedClassChainConservativeGates();
+			TestIsolatedClassChainMalformedBounds();
 			TestExtensionSingleUnitMeasurement();
 			TestRealFontInfoSharedSource();
 			std::cout << "actual neutral vector unit measurement and FontInfo lifetime passed\n";
