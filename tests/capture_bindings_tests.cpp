@@ -2,10 +2,13 @@
 
 #include "sgre/scene/layer_base_frame.hpp"
 #include "sgre/scene/layer_camera_draw.hpp"
+#include "sgre/script/binary_bindings.hpp"
 #include "sgre/script/layer_bindings.hpp"
+#include "sgre/script/raw_image_bindings.hpp"
 
 #include "capture_native_vectors.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstdint>
@@ -324,12 +327,30 @@ static void TestActualBaseCommonFirstAndVmLifetime() {
 	CaptureBackend backend;
 	sgre::script::SquirrelVm vm(CaptureVmLimits());
 	sgre::script::ScriptObjectBindings objects(vm);
+	sgre::script::ScriptBinaryBindings binary(vm, objects);
+	sgre::script::ScriptRawImageBindings images(vm, objects, binary);
 	sgre::scene::LayerTree tree;
 	sgre::script::ScriptLayerBindings layers(vm, objects, tree);
 	std::array<sgre::scene::MotionScissorMatrix, 1> models;
 	sgre::scene::LayerCameraDrawScope camera(CameraState(), models, [](const auto&) {
 	});
 	sgre::script::ScriptCaptureBindings captures(vm, objects, layers);
+	std::size_t thumbnail_reads = 0;
+	captures.ConfigureThumbnailReadback(images, [&](auto& texture, auto width, auto height) {
+		Require(texture.UsesBackend(backend) && !texture.State().Locked, "thumbnail service must receive the actual unlocked captured texture");
+		++thumbnail_reads;
+		std::vector<std::uint8_t> pixels(static_cast<std::size_t>(width) * height * 4);
+		for (std::uint32_t y = 0; y < height; ++y) {
+			for (std::uint32_t x = 0; x < width; ++x) {
+				const auto offset = (static_cast<std::size_t>(y) * width + x) * 4;
+				pixels[offset] = static_cast<std::uint8_t>(x);
+				pixels[offset + 1] = static_cast<std::uint8_t>(y);
+				pixels[offset + 2] = static_cast<std::uint8_t>(x + y);
+				pixels[offset + 3] = static_cast<std::uint8_t>(100 + x + y * 10);
+			}
+		}
+		return pixels;
+	});
 	CaptureObserver consumer(backend);
 	std::vector<std::shared_ptr<sgre::scene::CaptureTask>> pending;
 	std::size_t copies = 0;
@@ -389,10 +410,26 @@ static void TestActualBaseCommonFirstAndVmLifetime() {
 		RequireError([&] {
 			Call(vm, capture, "storeThumbnail");
 		},
-		    "staging readback");
+		    "requires a RawImage");
+		const std::array<SquirrelValue, 3> image_arguments{vm.RootTable(), std::int32_t(2), std::int32_t(2)};
+		const auto image = vm.Invoke(images.RawImageClass(), image_arguments).Value;
+		const auto image_root = vm.Retain(image);
+		Call(vm, image, "clearUpdate");
+		Require(std::holds_alternative<std::monostate>(Call(vm, capture, "storeThumbnail", {image, 2.0f})), "raw-VM thumbnail callback removes its descriptor and returns no values");
+		Require(std::ranges::equal(images.Image(image).BgraPixels(), std::vector<std::uint8_t>{0, 0, 1, 105, 2, 0, 3, 107, 0, 2, 3, 125, 2, 2, 5, 127}) && !images.Image(image).IsUpdated() && thumbnail_reads == 1, "thumbnail area reduction must use actual BGRA and truncated arithmetic without changing the native update flag");
+		Call(vm, capture, "storeThumbnail", {image});
+		Require(std::ranges::equal(images.Image(image).BgraPixels(), std::vector<std::uint8_t>{0, 0, 0, 100, 1, 0, 1, 101, 0, 1, 1, 110, 1, 1, 2, 111}) && thumbnail_reads == 2, "default scale-one thumbnail copies the real tight image without reduction");
+		RequireError([&] {
+			Call(vm, capture, "storeThumbnail", {image, 0.0f});
+		},
+		    "bounded nonshrinking");
 		layers.DispatchBaseFrame(handle, [](const auto&, auto& frame) {
 			frame.Draw(0);
 		});
+		RequireError([&] {
+			Call(vm, capture, "storeThumbnail", {image});
+		},
+		    "preceding frame to be submitted");
 		const auto physical = pending.front();
 		physical->AddConsumer(consumer);
 		release_frame(true);

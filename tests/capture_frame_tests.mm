@@ -412,6 +412,66 @@ static void TestActualCurrentScreenSource(const std::filesystem::path& shader, c
 	Require(!observation.WindowVisible && !observation.WindowKey && observation.DrawableRequests == 0, "nested Screen Capture must remain hidden without a drawable");
 }
 
+static void TestActualThumbnailReadback(const std::filesystem::path& shader) {
+	sgre::render::SpritePassRenderer renderer(Description(), shader);
+	sgre::scene::MotionSpriteMaterial material;
+	auto pipeline = sgre::scene::SelectSpritePipeline(material, {});
+	pipeline.NativeVertexShaderIndex = 3;
+	pipeline.NativePixelShaderIndex = 60;
+	pipeline.VertexColor = sgre::scene::SpriteVertexColor::Multiply;
+	const auto prepared = renderer.PreparePipeline(pipeline);
+	auto backend = renderer.CreateMutableTextureBackend();
+	sgre::render::SpriteFrameEncoder encoder(renderer);
+	sgre::scene::CaptureTask task(8, 8);
+	task.SetOffset({4, 4});
+	try {
+		encoder.Begin({}, sgre::render::SpritePassLoadAction::Clear);
+		const std::array rectangles{Rectangle(-1, 1, 0, 0, 0xffff0000), Rectangle(0, 1, 1, 0, 0xff00ff00), Rectangle(-1, 0, 0, -1, 0xff0000ff), Rectangle(0, 0, 1, -1, 0xffffff00)};
+		for (const auto& rectangle : rectangles) {
+			sgre::render::SpritePassDraw draw;
+			draw.Pipeline = prepared;
+			draw.FillRectangleVertices = rectangle.Vertices;
+			draw.FillRectangleColor = rectangle.Color;
+			encoder.Append(draw, kIdentity);
+		}
+		task.Draw(*backend, ActualFrameContext(), [&](const auto& spec) {
+			return encoder.PrepareCaptureTexture(*backend, spec);
+		},
+		    [&](auto& destination, const auto& bounds) {
+			    encoder.CopyCaptureCurrentTarget(destination, bounds);
+		    });
+		RequireFailure([&] {
+			static_cast<void>(renderer.CaptureThumbnail(task.Texture(), 2, 2));
+		},
+		    "encoding");
+		static_cast<void>(encoder.End());
+		task.ReleaseFrame(true);
+		// Overwriting the primary must not change the earlier actual Capture snapshot.
+		static_cast<void>(renderer.Submit({}, kIdentity, {1, 1, 1, 1}));
+		const auto thumbnail = renderer.CaptureThumbnail(task.Texture(), 2, 2);
+		RequirePixel(thumbnail, 0, 0, {255, 0, 0, 255});
+		RequirePixel(thumbnail, 1, 0, {0, 255, 0, 255});
+		RequirePixel(thumbnail, 0, 1, {0, 0, 255, 255});
+		RequirePixel(thumbnail, 1, 1, {255, 255, 0, 255});
+		const auto center = renderer.CaptureThumbnail(task.Texture(), 1, 1);
+		RequirePixel(center, 0, 0, {128, 128, 64, 255});
+		RequireFailure([&] {
+			static_cast<void>(renderer.CaptureThumbnail(task.Texture(), 0, 2));
+		},
+		    "positive dimensions");
+		sgre::render::SpritePassRenderer foreign(Description(), shader);
+		RequireFailure([&] {
+			static_cast<void>(foreign.CaptureThumbnail(task.Texture(), 2, 2));
+		},
+		    "resource domain");
+		task.Close();
+	} catch (...) {
+		encoder.Abort();
+		task.ReleaseFrame(false);
+		throw;
+	}
+}
+
 int main(int argc, char** argv) {
 	@try {
 		try {
@@ -419,6 +479,7 @@ int main(int argc, char** argv) {
 			@autoreleasepool {
 				const auto foreground = NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier;
 				TestActualCycleCapture(argv[1], argv[2]);
+				TestActualThumbnailReadback(argv[1]);
 				TestSameBufferMainCompanionBinding(argv[1]);
 				TestActualCurrentScreenSource(argv[1], argv[2]);
 				Require(NSApp.windows.count == 0 && !NSApp.active && NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier == foreground, "Capture verification changed foreground/activation or retained a window");

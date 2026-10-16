@@ -236,4 +236,8 @@ namespace sgre::script {
 		m_Implementation->Release(instance);
 	}
 
+	void ScriptRawImageBindings::StoreThumbnail(const SquirrelValue& instance, std::span<const std::uint8_t> bgra) {
+		m_Implementation->Record(instance).Image->RestoreThumbnail(bgra);
+	}
+
 } // namespace sgre::script

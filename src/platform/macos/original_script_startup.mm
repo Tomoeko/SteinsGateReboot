@@ -445,6 +445,14 @@ namespace sgre::platform {
 			m_Captures->ConfigureFrameOwners(m_Owners.Display.Cycle().CaptureBackend(), [this](const auto& task) {
 				m_Owners.Display.Cycle().DrawCapture(task);
 			});
+			m_Captures->ConfigureThumbnailReadback(m_RawImages, [this](auto& texture, auto width, auto height) {
+				auto pixels = m_Owners.Graphics.PrimaryTarget()->CaptureThumbnail(texture, width, height);
+				for (std::size_t offset = 0; offset < pixels.Rgba.size(); offset += 4) {
+					std::swap(pixels.Rgba[offset], pixels.Rgba[offset + 2]);
+				}
+
+				return std::move(pixels.Rgba);
+			});
 			m_Owners.Display.Cycle().PrepareCaptured();
 			m_Captured = std::make_unique<script::ScriptCapturedBindings>(m_Vm, m_Objects, m_Layers, *m_Captures, [this](auto& texture, const auto& packet) {
 				m_Owners.Display.Cycle().DrawCaptured(texture, packet);

@@ -118,6 +118,9 @@ namespace sgre::render {
 		[[nodiscard]] bool CanSubmit() const;
 		[[nodiscard]] std::uint64_t Submit(std::span<const SpritePassDraw> draws, const std::array<float, 16>& projection_registers, const std::array<float, 4>& clear_color = {}, SpritePassLoadAction load_action = SpritePassLoadAction::Clear);
 		[[nodiscard]] ColorPassPixels Capture(std::uint64_t submission);
+		// Native Capture thumbnail preparation: render the actual staging companion with linear sampling, then read it once.
+		// Requires submitted capture input and idle shared encoding; never called by ordinary frame drawing.
+		[[nodiscard]] ColorPassPixels CaptureThumbnail(scene::MutableTextureOwner& actual_capture, std::uint32_t width, std::uint32_t height);
 		// Read this actual target after the exact same-domain outer frame that last wrote it.
 		[[nodiscard]] ColorPassPixels CaptureAfterFrame(const SpritePassRenderer& actual_frame_owner, std::uint64_t actual_submission);
 		[[nodiscard]] SpritePassDescription Description() const;

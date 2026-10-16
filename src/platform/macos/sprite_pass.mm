@@ -1794,6 +1794,43 @@ namespace sgre::render {
 		return pixels;
 	}
 
+	ColorPassPixels SpritePassRenderer::CaptureThumbnail(scene::MutableTextureOwner& capture, std::uint32_t width, std::uint32_t height) {
+		auto& state = *m_Implementation;
+		state.RequireIdleEncoding();
+		const auto source = capture.State();
+		if (source.Storage != scene::MutableTextureStorage::StagingCompanion || source.Locked || !source.HasCompanion || capture.Companion() == nullptr || width == 0 || height == 0) {
+			throw std::runtime_error("Capture thumbnail requires its actual unlocked staging/companion source and positive dimensions");
+		}
+		static_cast<void>(SpriteMutableStagingTexture(capture.Resource(), state.Resources.get()));
+		auto description = state.Description;
+		description.Width = width;
+		description.Height = height;
+		description.MaxVertices = 4;
+		description.MaxIndices = 4;
+		description.MaxDraws = 1;
+		SpritePassRenderer thumbnail(description, *this);
+		scene::MotionSpriteMaterial material;
+		material.TextureFormat = resource::PixelFormat::Bc7;
+		material.TextureAttributes = 4;
+		material.BlendMode = 6;
+		scene::SpritePipelineOptions options;
+		options.Sampling = scene::TextureSampling::Linear;
+		auto pipeline = scene::SelectSpritePipeline(material, options);
+		pipeline.NativeVertexShaderIndex = 4;
+		const auto prepared_pipeline = thumbnail.PreparePipeline(pipeline);
+		capture.SetFiltering(1, 1);
+		capture.Bind(0, scene::MutableTextureStage::Pixel);
+		const auto packet = scene::PrepareRawTextureDrawPacket({-1, 1}, {2, -2}, 0xffffffff);
+		SpritePassDraw draw;
+		draw.Texture = SpriteMutableTextureHandle(capture.Companion()->Resource());
+		draw.Pipeline = prepared_pipeline;
+		draw.RawTextureVertices = packet.Vertices;
+		const std::array<float, 16> projection{1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1};
+		const auto submitted = thumbnail.Submit(std::span(&draw, 1), projection);
+
+		return thumbnail.Capture(submitted);
+	}
+
 	SpritePassDescription SpritePassRenderer::Description() const {
 		return m_Implementation->Description;
 	}

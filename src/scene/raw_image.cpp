@@ -96,6 +96,13 @@ namespace sgre::scene {
 		m_Updated = true;
 	}
 
+	void RawImage::RestoreThumbnail(std::span<const std::uint8_t> bgra) {
+		if (bgra.size() != m_Pixels.size()) {
+			throw std::runtime_error("raw image thumbnail requires its exact packed BGRA byte count");
+		}
+		std::copy(bgra.begin(), bgra.end(), m_Pixels.begin());
+	}
+
 	void RawImage::BoxBlur(std::uint32_t horizontal_radius, std::uint32_t vertical_radius, std::uint32_t iterations) {
 		static constexpr std::size_t kMaximumBlurPixelVisits = 256 * 1024 * 1024;
 		if (horizontal_radius > m_Width / 2 || vertical_radius > m_Height / 2 || iterations == 0 || iterations > kMaximumBlurPixelVisits / (m_Pixels.size() / 4)) {

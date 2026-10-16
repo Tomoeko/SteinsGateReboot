@@ -37,6 +37,8 @@ namespace sgre::scene {
 		void AdjustLevel(const std::array<std::int32_t, 6>& endpoints);
 		// Native restore accepts exactly packed RGB or RGBA bytes and copies input before conversion.
 		void RestorePixels(std::span<const std::uint8_t> rgb_or_rgba);
+		// Capture.storeThumbnail writes the CPU storage without changing the wrapper's update flag.
+		void RestoreThumbnail(std::span<const std::uint8_t> bgra);
 		[[nodiscard]] std::vector<std::uint8_t> StorePixels(bool include_alpha) const;
 
 	private:

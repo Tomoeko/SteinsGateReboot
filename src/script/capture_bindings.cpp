@@ -2,10 +2,12 @@
 
 #include "sgre/scene/layer_base_frame.hpp"
 #include "sgre/script/layer_bindings.hpp"
+#include "sgre/script/raw_image_bindings.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstdint>
 #include <exception>
 #include <map>
@@ -55,6 +57,41 @@ namespace sgre::script {
 		SquirrelObjectIdentity Instance;
 		std::shared_ptr<scene::CaptureTask> Task;
 	};
+
+	static std::uint32_t ThumbnailExtent(std::uint32_t dimension, float scale) {
+		const auto scaled = static_cast<float>(dimension) * scale;
+		if (!std::isfinite(scale) || scale < 1 || !std::isfinite(scaled) || scaled < 1 || scaled >= 16385) {
+			throw std::runtime_error("Capture thumbnail scale requires a bounded nonshrinking intermediate image");
+		}
+		return static_cast<std::uint32_t>(scaled);
+	}
+
+	static std::vector<std::uint8_t> ReduceThumbnail(std::span<const std::uint8_t> pixels, std::uint32_t source_width, std::uint32_t source_height, std::uint32_t width, std::uint32_t height) {
+		std::vector<std::uint8_t> result(static_cast<std::size_t>(width) * height * 4);
+		for (std::uint32_t y = 0; y < height; ++y) {
+			const auto first_y = static_cast<std::uint64_t>(y) * source_height / height;
+			const auto last_y = static_cast<std::uint64_t>(y + 1) * source_height / height;
+			for (std::uint32_t x = 0; x < width; ++x) {
+				const auto first_x = static_cast<std::uint64_t>(x) * source_width / width;
+				const auto last_x = static_cast<std::uint64_t>(x + 1) * source_width / width;
+				std::array<std::uint64_t, 4> sums{};
+				for (auto row = first_y; row < last_y; ++row) {
+					for (auto column = first_x; column < last_x; ++column) {
+						const auto offset = static_cast<std::size_t>((row * source_width + column) * 4);
+						for (std::size_t channel = 0; channel < 4; ++channel) {
+							sums[channel] += pixels[offset + channel];
+						}
+					}
+				}
+				const auto count = (last_y - first_y) * (last_x - first_x);
+				const auto offset = (static_cast<std::size_t>(y) * width + x) * 4;
+				for (std::size_t channel = 0; channel < 4; ++channel) {
+					result[offset + channel] = static_cast<std::uint8_t>(sums[channel] / count);
+				}
+			}
+		}
+		return result;
+	}
 
 	class ScriptCaptureBindings::Implementation {
 	public:
@@ -145,8 +182,38 @@ namespace sgre::script {
 			}
 		}
 
-		SquirrelNativeResult Invoke(CaptureMethod method, const SquirrelValue& receiver) {
-			const auto task = Record(receiver).Task;
+		void StoreThumbnail(std::span<const SquirrelValue> arguments) {
+			if (arguments.size() != 2 && arguments.size() != 3) {
+				throw std::runtime_error("Capture.storeThumbnail requires a RawImage and optional scale; typed-array output still requires its recovered mutable owner");
+			}
+			if (Images == nullptr || !ReadingThumbnail) {
+				throw std::runtime_error("Capture.storeThumbnail requires its actual image and staging readback services");
+			}
+			const auto& image = Images->Image(arguments[1]);
+			const auto scale = arguments.size() == 3 ? CaptureFloat(arguments[2]) : 1.0f;
+			const auto width = ThumbnailExtent(image.Width(), scale);
+			const auto height = ThumbnailExtent(image.Height(), scale);
+			static constexpr std::size_t kMaximumThumbnailBytes = 64 * 1024 * 1024;
+			if (width > kMaximumThumbnailBytes / 4 / height) {
+				throw std::runtime_error("Capture thumbnail intermediate exceeds its bounded pixel storage");
+			}
+			const auto task = Record(arguments[0]).Task;
+			if (task->State().FramePending) {
+				throw std::runtime_error("Capture thumbnail requires the preceding frame to be submitted before readback");
+			}
+			auto pixels = ReadingThumbnail(task->Texture(), width, height);
+			if (pixels.size() != static_cast<std::size_t>(width) * height * 4) {
+				throw std::runtime_error("Capture thumbnail readback returned a truncated actual image");
+			}
+			if (scale == 1) {
+				Images->StoreThumbnail(arguments[1], pixels);
+			} else {
+				Images->StoreThumbnail(arguments[1], ReduceThumbnail(pixels, width, height, image.Width(), image.Height()));
+			}
+		}
+
+		SquirrelNativeResult Invoke(CaptureMethod method, std::span<const SquirrelValue> arguments) {
+			const auto task = Record(arguments[0]).Task;
 			switch (method) {
 			case CaptureMethod::GetWidth:
 				return SquirrelNativeResult::ReturnValue(task->State().FixedSize.X);
@@ -156,7 +223,10 @@ namespace sgre::script {
 				task->SetOffset({CaptureFloat(Vm.NativeAllocatedStackValue(2)), CaptureFloat(Vm.NativeAllocatedStackValue(3))});
 				return SquirrelNativeResult::NoValues();
 			case CaptureMethod::StoreThumbnail:
-				throw std::runtime_error("Capture.storeThumbnail requires its actual staging readback and native image/byte-array producer");
+				// Native078ed0 removes the captured member descriptor before the raw-VM target28f170.
+				Vm.SetNativeStackSize(Vm.NativeStackSize() - 1);
+				StoreThumbnail(arguments.first(arguments.size() - 1));
+				return SquirrelNativeResult::NoValues();
 			}
 			throw std::runtime_error("Capture member has no recovered native dispatch");
 		}
@@ -169,6 +239,8 @@ namespace sgre::script {
 		SquirrelHostRoot ClassRoot;
 		scene::MutableTextureBackend* Backend = nullptr;
 		DrawCapture Drawing;
+		ScriptRawImageBindings* Images = nullptr;
+		ReadThumbnail ReadingThumbnail;
 		std::map<std::uint32_t, CaptureRecord> Records;
 		bool EverConstructed = false;
 	};
@@ -196,15 +268,14 @@ namespace sgre::script {
 		}));
 		const auto method = [&](const char* name, CaptureMethod identity) {
 			const std::array<SquirrelValue, 1> capture{vm.CreateUserData(CaptureMetadata(identity))};
-			vm.NewSlot(state.Class, std::string(name), vm.CreateNativeClosureWithCaptures(
-			                                               std::string("Capture.") + name, [weak, identity](SquirrelVm& active, auto arguments) {
-				                                               const auto owner = weak.lock();
-				                                               if (!owner || arguments.empty()) {
-					                                               throw std::runtime_error("Capture member requires its actual owner and original receiver");
-				                                               }
-				                                               RequireCaptureMetadata(active, identity);
-				                                               return owner->Invoke(identity, arguments[0]);
-			                                               },
+			vm.NewSlot(state.Class, std::string(name), vm.CreateNativeClosureWithCaptures(std::string("Capture.") + name, [weak, identity](SquirrelVm& active, auto arguments) {
+				const auto owner = weak.lock();
+				if (!owner || arguments.empty()) {
+					throw std::runtime_error("Capture member requires its actual owner and original receiver");
+				}
+				RequireCaptureMetadata(active, identity);
+				return owner->Invoke(identity, arguments);
+			},
 			                                               capture));
 		};
 		method("getWidth", CaptureMethod::GetWidth);
@@ -227,6 +298,15 @@ namespace sgre::script {
 
 	SquirrelValue ScriptCaptureBindings::CaptureClass() const {
 		return m_Implementation->Class;
+	}
+
+	void ScriptCaptureBindings::ConfigureThumbnailReadback(ScriptRawImageBindings& actual_images, ReadThumbnail actual_readback) {
+		auto& state = *m_Implementation;
+		if (state.Vm.IsClosed() || state.Images != nullptr || !actual_readback || state.EverConstructed) {
+			throw std::runtime_error("Capture thumbnail services require one actual configuration before construction");
+		}
+		state.Images = &actual_images;
+		state.ReadingThumbnail = std::move(actual_readback);
 	}
 
 	std::shared_ptr<scene::CaptureTask> ScriptCaptureBindings::BorrowTask(const SquirrelValue& instance) const {

@@ -28,6 +28,7 @@ namespace sgre::script {
 		[[nodiscard]] SquirrelValue RawImageClass() const;
 		// Borrows the actual mutable image until its script instance retires.
 		[[nodiscard]] const scene::RawImage& Image(const SquirrelValue& instance) const;
+		void StoreThumbnail(const SquirrelValue& instance, std::span<const std::uint8_t> bgra);
 		void ReleaseInstance(const SquirrelValue& instance);
 
 	private:
