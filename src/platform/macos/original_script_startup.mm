@@ -55,6 +55,7 @@
 #include "sgre/script/motion_resource_owner.hpp"
 #include "sgre/script/native_math.hpp"
 #include "sgre/script/native_texture_bindings.hpp"
+#include "sgre/script/original_calendar_restore.hpp"
 #include "sgre/script/original_scene_seek.hpp"
 #include "sgre/script/packed_color_bindings.hpp"
 #include "sgre/script/prepared_driver_close.hpp"
@@ -132,6 +133,7 @@ namespace sgre::platform {
 		bool Headless = true;
 		std::optional<script::ScriptDebugSceneEntry> SceneEntry;
 		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
+		std::optional<scenario::ScenarioCalendarCommand> SceneCalendar;
 	};
 
 	static std::unique_ptr<script::SquirrelVm> CreateOriginalStartupVm() {
@@ -327,6 +329,12 @@ namespace sgre::platform {
 			}
 			if (m_Owners.SceneSeek) {
 				m_SceneSeek = std::make_unique<script::OriginalSceneSeek>(m_Vm, *m_Owners.SceneSeek);
+			}
+			if (m_Owners.SceneCalendar) {
+				if (!m_Owners.SceneEntry) {
+					throw std::runtime_error("original calendar restoration requires its explicit direct snapshot entry");
+				}
+				m_CalendarRestore = std::make_unique<script::OriginalCalendarRestore>(m_Vm, *m_Owners.SceneCalendar);
 			}
 			m_Inputs.ConfigureFrameOwners(m_Owners.Looper, m_Controller.Parallel(), [this](const auto&, const auto& mappings) {
 				auto actual_frame = m_Owners.Platform.ReadHubFrame(mappings);
@@ -664,6 +672,10 @@ namespace sgre::platform {
 			if (m_Closed) {
 				return;
 			}
+			if (m_CalendarRestore) {
+				m_CalendarRestore->Cancel();
+				m_CalendarRestore.reset();
+			}
 			if (m_SceneSeek) {
 				m_SceneSeek->Cancel();
 				m_SceneSeek.reset();
@@ -825,6 +837,14 @@ namespace sgre::platform {
 			}
 			if (m_SceneSeek) {
 				m_SceneSeek->InstallAvailableHooks();
+			}
+			if (m_CalendarRestore) {
+				m_CalendarRestore->InstallAvailableHook();
+				const auto& state = m_CalendarRestore->Observation();
+				if (!m_CalendarReported || *m_CalendarReported != state.Phase) {
+					m_CalendarReported = state.Phase;
+					std::cerr << "originalCalendarRestore phase=" << static_cast<std::uint32_t>(state.Phase) << " reason=" << std::quoted(state.Reason) << '\n';
+				}
 			}
 		}
 
@@ -1172,6 +1192,8 @@ namespace sgre::platform {
 		script::ScriptInputBindings m_Inputs;
 		bool m_SceneEntryInstalled = false;
 		std::unique_ptr<script::OriginalSceneSeek> m_SceneSeek;
+		std::unique_ptr<script::OriginalCalendarRestore> m_CalendarRestore;
+		std::optional<script::OriginalCalendarRestorePhase> m_CalendarReported;
 		std::optional<script::OriginalSceneSeekPhase> m_ReportedSeekPhase;
 		std::size_t m_ReportedMovieRequests = 0;
 		std::size_t m_ReportedMovieConfirmations = 0;
@@ -1343,6 +1365,7 @@ namespace sgre::platform {
 		bool Headless = true;
 		std::optional<script::ScriptDebugSceneEntry> SceneEntry;
 		std::optional<script::OriginalSceneSeekTarget> SceneSeek;
+		std::optional<scenario::ScenarioCalendarCommand> SceneCalendar;
 		render::SpritePresentationDescription Presentation;
 		std::filesystem::path ConfigurationWorkspace;
 		std::optional<app::LaunchConfiguration> Configuration;
@@ -1433,7 +1456,7 @@ namespace sgre::platform {
 
 					                             return m_Output->Description().Channels;
 				                             },
-				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek};
+				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek, m_Run.SceneCalendar};
 				m_Driver = std::make_unique<OriginalScriptStartup>(std::move(owners), m_Run.Installation, m_Run.ArchiveSeed);
 				m_Driver->ConfigureApplicationClose(m_Events);
 				InstallFinishCloseReceiver();
@@ -2292,6 +2315,9 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 			entry.Storage = target.CanonicalStorage;
 			entry.TargetLine = target.SourceLine;
 			run.SceneEntry = std::move(entry);
+			const auto calendar = sgre::scenario::ReadScenarioCalendarRestore(sgre::scenario::ScenarioSearchLocation{run.Installation, run.ArchiveSeed}, target);
+			run.SceneCalendar = calendar.Command;
+			std::cerr << "original calendar entry: " << calendar.Reason << '\n';
 		} else {
 			sgre::script::OriginalSceneSeekTarget seek;
 			seek.Storage = target.CanonicalStorage;

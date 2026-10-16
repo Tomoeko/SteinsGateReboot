@@ -64,6 +64,7 @@ add_library(sgre_resource
 	src/input/mouse.cpp
 	src/io/file_reader.cpp
 	src/scenario/scenario_search.cpp
+	src/scenario/calendar_restore.cpp
 	src/io/file_read_serial.cpp
 	src/io/raw_read_destination.cpp
 	src/io/persistent_raw_queue.cpp
@@ -306,6 +307,7 @@ add_library(sgre_resource
 	src/script/native_format.cpp
 	src/script/driver_logs.cpp
 	src/script/debug_scene_entry.cpp
+	src/script/original_calendar_restore.cpp
 	src/script/original_scene_seek.cpp
 	src/script/driver_phases.cpp
 	src/script/native_float.cpp
@@ -625,6 +627,7 @@ if(SGRE_BUILD_TESTS)
 		launch_configuration
 		display_path
 		original_debug_scene_entry
+		original_calendar_restore
 		original_scene_seek
 		scenario_search
 		resource_cache
