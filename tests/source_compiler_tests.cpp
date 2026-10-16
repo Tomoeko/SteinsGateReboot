@@ -245,7 +245,7 @@ static void TestLogicalConditionalAndRootExpressions() {
 	Require(std::get<std::int32_t>(Run(vm, "return ::toint(TARGET_SYSTEM==\"PS4\"&&!::isCircleButtonOK())", receiver)) == 0 && trace.empty(), "actual platform expression must skip the native circle query on another platform");
 	vm.SetSlot(vm.ConstantTable(), std::string("TARGET_SYSTEM"), std::string("PS4"));
 	Require(std::get<std::int32_t>(Run(vm, "return ::toint(TARGET_SYSTEM==\"PS4\"&&!::isCircleButtonOK())", receiver)) == 1 && trace == "C", "actual platform expression must call root query and preserve unary precedence");
-	for (const auto source : {"return !;", "return true ? 1;", "return true ? : 1;", "return false ||;", "return ::;", "return ::this;", "return 1 & 2;", "return 1 | 2;"}) {
+	for (const auto source : {"return !;", "return true ? 1;", "return true ? : 1;", "return false ||;", "return ::;", "return ::this;"}) {
 		RequireFailure([&] {
 			static_cast<void>(CompileSquirrelSource(vm, source, "control-error"));
 		},
@@ -395,7 +395,7 @@ static void TestRelationalOperatorsAndNativePrecedence() {
 		}
 		Require(comparisons == expected, "original equality and relational operators must share one left-associative level");
 	}
-	for (const auto source : {"return 1<;", "return 1>=;", "return 1<<2;", "return 1>>2;", "return 1<=>2;"}) {
+	for (const auto source : {"return 1<;", "return 1>=;", "return 1<=>2;"}) {
 		RequireFailure([&] {
 			static_cast<void>(CompileSquirrelSource(vm, source, "relation-error"));
 		},
@@ -430,7 +430,7 @@ static void TestActualDialogThresholdCompilation() {
 
 static void TestUnsupportedGrammarAndDiagnostics() {
 	SquirrelVm vm;
-	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "if (true) return 1;", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
+	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
 		RequireFailure([&] {
 			static_cast<void>(CompileSquirrelSource(vm, source, "rejected-source"));
 		},
@@ -919,7 +919,7 @@ static void TestLoopSideEffectOrderAndSuspension() {
 static void TestLocalGrammarSafetyAndLimits() {
 	SquirrelVm vm;
 	vm.NewSlot(vm.ConstantTable(), std::string("IMMUTABLE"), std::int32_t{9});
-	for (const auto source : {"local = 1;", "local value = ;", "for local i = 0;", "for (local i = 0 i < 2; i++) {}", "for (local i = 0; i < 2 i++) {}", "for (local i = 0; i < 2; i++ {}", "for (;;) break;", "for (;;) continue;", "return { value : 1 };", "return { [1 = 2 };", "return [1,;", "return { value = 1; };", "return 1 = 2;", "return 1++;", "return (1 + 2)++;", "local value = 1; return (value) = 3;", "IMMUTABLE = 7;", "return IMMUTABLE++;", "return ++this.value;", "return --this.value;", "return this.value--1;", "return 2 * 3;", "return function() :(value) { return value; };"}) {
+	for (const auto source : {"local = 1;", "local value = ;", "for local i = 0;", "for (local i = 0 i < 2; i++) {}", "for (local i = 0; i < 2 i++) {}", "for (local i = 0; i < 2; i++ {}", "for (;;) break;", "for (;;) continue;", "return { value : 1 };", "return { [1 = 2 };", "return [1,;", "return { value = 1; };", "return 1 = 2;", "return 1++;", "return (1 + 2)++;", "local value = 1; return (value) = 3;", "IMMUTABLE = 7;", "return IMMUTABLE++;", "return ++this.value;", "return --this.value;", "return this.value--1;", "return function() :(value) { return value; };"}) {
 		RequireFailure([&] {
 			static_cast<void>(CompileSquirrelSource(vm, source, "local-grammar-error"));
 		},
@@ -951,11 +951,82 @@ static void TestLocalGrammarSafetyAndLimits() {
 	Require(std::get<std::int32_t>(Run(vm, "local value = 6; value++; return value + 1;", vm.RootTable())) == 8, "rejected syntax must leave compiler and VM available for a genuine later local program");
 }
 
+static void TestVariadicAndDefaultCallbacks() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	const auto program = CompileSquirrelSource(vm, "return function(value, ...) { return value + vargc + vargv[0]; };", "variadic-source");
+	const auto& prototype = program.MainFunction.Functions.front();
+	Require(prototype.HasVariableParameters && prototype.Parameters.size() == 2 && prototype.DefaultParameters.empty(), "variadic callback changed its fixed parameter/default prototype");
+	const auto function = Run(vm, "return function(value, ...) { return value + vargc + vargv[0]; };", receiver);
+	const std::array<SquirrelValue, 4> arguments{receiver, std::int32_t{10}, std::int32_t{7}, std::int32_t{99}};
+	Require(std::get<std::int32_t>(vm.Invoke(function, arguments).Value) == 19, "variadic callback lost fixed argument, surplus count or indexed first argument");
+	const auto empty = Run(vm, "return function(...) { return vargc; };", receiver);
+	const std::array<SquirrelValue, 1> no_arguments{receiver};
+	Require(std::get<std::int32_t>(vm.Invoke(empty, no_arguments).Value) == 0, "empty variadic call invented an argument");
+	RequireFailure([&] {
+		static_cast<void>(vm.Invoke(function, no_arguments));
+	},
+	    "parameter");
+
+	std::vector<std::int32_t> evaluated;
+	vm.NewSlot(receiver, std::string("capture"), vm.CreateNativeClosure("capture_default", [&](SquirrelVm&, std::span<const SquirrelValue> actual) {
+		Require(actual.size() == 2 && actual[0] == receiver, "default expression lost the enclosing receiver");
+		const auto value = std::get<std::int32_t>(actual[1]);
+		evaluated.push_back(value);
+		return sgre::script::SquirrelNativeResult::ReturnValue(value);
+	}));
+	const auto defaults_program = CompileSquirrelSource(vm, "return function(required, first=capture(13), second=capture(17)) { return [required,first,second]; };", "default-source");
+	Require(evaluated.empty() && defaults_program.MainFunction.Functions.front().DefaultParameters.size() == 2, "compilation executed defaults or lost their prototype capture slots");
+	const auto factory = vm.CreateClosure(defaults_program);
+	const auto defaults = vm.Invoke(factory, no_arguments).Value;
+	Require(evaluated == std::vector<std::int32_t>{13, 17}, "defaults must execute once, in order, during closure creation");
+	const std::array<SquirrelValue, 2> required{receiver, std::int32_t{5}};
+	const auto omitted = vm.Invoke(defaults, required).Value;
+	Require(std::get<std::int32_t>(vm.GetSlot(omitted, std::int32_t{0})) == 5 && std::get<std::int32_t>(vm.GetSlot(omitted, std::int32_t{1})) == 13 && std::get<std::int32_t>(vm.GetSlot(omitted, std::int32_t{2})) == 17, "omitted trailing parameters did not use the owned closure defaults");
+	const std::array<SquirrelValue, 3> explicit_null{receiver, std::int32_t{8}, {}};
+	const auto supplied = vm.Invoke(defaults, explicit_null).Value;
+	Require(std::holds_alternative<std::monostate>(vm.GetSlot(supplied, std::int32_t{1})) && std::get<std::int32_t>(vm.GetSlot(supplied, std::int32_t{2})) == 17 && evaluated.size() == 2, "explicit null was treated as omission or defaults ran again on invocation");
+	const auto local_default = Run(vm, "local outer = 23; return function(value=outer) { return value; };", receiver);
+	Require(std::get<std::int32_t>(vm.Invoke(local_default, no_arguments).Value) == 23, "default did not capture the enclosing local through the genuine closure prototype");
+	const auto false_default = Run(vm, "return function(enabled=false) { return enabled; };", receiver);
+	Require(!std::get<bool>(vm.Invoke(false_default, no_arguments).Value), "boolean default did not retain its VM type/value");
+	for (const auto source : {"return function(first=1,second) {};", "return function(first=1,...) {};", "return function(...,last) {};", "return function(first,...,last) {};", "return function(first=) {};"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "parameter-error"));
+		},
+		    "parameter-error");
+	}
+}
+
+static void TestMenuArithmeticAndScopedConditionals() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	for (const auto& [source, expected] : std::array<std::pair<std::string_view, std::int32_t>, 9>{{{"return 2+3*4;", 14}, {"return 20/3*2;", 12}, {"return -7%3;", -1}, {"return 1|2^3&6;", 1}, {"return 1<<3+1;", 16}, {"return 8>>1+1;", 2}, {"return 0x80000000>>>31;", 1}, {"return -8>>2;", -2}, {"return ~0;", -1}}}) {
+		Require(std::get<std::int32_t>(Run(vm, source, receiver)) == expected, "multiplicative/bitwise/shift operator precedence or native VM operation differs");
+	}
+	Require(std::get<bool>(Run(vm, "return (3&1)==1;", receiver)), "parenthesized flag comparison differs");
+	Require(std::get<bool>(Run(vm, "return \"entry\" in {entry=9};", receiver)) && !std::get<bool>(Run(vm, "return \"absent\" in {entry=9};", receiver)), "compiled membership did not use original key/receiver ordering");
+	Require(!std::get<bool>(Run(vm, "return false && \"entry\" in missing_container;", receiver)), "membership bypassed logical short circuit");
+	Require(std::get<std::int32_t>(Run(vm, "local value=4; return value*(value=5);", receiver)) == 25, "multiplication incorrectly froze its native live local operand");
+	Require(std::get<std::int32_t>(Run(vm, "if(false) return 1; else if(true) return 2; else return 3;", receiver)) == 2, "conditional branch selection or return patching differs");
+	Require(std::get<std::int32_t>(Run(vm, "if(true) if(false) return 1; else return 2; return 3;", receiver)) == 2, "else did not bind to its nearest unpaired conditional");
+	Require(std::get<std::int32_t>(Run(vm, "if(true) return 7 else return 9", receiver)) == 7, "original else statement boundary was rejected");
+	vm.NewSlot(receiver, std::string("value"), std::int32_t{41});
+	Require(std::get<std::int32_t>(Run(vm, "if(true) local value=3; else local value=8; return value;", receiver)) == 41, "unbraced conditional local escaped its native branch scope");
+	Require(std::get<std::int32_t>(Run(vm, "local total=0; for(local i=0;i<5;i++){if(i%2==0) total=total+i; else total=total+10;} return total;", receiver)) == 26, "conditional/modulo loop control lost branch side effects");
+	RequireFailure([&] {
+		static_cast<void>(Run(vm, "return 7%0;", receiver));
+	},
+	    "zero");
+}
+
 int main() {
 	try {
 		TestLiteralsStatementsAndMainPrototype();
 		TestCompileIsInertAndCallsPreserveReceivers();
 		TestNestedFunctionsParametersAndEquality();
+		TestVariadicAndDefaultCallbacks();
+		TestMenuArithmeticAndScopedConditionals();
 		TestConstantSnapshotsAndCurrentContextRoot();
 		TestLogicalConditionalAndRootExpressions();
 		TestCommaExpressionsAndArgumentBoundaries();

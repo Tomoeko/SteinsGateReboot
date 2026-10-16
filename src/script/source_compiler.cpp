@@ -33,11 +33,22 @@ namespace sgre::script {
 		LeftBracket,
 		RightBracket,
 		Dot,
+		Ellipsis,
 		Comma,
 		Semicolon,
 		Assign,
 		Plus,
 		Minus,
+		Multiply,
+		Divide,
+		Remainder,
+		BitAnd,
+		BitOr,
+		BitXor,
+		BitNot,
+		ShiftLeft,
+		ShiftRight,
+		ShiftRightUnsigned,
 		Increment,
 		Equal,
 		NotEqual,
@@ -150,6 +161,10 @@ namespace sgre::script {
 				break;
 			case '.':
 				token.Kind = SourceTokenKind::Dot;
+				if (m_Source.substr(m_Position, 2) == "..") {
+					m_Position += 2;
+					token.Kind = SourceTokenKind::Ellipsis;
+				}
 				break;
 			case ',':
 				token.Kind = SourceTokenKind::Comma;
@@ -177,10 +192,32 @@ namespace sgre::script {
 				}
 				token.Kind = SourceTokenKind::Minus;
 				break;
+			case '*':
+				token.Kind = SourceTokenKind::Multiply;
+				break;
+			case '/':
+				token.Kind = SourceTokenKind::Divide;
+				break;
+			case '%':
+				token.Kind = SourceTokenKind::Remainder;
+				break;
+			case '^':
+				token.Kind = SourceTokenKind::BitXor;
+				break;
+			case '~':
+				token.Kind = SourceTokenKind::BitNot;
+				break;
 			case '<':
 			case '>':
 				token.Kind = value == '<' ? SourceTokenKind::Less : SourceTokenKind::Greater;
-				if (m_Position < m_Source.size() && m_Source[m_Position] == '=') {
+				if (m_Position < m_Source.size() && m_Source[m_Position] == value) {
+					++m_Position;
+					token.Kind = value == '<' ? SourceTokenKind::ShiftLeft : SourceTokenKind::ShiftRight;
+					if (value == '>' && m_Position < m_Source.size() && m_Source[m_Position] == '>') {
+						++m_Position;
+						token.Kind = SourceTokenKind::ShiftRightUnsigned;
+					}
+				} else if (m_Position < m_Source.size() && m_Source[m_Position] == '=') {
 					++m_Position;
 					token.Kind = value == '<' ? SourceTokenKind::LessEqual : SourceTokenKind::GreaterEqual;
 				}
@@ -194,10 +231,11 @@ namespace sgre::script {
 				break;
 			case '&':
 			case '|':
-				if (m_Position == m_Source.size() || m_Source[m_Position++] != value) {
-					Fail(token.Offset, "unsupported bitwise operator in recovered expression grammar");
+				token.Kind = value == '&' ? SourceTokenKind::BitAnd : SourceTokenKind::BitOr;
+				if (m_Position < m_Source.size() && m_Source[m_Position] == value) {
+					++m_Position;
+					token.Kind = value == '&' ? SourceTokenKind::And : SourceTokenKind::Or;
 				}
-				token.Kind = value == '&' ? SourceTokenKind::And : SourceTokenKind::Or;
 				break;
 			case '?':
 				token.Kind = SourceTokenKind::Question;
@@ -473,16 +511,30 @@ namespace sgre::script {
 			child.Function.SourceName = m_Name;
 			child.Function.Parameters.emplace_back(std::string("this"));
 			Require(SourceTokenKind::LeftParenthesis, "anonymous function requires parameter list");
-			if (m_Token.Kind != SourceTokenKind::RightParenthesis) {
-				do {
-					if (m_Token.Kind != SourceTokenKind::Identifier || SourceKeyword(m_Token.Text) || std::find(child.Locals.begin(), child.Locals.end(), m_Token.Text) != child.Locals.end()) {
-						Fail("function requires unique non-keyword parameter names");
+			while (m_Token.Kind != SourceTokenKind::RightParenthesis) {
+				if (Accept(SourceTokenKind::Ellipsis)) {
+					if (!child.Function.DefaultParameters.empty()) {
+						Fail("function with default parameters cannot have variable number of parameters");
 					}
-					child.Function.Parameters.emplace_back(m_Token.Text);
-					child.Locals.push_back(m_Token.Text);
-					static_cast<void>(Allocate(child));
-					m_Token = m_Lexer.Next();
-				} while (Accept(SourceTokenKind::Comma));
+					child.Function.HasVariableParameters = true;
+					break;
+				}
+				if (m_Token.Kind != SourceTokenKind::Identifier || SourceKeyword(m_Token.Text) || std::find(child.Locals.begin(), child.Locals.end(), m_Token.Text) != child.Locals.end()) {
+					Fail("function requires unique non-keyword parameter names");
+				}
+				child.Function.Parameters.emplace_back(m_Token.Text);
+				child.Locals.push_back(m_Token.Text);
+				static_cast<void>(Allocate(child));
+				m_Token = m_Lexer.Next();
+				if (Accept(SourceTokenKind::Assign)) {
+					// Native25e060 evaluates defaults in the enclosing function before creating the closure.
+					child.Function.DefaultParameters.push_back(Materialize(parent, Expression(parent)));
+				} else if (!child.Function.DefaultParameters.empty()) {
+					Fail("expected '=' after a default parameter");
+				}
+				if (!Accept(SourceTokenKind::Comma)) {
+					break;
+				}
 			}
 			Require(SourceTokenKind::RightParenthesis, "function parameter list requires closing parenthesis");
 			Require(SourceTokenKind::LeftBrace, "function body requires opening brace");
@@ -600,6 +652,20 @@ namespace sgre::script {
 				if (token.Text == "function") {
 					return Function(state);
 				}
+				if (token.Text == "vargc" || token.Text == "vargv") {
+					SourceOperand result;
+					if (token.Text == "vargc") {
+						result.Register = Allocate(state);
+						Emit(state, 28, result.Register);
+					} else {
+						Require(SourceTokenKind::LeftBracket, "vargv requires indexed access");
+						const auto index = Materialize(state, Expression(state));
+						Require(SourceTokenKind::RightBracket, "vargv requires closing bracket");
+						result.Register = Allocate(state);
+						Emit(state, 29, result.Register, index);
+					}
+					return result;
+				}
 				if (token.Text == "null") {
 					return LoadConstant(state, {});
 				}
@@ -700,7 +766,7 @@ namespace sgre::script {
 
 		SourceOperand Unary(SourceFunctionState& state) {
 			const auto operation = m_Token.Kind;
-			if (operation != SourceTokenKind::Not && operation != SourceTokenKind::Minus) {
+			if (operation != SourceTokenKind::Not && operation != SourceTokenKind::Minus && operation != SourceTokenKind::BitNot) {
 				return Postfix(state);
 			}
 			m_Token = m_Lexer.Next();
@@ -709,17 +775,34 @@ namespace sgre::script {
 			--m_Depth;
 			SourceOperand result;
 			result.Register = Allocate(state);
-			Emit(state, operation == SourceTokenKind::Not ? 46 : 45, result.Register, value);
+			Emit(state, operation == SourceTokenKind::Not ? 46 : operation == SourceTokenKind::Minus ? 45
+			                                                                                         : 47,
+			    result.Register, value);
 			return result;
 		}
 
-		SourceOperand Additive(SourceFunctionState& state) {
+		SourceOperand Multiplicative(SourceFunctionState& state) {
 			auto left = Unary(state);
-			while (m_Token.Kind == SourceTokenKind::Plus || m_Token.Kind == SourceTokenKind::Minus) {
+			while (m_Token.Kind == SourceTokenKind::Multiply || m_Token.Kind == SourceTokenKind::Divide || m_Token.Kind == SourceTokenKind::Remainder) {
 				const auto operation = m_Token.Kind;
 				m_Token = m_Lexer.Next();
 				const auto left_value = Materialize(state, left);
 				const auto right_value = Materialize(state, Unary(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 17, left.Register, right_value, left_value, operation == SourceTokenKind::Multiply ? '*' : operation == SourceTokenKind::Divide ? '/'
+				                                                                                                                                            : '%');
+			}
+			return left;
+		}
+
+		SourceOperand Additive(SourceFunctionState& state) {
+			auto left = Multiplicative(state);
+			while (m_Token.Kind == SourceTokenKind::Plus || m_Token.Kind == SourceTokenKind::Minus) {
+				const auto operation = m_Token.Kind;
+				m_Token = m_Lexer.Next();
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, Multiplicative(state));
 				left = {};
 				left.Register = Allocate(state);
 				Emit(state, 17, left.Register, right_value, left_value, operation == SourceTokenKind::Plus ? '+' : '-');
@@ -727,13 +810,28 @@ namespace sgre::script {
 			return left;
 		}
 
-		SourceOperand Comparison(SourceFunctionState& state) {
+		SourceOperand Shift(SourceFunctionState& state) {
 			auto left = Additive(state);
-			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual || m_Token.Kind == SourceTokenKind::Less || m_Token.Kind == SourceTokenKind::Greater || m_Token.Kind == SourceTokenKind::LessEqual || m_Token.Kind == SourceTokenKind::GreaterEqual) {
+			while (m_Token.Kind == SourceTokenKind::ShiftLeft || m_Token.Kind == SourceTokenKind::ShiftRight || m_Token.Kind == SourceTokenKind::ShiftRightUnsigned) {
 				const auto operation = m_Token.Kind;
 				m_Token = m_Lexer.Next();
 				const auto left_value = Materialize(state, left);
 				const auto right_value = Materialize(state, Additive(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 18, left.Register, right_value, left_value, operation == SourceTokenKind::ShiftLeft ? 4 : operation == SourceTokenKind::ShiftRight ? 5
+				                                                                                                                                               : 6);
+			}
+			return left;
+		}
+
+		SourceOperand Comparison(SourceFunctionState& state) {
+			auto left = Shift(state);
+			while (m_Token.Kind == SourceTokenKind::Equal || m_Token.Kind == SourceTokenKind::NotEqual || m_Token.Kind == SourceTokenKind::Less || m_Token.Kind == SourceTokenKind::Greater || m_Token.Kind == SourceTokenKind::LessEqual || m_Token.Kind == SourceTokenKind::GreaterEqual) {
+				const auto operation = m_Token.Kind;
+				m_Token = m_Lexer.Next();
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, Shift(state));
 				left = {};
 				left.Register = Allocate(state);
 				if (operation == SourceTokenKind::Equal || operation == SourceTokenKind::NotEqual) {
@@ -753,8 +851,58 @@ namespace sgre::script {
 			return left;
 		}
 
+		SourceOperand BitwiseAnd(SourceFunctionState& state) {
+			auto left = Comparison(state);
+			while (Accept(SourceTokenKind::BitAnd)) {
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, Comparison(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 18, left.Register, right_value, left_value, 0);
+			}
+			return left;
+		}
+
+		SourceOperand BitwiseXor(SourceFunctionState& state) {
+			auto left = BitwiseAnd(state);
+			while (Accept(SourceTokenKind::BitXor)) {
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, BitwiseAnd(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 18, left.Register, right_value, left_value, 3);
+			}
+			return left;
+		}
+
+		SourceOperand BitwiseOr(SourceFunctionState& state) {
+			auto left = BitwiseXor(state);
+			while (Accept(SourceTokenKind::BitOr)) {
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, BitwiseXor(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, 18, left.Register, right_value, left_value, 2);
+			}
+			return left;
+		}
+
+		SourceOperand Membership(SourceFunctionState& state) {
+			auto left = BitwiseOr(state);
+			while (Keyword("in") || Keyword("instanceof")) {
+				const bool instance_of = Keyword("instanceof");
+				m_Token = m_Lexer.Next();
+				const auto left_value = Materialize(state, left);
+				const auto right_value = Materialize(state, BitwiseOr(state));
+				left = {};
+				left.Register = Allocate(state);
+				Emit(state, instance_of ? 42 : 41, left.Register, right_value, left_value);
+			}
+			return left;
+		}
+
 		SourceOperand LogicalAnd(SourceFunctionState& state) {
-			const auto left = Comparison(state);
+			const auto left = Membership(state);
 			if (!Accept(SourceTokenKind::And)) {
 				return left;
 			}
@@ -864,7 +1012,7 @@ namespace sgre::script {
 		}
 
 		void FinishStatement() {
-			if (!Accept(SourceTokenKind::Semicolon) && m_Token.Kind != SourceTokenKind::End && m_Token.Kind != SourceTokenKind::RightBrace && !m_Token.NewlineBefore) {
+			if (!Accept(SourceTokenKind::Semicolon) && m_Token.Kind != SourceTokenKind::End && m_Token.Kind != SourceTokenKind::RightBrace && !m_Token.NewlineBefore && !Keyword("else")) {
 				Fail("unsupported statement continuation in recovered grammar");
 			}
 		}
@@ -894,6 +1042,35 @@ namespace sgre::script {
 				state.NextRegister = state.Locals.size();
 				state.Function.StackSize = std::max(state.Function.StackSize, static_cast<std::uint32_t>(state.NextRegister));
 			} while (Accept(SourceTokenKind::Comma));
+		}
+
+		void ScopedStatement(SourceFunctionState& state) {
+			const auto outer_locals = state.Locals.size();
+			CompileStatement(state);
+			state.Locals.resize(outer_locals);
+			state.NextRegister = outer_locals;
+		}
+
+		void IfStatement(SourceFunctionState& state) {
+			m_Token = m_Lexer.Next();
+			Require(SourceTokenKind::LeftParenthesis, "if requires opening parenthesis");
+			const auto condition = Materialize(state, CommaExpression(state));
+			Require(SourceTokenKind::RightParenthesis, "if requires closing parenthesis");
+			const auto false_branch = state.Function.Instructions.size();
+			Emit(state, 26, condition);
+			state.NextRegister = state.Locals.size();
+			ScopedStatement(state);
+			if (!Keyword("else")) {
+				PatchBranch(state, false_branch);
+				return;
+			}
+
+			m_Token = m_Lexer.Next();
+			const auto end_branch = state.Function.Instructions.size();
+			Emit(state, 24);
+			PatchBranch(state, false_branch);
+			ScopedStatement(state);
+			PatchBranch(state, end_branch);
 		}
 
 		void ForStatement(SourceFunctionState& state) {
@@ -948,6 +1125,8 @@ namespace sgre::script {
 				Require(SourceTokenKind::RightBrace, "block requires closing brace");
 				state.Locals.resize(outer_locals);
 				state.NextRegister = outer_locals;
+			} else if (Keyword("if")) {
+				IfStatement(state);
 			} else if (Keyword("for")) {
 				ForStatement(state);
 			} else {
