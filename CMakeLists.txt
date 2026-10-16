@@ -61,6 +61,7 @@ add_library(sgre_resource
 	src/input/frame_sample.cpp
 	src/input/mouse.cpp
 	src/io/file_reader.cpp
+	src/scenario/scenario_search.cpp
 	src/io/file_read_serial.cpp
 	src/io/raw_read_destination.cpp
 	src/io/persistent_raw_queue.cpp
@@ -564,6 +565,18 @@ target_sources(sgre_resource PRIVATE
 add_executable(sgre-inspect tools/inspect_main.cpp)
 target_link_libraries(sgre-inspect PRIVATE sgre_resource)
 set_target_properties(sgre-inspect PROPERTIES CXX_EXTENSIONS OFF)
+target_compile_options(sgre-inspect PRIVATE -Werror)
+
+if(APPLE)
+	add_library(sgre_platform_inspect STATIC src/platform/macos/inspect_gui.mm)
+	target_include_directories(sgre_platform_inspect PUBLIC include)
+	target_compile_features(sgre_platform_inspect PUBLIC cxx_std_20)
+	target_compile_options(sgre_platform_inspect PRIVATE -fobjc-arc -Werror)
+	target_link_libraries(sgre_platform_inspect PUBLIC sgre_resource sgre_build_options "-framework Foundation" "-framework AppKit")
+	set_target_properties(sgre_platform_inspect PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+	target_link_libraries(sgre-inspect PRIVATE sgre_platform_inspect)
+	target_compile_definitions(sgre-inspect PRIVATE SGRE_HAS_INSPECT_GUI=1)
+endif()
 
 if(SGRE_BUILD_TESTS)
 	enable_testing()
@@ -587,6 +600,7 @@ if(SGRE_BUILD_TESTS)
 		md5
 		launch_configuration
 		original_debug_scene_entry
+		scenario_search
 		resource_cache
 		resource_receiving_observation
 		squirrel_vm

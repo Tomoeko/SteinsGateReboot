@@ -7,13 +7,21 @@
 #include <filesystem>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 
 namespace sgre::app {
+	struct LaunchSceneJump {
+		std::string Storage;
+		std::int32_t TargetLine = 0;
+	};
+
 	struct LaunchArguments {
 		std::optional<std::filesystem::path> Installation;
 		// Per-launch override; the persisted configuration remains an independent explicit default.
 		std::optional<bool> DebugStartInGame;
+		// Exact original scenario storage/source line; never serialized into launch configuration.
+		std::optional<LaunchSceneJump> Jump;
 		std::optional<bool> Fullscreen;
 		std::optional<bool> WindowCentered;
 		std::optional<std::filesystem::path> SaveDirectory;

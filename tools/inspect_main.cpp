@@ -1,9 +1,11 @@
 #include "sgre/io/file_reader.hpp"
 #include "sgre/media/webm.hpp"
+#include "sgre/platform/inspect_gui.hpp"
 #include "sgre/resource/archive_index.hpp"
 #include "sgre/resource/mzs_shell.hpp"
 #include "sgre/resource/psb.hpp"
 #include "sgre/resource/zstd_decoder.hpp"
+#include "sgre/scenario/scenario_search.hpp"
 #include "sgre/script/squirrel_bytecode.hpp"
 
 #include <algorithm>
@@ -14,10 +16,12 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -32,6 +36,10 @@ struct Options {
 	std::filesystem::path Output;
 	std::string Entry;
 	std::string ResourceName;
+	std::string Query;
+	std::optional<std::filesystem::path> GameRoot;
+	std::string Language = "en";
+	std::size_t ResultLimit = 50;
 	std::size_t Period = 131;
 	bool List = false;
 };
@@ -46,7 +54,44 @@ static std::size_t ReadSize(std::string_view value) {
 	return number;
 }
 
+static Options ReadSearchOptions(int argc, char** argv) {
+	if (argc < 3) {
+		throw std::runtime_error("usage: sgre-inspect search QUERY [--game-root PATH] [--language en|ja|tc|sc] [--limit N]");
+	}
+	Options options;
+	options.Command = "search";
+	options.Query = argv[2];
+	for (int index = 3; index < argc; ++index) {
+		const std::string_view option = argv[index];
+		if (index + 1 >= argc) {
+			throw std::runtime_error("missing value for " + std::string(option));
+		}
+		const std::string_view value = argv[++index];
+		if (option == "--game-root") {
+			if (value.empty()) {
+				throw std::runtime_error("search --game-root requires an installation path");
+			}
+			options.GameRoot = std::filesystem::path(std::u8string(value.begin(), value.end()));
+		} else if (option == "--language") {
+			options.Language = value;
+		} else if (option == "--limit") {
+			const auto parsed = std::from_chars(value.data(), value.data() + value.size(), options.ResultLimit);
+			if (parsed.ec != std::errc() || parsed.ptr != value.data() + value.size() || options.ResultLimit == 0 || options.ResultLimit > 10000) {
+				throw std::runtime_error("search --limit requires an integer from 1 to 10000");
+			}
+		} else {
+			throw std::runtime_error("unknown search option: " + std::string(option));
+		}
+	}
+
+	return options;
+}
+
 static Options ReadOptions(int argc, char** argv) {
+	if (argc >= 2 && std::string_view(argv[1]) == "search") {
+		return ReadSearchOptions(argc, argv);
+	}
+
 	if (argc < 3) {
 		throw std::runtime_error("usage: sgre-inspect inspect|scan|script|movie|index|extract INPUT [--seed-file FILE] [--period N] [--body FILE] [--list] [--entry NAME --resource-name NAME --output FILE]");
 	}
@@ -339,10 +384,106 @@ static void ExtractEntry(const Options& options) {
 	}
 }
 
+static std::string DisplayText(std::string_view text) {
+	static constexpr std::string_view kHex = "0123456789abcdef";
+	std::string result;
+	for (const auto character : text) {
+		if (character == '\n') {
+			result += "\\n";
+		} else if (character == '\r') {
+			result += "\\r";
+		} else if (character == '\t') {
+			result += "\\t";
+		} else if (character == '\\') {
+			result += "\\\\";
+		} else if (static_cast<unsigned char>(character) < 32 || character == 127) {
+			const auto byte = static_cast<unsigned char>(character);
+			result += "\\x";
+			result += kHex[byte >> 4];
+			result += kHex[byte & 15];
+		} else {
+			result += character;
+		}
+	}
+
+	return result;
+}
+
+static std::string ShellArgument(std::string_view value) {
+	std::string result = "'";
+	for (const auto character : value) {
+		if (character == '\'') {
+			result += "'\\''";
+		} else {
+			result += character;
+		}
+	}
+	result += '\'';
+
+	return result;
+}
+
+static void SearchScenarios(const Options& options) {
+	auto location = sgre::scenario::ResolveScenarioSearchLocation(std::filesystem::current_path(), options.GameRoot);
+	std::string game_command = "sgre-game";
+	if (options.GameRoot) {
+		const auto encoded = location.Installation.u8string();
+		game_command += " " + ShellArgument(std::string(encoded.begin(), encoded.end()));
+	}
+	sgre::scenario::ScenarioSearchCatalog catalog(std::move(location));
+	sgre::scenario::ScenarioSearchRequest request;
+	request.Query = options.Query;
+	request.Language = options.Language;
+	request.Limit = options.ResultLimit;
+	const auto results = catalog.Search(request);
+	std::cout << results.Matches.size() << (results.Matches.size() == 1 ? " match" : " matches") << (results.Truncated ? " (more matches available; increase --limit)" : "") << '\n';
+	for (std::size_t index = 0; index < results.Matches.size(); ++index) {
+		const auto& match = results.Matches[index];
+		std::cout << '\n';
+		std::cout << index + 1 << ". " << DisplayText(match.Storage) << ':' << match.SourceLine << "  scene=" << DisplayText(match.SceneLabel) << "  character=" << DisplayText(match.Character) << '\n';
+		std::cout << "   original: " << DisplayText(match.OriginalText) << '\n';
+		std::cout << "   " << DisplayText(match.Language) << ": " << DisplayText(match.Translation) << '\n';
+		if (match.TranslatedSourceLine) {
+			std::cout << "   translated source line: " << *match.TranslatedSourceLine << '\n';
+		}
+		std::cout << "   " << game_command << " --jump " << ShellArgument(match.JumpTarget) << '\n';
+	}
+}
+
+static int RunGui(int argc, char** argv) {
+#ifdef SGRE_HAS_INSPECT_GUI
+	sgre::platform::InspectGuiOptions options;
+	for (int index = 2; index < argc; ++index) {
+		const std::string_view option = argv[index];
+		if (option != "--game-root" || options.Installation || index + 1 >= argc) {
+			throw std::runtime_error("usage: sgre-inspect --gui [--game-root PATH]");
+		}
+
+		const std::string_view value = argv[++index];
+		if (value.empty() || value.starts_with("--")) {
+			throw std::runtime_error("--game-root requires an installation path");
+		}
+		options.Installation = std::filesystem::path(std::u8string(value.begin(), value.end()));
+	}
+
+	return sgre::platform::RunInspectGui(options);
+#else
+	(void)argc;
+	(void)argv;
+	throw std::runtime_error("the inspector GUI is currently available on macOS");
+#endif
+}
+
 int main(int argc, char** argv) {
 	try {
+		if (argc >= 2 && std::string_view(argv[1]) == "--gui") {
+			return RunGui(argc, argv);
+		}
+
 		const auto options = ReadOptions(argc, argv);
-		if (options.Command == "inspect") {
+		if (options.Command == "search") {
+			SearchScenarios(options);
+		} else if (options.Command == "inspect") {
 			InspectPsb(options);
 		} else if (options.Command == "scan") {
 			ScanPsb(options);

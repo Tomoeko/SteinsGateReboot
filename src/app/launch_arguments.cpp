@@ -1,6 +1,7 @@
 #include "sgre/app/launch_arguments.hpp"
 
 #include <charconv>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -45,6 +46,31 @@ namespace sgre::app {
 		return std::filesystem::path(encoded);
 	}
 
+	static LaunchSceneJump ParseSceneJump(std::string_view value) {
+		const auto colon = value.find(':');
+		if (colon == std::string_view::npos || value.find(':', colon + 1) != std::string_view::npos) {
+			throw std::runtime_error("--jump requires an exact scenario basename and decimal source line: SCENE.ks:LINE");
+		}
+		const auto storage = value.substr(0, colon);
+		if (storage.size() <= 3 || !storage.ends_with(".ks")) {
+			throw std::runtime_error("--jump scene must be an exact nonempty .ks basename");
+		}
+		for (const auto character : storage) {
+			const auto byte = static_cast<unsigned char>(character);
+			if (byte < 32 || byte == 127 || character == '/' || character == '\\') {
+				throw std::runtime_error("--jump scene must preserve its exact basename without paths or control characters");
+			}
+		}
+		const auto line = value.substr(colon + 1);
+		std::int32_t target = 0;
+		const auto parsed = std::from_chars(line.data(), line.data() + line.size(), target);
+		if (line.empty() || line.front() == '-' || parsed.ec != std::errc{} || parsed.ptr != line.data() + line.size() || target < 0) {
+			throw std::runtime_error("--jump line requires a decimal integer in0.." + std::to_string(std::numeric_limits<std::int32_t>::max()));
+		}
+
+		return {std::string(storage), target};
+	}
+
 	LaunchArguments ParseLaunchArguments(std::span<const std::string_view> arguments) {
 		if (arguments.size() > kMaximumLaunchArguments) {
 			throw std::runtime_error("launch argument count exceeds32");
@@ -62,6 +88,9 @@ namespace sgre::app {
 			if (option == "--skip-startup" || option == "--debug-start-in-game" || option == "--normal-start") {
 				RequireUnique(result.DebugStartInGame.has_value(), "startup sequence");
 				result.DebugStartInGame = option != "--normal-start";
+			} else if (option == "--jump") {
+				RequireUnique(result.Jump.has_value(), "scene jump");
+				result.Jump = ParseSceneJump(OptionValue(arguments, index));
 			} else if (option == "--fullscreen" || option == "--windowed") {
 				RequireUnique(result.Fullscreen.has_value(), "window mode");
 				result.Fullscreen = option == "--fullscreen";
@@ -93,6 +122,13 @@ namespace sgre::app {
 				result.Installation = LaunchPath(option);
 			}
 		}
+		if (result.Jump) {
+			if (result.DebugStartInGame == false) {
+				throw std::runtime_error("--jump cannot be combined with --normal-start");
+			}
+			result.DebugStartInGame = true;
+		}
+
 		return result;
 	}
 

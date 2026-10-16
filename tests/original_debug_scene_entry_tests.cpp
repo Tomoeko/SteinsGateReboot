@@ -1,5 +1,6 @@
 #include "sgre/script/debug_scene_entry.hpp"
 
+#include "sgre/app/launch_arguments.hpp"
 #include "sgre/core/frame_clock.hpp"
 #include "sgre/resource/psb.hpp"
 #include "sgre/script/game_bindings.hpp"
@@ -332,6 +333,33 @@ static void TestOriginalSnapshotRestore(const sgre::script::BytecodeProgram& pro
 	Require(system_flags.size() == 2 && system_flags.at("cg_bg_white") && system_flags.at("cg_prologue02.wmv"), "original goToLine skipped or invented metadata read-flag mutations before source135");
 }
 
+static void TestParsedJumpUsesOwnedOriginalEntryHook() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SquirrelVm vm(limits);
+	sgre::core::FrameClock clock;
+	sgre::script::ScriptSystemBindings system(vm, clock);
+	const auto application = Application(vm);
+	std::string argument = "ExactFixture.ks:1355";
+	const std::array<std::string_view, 2> arguments{"--jump", argument};
+	const auto parsed = sgre::app::ParseLaunchArguments(arguments);
+	Require(parsed.Jump && parsed.DebugStartInGame == true, "parsed jump must request the original direct-entry extension hook");
+	sgre::script::InstallOriginalDebugSceneEntry(vm, {parsed.Jump->Storage, parsed.Jump->TargetLine});
+	argument.assign("caller-retired.ks:9");
+	const auto derived = vm.CreateClass(application);
+	vm.NewSlot(vm.RootTable(), std::string("MyApplication"), derived);
+	const auto instance = vm.CreateInstance(derived);
+	const auto instance_root = vm.Retain(instance);
+	const auto scene = Call(vm, instance, "getMainScene");
+	const auto scene_root = vm.Retain(scene);
+	Require(sgre::script::StringText(vm.GetSlot(scene, std::string("storage"))) == "ExactFixture.ks" && std::get<std::int32_t>(vm.GetSlot(scene, std::string("target"))) == 1355, "actual inherited original hook must return the exact owned jump storage/source line");
+	vm.SetSlot(scene, std::string("target"), std::int32_t{7});
+	vm.ResetContext(vm.RootContext());
+	static_cast<void>(vm.CollectGarbage());
+	const auto second = Call(vm, instance, "getMainScene");
+	Require(second != scene && std::get<std::int32_t>(vm.GetSlot(second, std::string("target"))) == 1355 && !std::get<bool>(Call(vm, system.SystemClass(), "getDebugBuild")), "a custom jump must retain the original fresh-scene provider contract without enabling unrelated developer flags");
+}
+
 int main(int argc, char** argv) {
 	try {
 		if (argc != 1 && argc != 5) {
@@ -339,6 +367,7 @@ int main(int argc, char** argv) {
 		}
 		TestReleaseAndOwnedDebugProvider();
 		TestPreflightAndClassBoundary();
+		TestParsedJumpUsesOwnedOriginalEntryHook();
 		if (argc == 5) {
 			const auto utility = sgre::script::ReadSquirrelBytecode(ReadBounded(argv[4]));
 			TestOriginalMainEntry(sgre::script::ReadSquirrelBytecode(ReadBounded(argv[1])), utility);

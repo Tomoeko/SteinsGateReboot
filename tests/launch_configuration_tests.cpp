@@ -494,6 +494,57 @@ static void StartupOverridesDoNotPersistTests(const std::filesystem::path& paren
 	Require(LaunchArguments({}).DebugStartInGame.value_or(manual_restart.Configuration.DebugStartInGame), "manual saved startup default must resume after the temporary normal launch");
 }
 
+static void SceneJumpArgumentTests() {
+	Require(!LaunchArguments({}).Jump && !LaunchArguments({"--skip-startup"}).Jump && !LaunchArguments({"--normal-start"}).Jump, "ordinary and existing startup options must not invent a custom scene request");
+	const auto selected = LaunchArguments({"--jump", "reSG00_01.ks:1355"});
+	Require(selected.Jump && selected.Jump->Storage == "reSG00_01.ks" && selected.Jump->TargetLine == 1355 && selected.DebugStartInGame == true, "jump must own its exact original storage/source line and imply per-launch direct entry");
+	const auto zero = LaunchArguments({"--jump", "ExactCase.ks:0"});
+	const auto maximum = LaunchArguments({"--jump", "chapter.ks:2147483647"});
+	const auto unicode = LaunchArguments({"--headless", "--jump", "章名.ks:0007", "--help"});
+	Require(zero.Jump->Storage == "ExactCase.ks" && zero.Jump->TargetLine == 0 && maximum.Jump->TargetLine == 2147483647 && unicode.Jump->Storage == "章名.ks" && unicode.Jump->TargetLine == 7 && unicode.Headless && unicode.Help, "jump parsing must preserve exact case/UTF-8, native nonnegative source lines and independent help/quiet flags");
+	for (const auto flag : {"--skip-startup", "--debug-start-in-game"}) {
+		const auto before = LaunchArguments({flag, "--jump", "chapter.ks:12"});
+		const auto after = LaunchArguments({"--jump", "chapter.ks:12", flag});
+		Require(before.Jump && after.Jump && before.DebugStartInGame == true && after.DebugStartInGame == true, "explicit direct-entry aliases must remain compatible with one jump in either order");
+	}
+	std::string request = "OwnedCase.ks:42";
+	const auto owned = LaunchArguments({"--jump", request});
+	request.assign("replaced.ks:9");
+	Require(owned.Jump->Storage == "OwnedCase.ks" && owned.Jump->TargetLine == 42, "parsed scene request must own its bytes after argv storage changes");
+	std::string maximum_bytes(4091, 'a');
+	maximum_bytes += ".ks:0";
+	Require(LaunchArguments({"--jump", maximum_bytes}).Jump->Storage.size() == 4094, "scene parsing must retain the existing bounded argument byte domain");
+	const std::vector<std::vector<std::string_view>> invalid{{"--jump"}, {"--jump", "--help"}, {"--jump", "scene.ks"}, {"--jump", ":1"}, {"--jump", ".ks:1"}, {"--jump", "scene:1"}, {"--jump", "scene.KS:1"}, {"--jump", "scene.ks:"}, {"--jump", "scene.ks:-1"}, {"--jump", "scene.ks:-0"}, {"--jump", "scene.ks:+1"}, {"--jump", "scene.ks:1.0"}, {"--jump", "scene.ks:0x10"}, {"--jump", "scene.ks: 1"}, {"--jump", "scene.ks:1x"}, {"--jump", "scene.ks:2147483648"}, {"--jump", "scene.ks:99999999999999999999999999"}, {"--jump", "scene.ks:1:2"}, {"--jump", "../scene.ks:1"}, {"--jump", "/scene.ks:1"}, {"--jump", "folder/scene.ks:1"}, {"--jump", "folder\\scene.ks:1"}, {"--jump", "C:scene.ks:1"}, {"--jump", "scene\n.ks:1"}, {"--jump", "scene\x01.ks:1"}, {"--jump", "first.ks:1", "--jump", "second.ks:2"}, {"--jump", "scene.ks:1", "--normal-start"}, {"--normal-start", "--jump", "scene.ks:1"}, {"--jump=scene.ks:1"}};
+	for (const auto& arguments : invalid) {
+		Reject([&] {
+			static_cast<void>(sgre::app::ParseLaunchArguments(arguments));
+		});
+	}
+}
+
+static void SceneJumpDoesNotPersistTests(const std::filesystem::path& parent) {
+	const Fixture fixture(parent);
+	sgre::app::LaunchConfigurationStore store(fixture.Root);
+	const auto original = fixture.Configuration();
+	store.Save(original);
+	const auto before = Read(store.ConfigurationPath());
+	const auto options = LaunchArguments({"--jump", "chapter.ks:42"});
+	const auto temporary = sgre::app::ApplyLaunchPreferences(original, options);
+	Require(options.DebugStartInGame == true && !temporary.DebugStartInGame && sgre::app::SerializeLaunchConfiguration(temporary) == before, "jump must not rewrite the persisted startup default or add scenario state to config");
+	const auto window_options = LaunchArguments({"--jump", "chapter.ks:42", "--fullscreen", "--no-center-window"});
+	store.Save(sgre::app::ApplyLaunchPreferences(original, window_options));
+	const sgre::app::LaunchConfigurationStore restarted(fixture.Root);
+	const auto next = restarted.LoadOrCreate();
+	const auto next_options = LaunchArguments({});
+	Require(next.Configuration.Fullscreen && !next.Configuration.WindowCentered && !next.Configuration.DebugStartInGame && !next_options.Jump && !next_options.DebugStartInGame.value_or(next.Configuration.DebugStartInGame), "saving window preferences alongside a jump must leave the next ordinary launch normal");
+	const auto serialized = Read(store.ConfigurationPath());
+	Require(serialized.find("chapter.ks") == std::string::npos && serialized.find("jump") == std::string::npos && serialized.find("target_line") == std::string::npos, "per-run scene identity escaped into remembered configuration");
+	auto manual = next.Configuration;
+	manual.DebugStartInGame = true;
+	const auto retained = sgre::app::ApplyLaunchPreferences(manual, options);
+	Require(retained.DebugStartInGame && retained.Installation == manual.Installation && retained.SaveDirectory == manual.SaveDirectory && retained.AudioSamplesPerSecond == manual.AudioSamplesPerSecond, "jump must preserve an explicit manual startup default and resource/audio/save preferences");
+}
+
 int main(int argument_count, char** arguments) {
 	try {
 		Require(argument_count == 2 || argument_count == 3, "supply ignored fixture parent and optional original installation for real seed/automatic repair checks");
@@ -501,6 +552,8 @@ int main(int argument_count, char** arguments) {
 		JsonTests(fixture);
 		WindowSchemaAndMigrationTests(std::filesystem::canonical(arguments[1]));
 		LaunchArgumentTests(fixture);
+		SceneJumpArgumentTests();
+		SceneJumpDoesNotPersistTests(std::filesystem::canonical(arguments[1]));
 		StartupOverridesDoNotPersistTests(std::filesystem::canonical(arguments[1]));
 		StoreTests(fixture);
 		AssetPresenceTests(std::filesystem::canonical(arguments[1]));
