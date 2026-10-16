@@ -32,6 +32,7 @@ namespace sgre::script {
 		[[nodiscard]] bool Contains(const SquirrelValue& instance) const;
 		[[nodiscard]] bool IsDetached(const SquirrelValue& instance) const;
 		[[nodiscard]] bool EventEnabled(const SquirrelValue& instance) const;
+		[[nodiscard]] bool AllPlaying(const SquirrelValue& instance) const;
 		void SetEventEnabled(const SquirrelValue& instance, bool enabled);
 		// A copied weak task view never borrows storage inside a registry row. Detached VM properties supply their recovered defaults.
 		[[nodiscard]] scene::MotionPlayerTask Task(const SquirrelValue& instance) const;
@@ -44,6 +45,7 @@ namespace sgre::script {
 		[[nodiscard]] SquirrelValue CreateBorrowedChild(const SquirrelObjectIdentity& layer, const scene::MotionPlayerTask& containing, const scene::MotionChildBorrow& child);
 		[[nodiscard]] const scene::MotionPlayerCommands& Commands(const SquirrelValue& instance) const;
 		[[nodiscard]] const scene::MotionRootScene& Root(const SquirrelValue& instance) const;
+		void Stop(const SquirrelValue& instance);
 		void SkipToSync(const SquirrelValue& instance);
 		void ReleaseSyncWait(const SquirrelValue& instance);
 		void SetCoordinate(const SquirrelValue& instance, resource::MotionPoint coordinate);

@@ -156,6 +156,20 @@ namespace sgre::scene {
 		});
 	}
 
+	bool MotionSelectedSpritePlayer::AllPlaying() const {
+		if (m_Commands.ClockState().Playing) {
+			return true;
+		}
+		if (!m_Selected) {
+			return false;
+		}
+		const auto found = m_Selected->Nodes.FindAllPlaying(m_Commands);
+		if (!found) {
+			throw std::runtime_error("motion sprite playing query lost its actual physical player");
+		}
+		return *found;
+	}
+
 	bool MotionSelectedSpritePlayer::CanMutate() const noexcept {
 		return !m_Operating && !m_Context.IsBorrowing(*this);
 	}

@@ -109,6 +109,7 @@ namespace sgre::scene {
 		[[nodiscard]] MotionLayerOverrides LayerOverrides(const MotionSceneLayerReference& reference) const;
 		void SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty = false);
 		[[nodiscard]] std::uint64_t GraphGeneration() const noexcept;
+		[[nodiscard]] bool AllPlaying(const MotionPlayerCommands& actual_player) const;
 
 	private:
 		friend class MotionScenePlayer;

@@ -98,6 +98,7 @@ namespace sgre::scene {
 		[[nodiscard]] const MotionLocalFrameState& LocalState(std::uint32_t layer) const;
 		[[nodiscard]] bool ResourcesLive() const;
 		[[nodiscard]] bool CanMutate() const noexcept;
+		[[nodiscard]] bool AllPlaying() const;
 
 	private:
 		struct Selection;

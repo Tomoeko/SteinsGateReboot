@@ -9,6 +9,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -42,9 +43,11 @@ namespace sgre::scene {
 		[[nodiscard]] const MotionSelectedSpritePlayer& Player() const;
 		// Actual configured Layer runtimes use this complete selected/nested scene owner; legacy explicit runtimes return null.
 		[[nodiscard]] const MotionScenePlayer* GenericPlayer() const;
+		[[nodiscard]] bool AllPlaying(std::optional<MotionChildBorrow> actual_child = {}) const;
 		void SetCharacter(std::string_view character, MotionCharacterMode mode = MotionCharacterMode::Ordinary);
 		void Play(std::string_view motion, MotionPlayFlags flags = MotionPlayFlags::None);
 		void Stop();
+		void StopChild(const MotionChildBorrow& child);
 		void SkipToSync();
 		void SkipChildToSync(const MotionChildBorrow& child);
 		void ReleaseSyncWait();

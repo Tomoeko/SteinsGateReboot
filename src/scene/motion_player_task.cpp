@@ -1,5 +1,6 @@
 #include "sgre/scene/motion_player_task.hpp"
 
+#include "sgre/scene/motion_scene_evaluation.hpp"
 #include "sgre/scene/motion_scene_player.hpp"
 #include "sgre/scene/motion_variable_animations.hpp"
 
@@ -272,6 +273,23 @@ namespace sgre::scene {
 		return Require()->ScenePlayer.get();
 	}
 
+	bool MotionPlayerTask::AllPlaying(std::optional<MotionChildBorrow> actual_child) const {
+		const auto owner = Require();
+		const auto& commands = actual_child ? ChildCommands(*actual_child) : owner->Commands;
+		if (commands.ClockState().Playing) {
+			return true;
+		}
+		if (owner->ScenePlayer) {
+			const auto* scene = owner->ScenePlayer->Scene();
+
+			return scene != nullptr && scene->AllPlaying(commands);
+		}
+		if (actual_child || !owner->Player) {
+			throw std::runtime_error("motion playing query lacks its actual selected player producer");
+		}
+		return owner->Player->AllPlaying();
+	}
+
 	void MotionPlayerTask::SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty) {
 		const auto owner = Require();
 		owner->RequireMutable();
@@ -305,6 +323,14 @@ namespace sgre::scene {
 		owner->RequireMutable();
 		const MotionTaskControlScope control(owner->Controlling);
 		owner->Commands.Stop();
+	}
+
+	void MotionPlayerTask::StopChild(const MotionChildBorrow& child) {
+		const auto owner = Require();
+		owner->RequireMutable();
+		const MotionTaskControlScope control(owner->Controlling);
+		static_cast<void>(ChildCommands(child));
+		child.Require().Commands().Stop();
 	}
 
 	void MotionPlayerTask::SkipToSync() {

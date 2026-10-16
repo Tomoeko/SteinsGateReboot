@@ -1890,6 +1890,18 @@ namespace sgre::scene {
 		throw std::runtime_error("motion numeric getter context is no longer current");
 	}
 
+	bool MotionSceneEvaluation::AllPlaying(const MotionPlayerCommands& actual_player) const {
+		const auto& state = *m_Implementation;
+		if (!state.Root) {
+			throw std::runtime_error("motion playing query has no actual selected root");
+		}
+		const auto found = state.Root->Selected.FindAllPlaying(actual_player);
+		if (!found) {
+			throw std::runtime_error("motion playing query requested a different physical player tree");
+		}
+		return *found;
+	}
+
 	MotionLayerOverrides MotionSceneEvaluation::LayerOverrides(const MotionSceneLayerReference& reference) const {
 		const auto& state = *m_Implementation;
 		static_cast<void>(state.ResolveLayer(reference));

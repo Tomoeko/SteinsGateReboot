@@ -65,6 +65,8 @@ namespace sgre::scene {
 		MotionSelectedLayerNodes& operator=(MotionSelectedLayerNodes&&) = delete;
 
 		[[nodiscard]] std::span<const MotionSelectedLayerNode> Nodes() const noexcept;
+		// Native51b1d0 queries physical kind3 players, independently of visibility/source readiness.
+		[[nodiscard]] std::optional<bool> FindAllPlaying(const MotionPlayerCommands& actual_player) const;
 		// Native +318 stores flattened ordinals in forward construction order; child update uses reverse traversal later.
 		[[nodiscard]] std::span<const std::uint32_t> ChildOrdinals() const noexcept;
 		[[nodiscard]] std::span<const std::uint32_t> ShapeOrdinals() const noexcept;
@@ -133,6 +135,9 @@ namespace sgre::scene {
 		void ConstructLayers(const std::vector<resource::MotionLayer>& layers, std::optional<std::uint32_t> parent, std::size_t& index);
 		void QueueAction(std::string_view label, std::string_view action);
 		void FinalizeNodes();
+		void RequirePlayingScan(std::size_t& visited) const;
+		[[nodiscard]] bool ScanPlaying(std::size_t& visited) const;
+		[[nodiscard]] std::optional<bool> FindPlayerPlaying(const MotionPlayerCommands& actual_player, std::size_t& visited) const;
 		void Retire(bool preserve_parameters);
 		[[nodiscard]] Owner& ReadChildOwner(std::uint32_t layer);
 		[[nodiscard]] const Owner& ReadChildOwner(std::uint32_t layer) const;

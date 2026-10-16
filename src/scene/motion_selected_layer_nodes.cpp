@@ -26,6 +26,7 @@ namespace sgre::scene {
 	static constexpr std::size_t kMaximumSelectedLayers = 65536;
 	static constexpr std::size_t kMaximumSelectedFrames = 1000000;
 	static constexpr std::size_t kMaximumSelectedDepth = 64;
+	static constexpr std::size_t kMaximumPlayingScanNodes = 4 * 1024 * 1024;
 
 	struct MotionSelectedLayerNodes::Owner {
 		MotionLayerIdentifier Identifier;
@@ -481,6 +482,67 @@ namespace sgre::scene {
 
 	std::span<const MotionSelectedLayerNode> MotionSelectedLayerNodes::Nodes() const noexcept {
 		return m_Published && m_CommandSelectionSerial == m_Commands.SelectionSerial() ? std::span<const MotionSelectedLayerNode>(m_Nodes) : std::span<const MotionSelectedLayerNode>();
+	}
+
+	void MotionSelectedLayerNodes::RequirePlayingScan(std::size_t& visited) const {
+		if (!m_Published || m_Mutating || m_CommandSelectionSerial != m_Commands.SelectionSerial() || m_OwnerDepth > kMaximumSelectedDepth) {
+			throw std::runtime_error("motion playing query requires its actual stable selected player tree");
+		}
+		if (m_Nodes.size() > kMaximumPlayingScanNodes - visited) {
+			throw std::runtime_error("motion playing query exceeds its bounded physical node traversal");
+		}
+		visited += m_Nodes.size();
+	}
+
+	bool MotionSelectedLayerNodes::ScanPlaying(std::size_t& visited) const {
+		if (m_Commands.ClockState().Playing) {
+			return true;
+		}
+		RequirePlayingScan(visited);
+		for (std::size_t index = 0; index != m_Nodes.size(); ++index) {
+			if (m_Nodes[index].Prepared->Type != 3) {
+				continue;
+			}
+			const auto& owner = *m_Owners[index];
+			if (!owner.Child) {
+				throw std::runtime_error("motion playing query lacks its actual kind3 player owner");
+			}
+			if (owner.Child->Commands().ClockState().Playing || (owner.Selected && owner.Selected->ScanPlaying(visited))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	std::optional<bool> MotionSelectedLayerNodes::FindPlayerPlaying(const MotionPlayerCommands& actual_player, std::size_t& visited) const {
+		if (&m_Commands == &actual_player) {
+			return ScanPlaying(visited);
+		}
+		RequirePlayingScan(visited);
+		for (std::size_t index = 0; index != m_Nodes.size(); ++index) {
+			if (m_Nodes[index].Prepared->Type != 3) {
+				continue;
+			}
+			const auto& owner = *m_Owners[index];
+			if (!owner.Child) {
+				throw std::runtime_error("motion playing lookup lacks its actual kind3 player owner");
+			}
+			if (&owner.Child->Commands() == &actual_player) {
+				return actual_player.ClockState().Playing || (owner.Selected && owner.Selected->ScanPlaying(visited));
+			}
+			if (owner.Selected) {
+				if (const auto found = owner.Selected->FindPlayerPlaying(actual_player, visited)) {
+					return found;
+				}
+			}
+		}
+		return std::nullopt;
+	}
+
+	std::optional<bool> MotionSelectedLayerNodes::FindAllPlaying(const MotionPlayerCommands& actual_player) const {
+		std::size_t visited = 0;
+
+		return FindPlayerPlaying(actual_player, visited);
 	}
 
 	void MotionSelectedLayerNodes::QueueAction(std::string_view label, std::string_view action) {

@@ -331,9 +331,11 @@ namespace sgre::script {
 				RequireMotionArity(arguments, 1);
 				return Vm.CreateString(detached ? std::string{} : Owners->Commands(instance).Names().CurrentMotion);
 			case MotionMethod::GetPlaying:
-			case MotionMethod::GetAllPlaying:
 				RequireMotionArity(arguments, 1);
 				return !detached && Owners->Commands(instance).ClockState().Playing;
+			case MotionMethod::GetAllPlaying:
+				RequireMotionArity(arguments, 1);
+				return !detached && Owners->AllPlaying(instance);
 			case MotionMethod::GetTickCount:
 				RequireMotionArity(arguments, 1);
 				return detached ? 0.0f : Owners->Commands(instance).ClockState().TickCount;
@@ -374,6 +376,11 @@ namespace sgre::script {
 				Owners->SetVisible(instance, MotionBooleanArgument(arguments[1]));
 				return {};
 			}
+			if (method == MotionMethod::Stop) {
+				RequireMotionArity(arguments, 1);
+				Owners->Stop(instance);
+				return {};
+			}
 			auto task = Owners->Task(instance);
 			switch (method) {
 			case MotionMethod::Play:
@@ -381,10 +388,6 @@ namespace sgre::script {
 					throw std::runtime_error("invalid argument.");
 				}
 				task.Play(MotionStringArgument(Vm, arguments[1]), static_cast<scene::MotionPlayFlags>(arguments.size() == 3 ? NativeMotionInteger(arguments[2]) : 0));
-				return {};
-			case MotionMethod::Stop:
-				RequireMotionArity(arguments, 1);
-				task.Stop();
 				return {};
 			case MotionMethod::SetTickCount:
 				RequireMotionArity(arguments, 2);

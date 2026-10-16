@@ -582,6 +582,62 @@ static void TestChainIntoShorterSelectedScene() {
 	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{20.0f} && fixture.Read(getter, "top") == sgre::script::SquirrelValue{40.0f}, "actual local/child cursors must complete the shorter CHAIN and retain the authored final pose");
 }
 
+static void TestAllPlayingUsesPhysicalChildPlayers() {
+	Fixture fixture(2, true);
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{false}, "unselected actual player must not manufacture a playing child");
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{true}, "native parent playing flag must short circuit before first child preparation");
+	fixture.Second().Update();
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	const auto empty = fixture.Call(motion, "getLayerMotion", {std::string("empty child map key")});
+	const auto empty_root = fixture.Vm.Retain(empty);
+	static_cast<void>(fixture.Call(motion, "stop"));
+	static_cast<void>(fixture.Call(motion, "setVisible", {false}));
+	static_cast<void>(fixture.Call(child, "setVisible", {false}));
+	Require(fixture.Call(motion, "getPlaying") == sgre::script::SquirrelValue{false} && fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{true} && fixture.Call(child, "getAllPlaying") == sgre::script::SquirrelValue{true} && fixture.Call(empty, "getAllPlaying") == sgre::script::SquirrelValue{false}, "allPlaying must query physical children regardless of visibility and preserve borrowed-child scope");
+	auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto* scene = task.GenericPlayer()->Scene();
+	const auto child_layer = scene->FindLayer("child map key");
+	Require(child_layer.has_value(), "actual child playing fixture lost its real layer map");
+	static_cast<void>(fixture.Call(child, "stop"));
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{false} && fixture.Call(child, "getAllPlaying") == sgre::script::SquirrelValue{false}, "stopped physical parent and child must report no playing animation");
+	fixture.Second().Draw(0);
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{false}, "queued rows permit this read-only clock query");
+	fixture.Secondary->SceneContext().Clear();
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(child, "getAllPlaying"));
+	},
+	    "retired");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{false} && fixture.Call(child, "getAllPlaying") == sgre::script::SquirrelValue{false}, "actual Layer detachment retains native allPlaying=false");
+}
+
+static void TestAllPlayingIncludesDeepPhysicalChildren() {
+	Fixture fixture(2, false, NestedGetterDocument());
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	fixture.Second().Update();
+	static_cast<void>(fixture.Call(motion, "stop"));
+	auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto* scene = task.GenericPlayer()->Scene();
+	const auto inner = scene->FindLayer("child map key");
+	const auto deep = scene->FindLayer("deep child key");
+	Require(inner && deep, "deep playing fixture lost its actual selected child maps");
+	task.StopChild(scene->LayerChild(*inner).Borrow());
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{true}, "a playing grandchild must keep a stopped parent and intermediate child active for allPlaying");
+	task.StopChild(scene->LayerChild(*deep).Borrow());
+	Require(fixture.Call(motion, "getAllPlaying") == sgre::script::SquirrelValue{false}, "allPlaying must finish when every actual physical descendant has stopped");
+}
+
 static void TestActualScriptProgress() {
 	Fixture fixture;
 	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
@@ -1499,6 +1555,8 @@ int main() {
 		TestRetainedLayerVisibility();
 		TestSelectedLayerSetterControls();
 		TestChainIntoShorterSelectedScene();
+		TestAllPlayingUsesPhysicalChildPlayers();
+		TestAllPlayingIncludesDeepPhysicalChildren();
 		TestActualScriptProgress();
 		TestNativeConstructorsAndArgumentGuards();
 		std::cout << "Motion layer getter: real recursive map, weak generation borrow and independent shape snapshots PASS\n";

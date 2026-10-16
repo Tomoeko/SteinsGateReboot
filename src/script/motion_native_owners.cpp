@@ -323,6 +323,13 @@ namespace sgre::script {
 		return *record.PlayerTask;
 	}
 
+	bool ScriptMotionNativeOwners::AllPlaying(const SquirrelValue& instance) const {
+		const auto& record = m_Implementation->Record(instance);
+		static_cast<void>(Commands(instance));
+
+		return record.PlayerTask->AllPlaying(record.Child);
+	}
+
 	SquirrelValue ScriptMotionNativeOwners::GetLayerSetter(ScriptMotionLayerSetters& setters, const SquirrelValue& instance, std::string_view name) const {
 		const auto& record = m_Implementation->Record(instance);
 		static_cast<void>(Commands(instance));
@@ -420,6 +427,17 @@ namespace sgre::script {
 		static_cast<void>(Commands(instance));
 
 		return record.Child ? record.PlayerTask->ChildRoot(*record.Child) : record.PlayerTask->Root();
+	}
+
+	void ScriptMotionNativeOwners::Stop(const SquirrelValue& instance) {
+		const auto& record = m_Implementation->Record(instance);
+		static_cast<void>(Commands(instance));
+		auto task = *record.PlayerTask;
+		if (record.Child) {
+			task.StopChild(*record.Child);
+		} else {
+			task.Stop();
+		}
 	}
 
 	void ScriptMotionNativeOwners::SkipToSync(const SquirrelValue& instance) {
