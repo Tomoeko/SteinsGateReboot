@@ -199,13 +199,6 @@ static void TestActualLiveScissorCameraAndHeap(const std::filesystem::path& shad
 	Require(renderer->Capture(identity).Rgba == pixels.Rgba, "abandoned encoding published an unaccepted target or identity");
 	draw.Scissor.reset();
 	TestActualPresentationFence(*renderer, encoder, identity);
-	encoder.Begin({}, sgre::render::SpritePassLoadAction::Clear);
-	RequireFailure([&] {
-		encoder.SetScissor({4, 4, 4, 4});
-	},
-	    "positive in-target area");
-	encoder.Abort();
-	Require(renderer->Capture(identity).Rgba == pixels.Rgba, "unsupported empty live scissors replaced the accepted target");
 
 	actual_state.RawScissor = {0, 0, 4, 4};
 	actual_state.RoundedScissor = actual_state.RawScissor;
@@ -238,6 +231,63 @@ static void TestActualLiveScissorCameraAndHeap(const std::filesystem::path& shad
 	}
 }
 
+static void TestEmptyScissorCoverage(const std::filesystem::path& shader) {
+	sgre::render::SpritePassRenderer renderer(Description(), shader);
+	const auto red = Texture(renderer, {255, 0, 0, 255});
+	const auto blue = Texture(renderer, {0, 0, 255, 255});
+	sgre::scene::MotionSpriteMaterial material;
+	material.TextureFormat = sgre::resource::PixelFormat::Bc7;
+
+	sgre::scene::SpritePipelineOptions options;
+	options.EnableBlending = false;
+	const auto pipeline = renderer.PreparePipeline(sgre::scene::SelectSpritePipeline(material, options));
+	const auto vertices = Vertices();
+	const std::array<std::uint32_t, 4> indices{0, 2, 1, 3};
+	const std::array<float, 16> transform{.5f, 0, 0, 0, 0, .5f, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+
+	sgre::render::SpritePassDraw draw;
+	draw.Pipeline = pipeline;
+	draw.Vertices = vertices;
+	draw.Indices = indices;
+	sgre::render::SpriteFrameEncoder encoder(renderer);
+	const std::array<sgre::scene::MotionIntegerScissor, 7> empty_rectangles{{{0, 0, 0, 0}, {4, 4, 4, 4}, {2, 1, 2, 3}, {0, 4, 4, 4}, {-8, -8, -1, -1}, {10, 1, 13, 3}, {3, 3, 1, 1}}};
+	for (const auto& rectangle : empty_rectangles) {
+		encoder.Begin({0, 1, 0, 1}, sgre::render::SpritePassLoadAction::Clear);
+		encoder.SetScissor(rectangle);
+		const auto retained = encoder.SubmittedDeviceScissor();
+		Require(retained.MinimumX == rectangle.MinimumX && retained.MinimumY == rectangle.MinimumY && retained.MaximumX == rectangle.MaximumX && retained.MaximumY == rectangle.MaximumY, "empty intersection changed the original submitted rectangle");
+		draw.Texture = red;
+		encoder.Append(draw, transform);
+		const auto empty = renderer.Capture(encoder.End());
+		for (std::size_t pixel = 0; pixel < 16; ++pixel) {
+			const auto offset = pixel * 4;
+			Require(empty.Rgba[offset] == 0 && empty.Rgba[offset + 1] == 255 && empty.Rgba[offset + 2] == 0 && empty.Rgba[offset + 3] == 255, "empty scissors emitted pixels or suppressed the render-pass clear");
+		}
+
+		encoder.Begin({}, sgre::render::SpritePassLoadAction::Preserve);
+		encoder.SetScissor(rectangle);
+		encoder.Append(draw, transform);
+		encoder.SetScissor({1, 1, 3, 3});
+		draw.Texture = blue;
+		encoder.Append(draw, transform);
+		const auto restored = renderer.Capture(encoder.End());
+		for (std::size_t pixel = 0; pixel < 16; ++pixel) {
+			const auto offset = pixel * 4;
+			const bool inside = pixel % 4 >= 1 && pixel % 4 < 3 && pixel / 4 >= 1 && pixel / 4 < 3;
+			Require(restored.Rgba[offset] == 0 && restored.Rgba[offset + 1] == (inside ? 0 : 255) && restored.Rgba[offset + 2] == (inside ? 255 : 0) && restored.Rgba[offset + 3] == 255, "positive scissor following zero coverage lost clipping or preserved target content");
+		}
+	}
+
+	encoder.Begin({}, sgre::render::SpritePassLoadAction::Clear);
+	draw.Texture = red;
+	encoder.Append(draw, transform);
+	const auto reset = renderer.Capture(encoder.End());
+	for (std::size_t pixel = 0; pixel < 16; ++pixel) {
+		const auto offset = pixel * 4;
+		Require(reset.Rgba[offset] == 255 && reset.Rgba[offset + 1] == 0 && reset.Rgba[offset + 2] == 0 && reset.Rgba[offset + 3] == 255, "new frame retained an earlier empty scissor");
+	}
+}
+
 static void TestRendererRetirementBeforeUncommittedEncoder(const std::filesystem::path& shader) {
 	auto renderer = std::make_unique<sgre::render::SpritePassRenderer>(Description(), shader);
 	sgre::render::SpriteFrameEncoder encoder(*renderer);
@@ -255,6 +305,7 @@ int main(int argc, char** argv) {
 	try {
 		Require(argc == 2, "usage: live_metal_frame_tests shader");
 		TestActualLiveScissorCameraAndHeap(argv[1]);
+		TestEmptyScissorCoverage(argv[1]);
 		TestRendererRetirementBeforeUncommittedEncoder(argv[1]);
 		std::cout << "Actual live Metal scissor/camera/heap encoding, native rounded-cache GPU behavior, rejected-frame preservation and exclusive/expired owner guards passed\n";
 

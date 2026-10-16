@@ -59,7 +59,7 @@ namespace sgre::render {
 		void SelectRenderTarget(SpritePassRenderer& actual_target, const std::optional<std::array<float, 4>>& clear_color);
 		[[nodiscard]] const SpritePassRenderer& CurrentRenderTarget() const;
 		// Native integer scissors are intersected with the real target before binding the actual live encoder.
-		// Degenerate/empty physical scissors remain outside this initial encoding domain.
+		// An empty intersection binds zero coverage; later scissor and render-target state still execute.
 		void SetScissor(scene::MotionIntegerScissor actual_device_rectangle);
 		// Actual last successful request before attachment clamping; rounded native caches may differ.
 		// This is authored platform-state tracking, available only while this exact encoder is active.

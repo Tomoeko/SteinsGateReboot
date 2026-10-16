@@ -2469,9 +2469,6 @@ namespace sgre::render {
 			const auto top = std::clamp(rectangle.MinimumY, 0, height);
 			const auto right = std::clamp(rectangle.MaximumX, left, width);
 			const auto bottom = std::clamp(rectangle.MaximumY, top, height);
-			if (right == left || bottom == top) {
-				throw std::runtime_error("live Metal scissor has no admitted positive in-target area");
-			}
 			[Encoder setScissorRect:MTLScissorRect{static_cast<std::uint32_t>(left), static_cast<std::uint32_t>(top), static_cast<std::uint32_t>(right - left), static_cast<std::uint32_t>(bottom - top)}];
 			DeviceScissor = rectangle;
 		}
