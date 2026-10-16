@@ -47,7 +47,7 @@ Files/build/recovery/sgre-inspect search "phone" --language en --limit 20
 Files/build/recovery/sgre-inspect --gui
 ```
 
-The macOS inspector browses scenario text, translations and archive entries. Jumps execute earlier scenario commands to preserve game state and pause when an authentic choice needs input.
+The macOS inspector browses scenario text, translations and archive entries. Jumps restore the requested original scene snapshot.
 
 ## Checks
 

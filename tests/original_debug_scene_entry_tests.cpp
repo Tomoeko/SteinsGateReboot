@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <span>
@@ -202,7 +203,7 @@ static SquirrelValue OriginalClosure(SquirrelVm& vm, const sgre::script::Bytecod
 	return vm.CreateClosure(std::move(isolated));
 }
 
-static void TestOriginalMainEntry(const sgre::script::BytecodeProgram& program, const sgre::script::BytecodeProgram& utility) {
+static void TestOriginalMainEntry(const sgre::script::BytecodeProgram& program, const sgre::script::BytecodeProgram& utility, std::int32_t target_line) {
 	SquirrelVm vm;
 	vm.InstallRecoveredBaseLibrary();
 	sgre::script::InstallGameResourceProfile(vm);
@@ -233,7 +234,7 @@ static void TestOriginalMainEntry(const sgre::script::BytecodeProgram& program, 
 	}
 	bool scene_entered = false;
 	vm.NewSlot(application, std::string("sceneMain"), vm.CreateNativeClosure("prepared-scene-consumer", [&](SquirrelVm& active, std::span<const SquirrelValue> arguments) {
-		Require(arguments.size() == 2 && sgre::script::StringText(active.GetSlot(arguments[1], std::string("storage"))) == "reSG00_01.ks" && std::get<std::int32_t>(active.GetSlot(arguments[1], std::string("target"))) == 135, "original Application.main changed the exact debug request shape");
+		Require(arguments.size() == 2 && sgre::script::StringText(active.GetSlot(arguments[1], std::string("storage"))) == "reSG00_01.ks" && std::get<std::int32_t>(active.GetSlot(arguments[1], std::string("target"))) == target_line, "original Application.main changed the exact debug request shape");
 		Require(calls.size() >= 2 && calls[0] == "startup" && calls[1] == "onStartup", "debug entry bypassed original application startup callbacks");
 		scene_entered = true;
 		sgre::script::SquirrelNativeResult result;
@@ -244,7 +245,7 @@ static void TestOriginalMainEntry(const sgre::script::BytecodeProgram& program, 
 	vm.NewSlot(application, std::string("titleLoop"), vm.CreateNativeClosure("forbidden-title-loop", [](SquirrelVm&, auto) -> sgre::script::SquirrelNativeResult {
 		throw std::runtime_error("original debug entry unexpectedly entered titleLoop");
 	}));
-	sgre::script::InstallOriginalDebugSceneEntry(vm, {"reSG00_01.ks", 135});
+	sgre::script::InstallOriginalDebugSceneEntry(vm, {"reSG00_01.ks", target_line});
 	const auto derived = vm.CreateClass(application);
 	vm.NewSlot(vm.RootTable(), std::string("MyApplication"), derived);
 	const auto instance = vm.CreateInstance(derived);
@@ -274,7 +275,7 @@ static void TestOriginalMainEntry(const sgre::script::BytecodeProgram& program, 
 	Require(!std::get<bool>(Call(vm, system.SystemClass(), "getDebugBuild")), "original main entry required global debug-build admission");
 }
 
-static void TestOriginalSnapshotRestore(const sgre::script::BytecodeProgram& program, const std::vector<std::uint8_t>& bytes, const sgre::script::BytecodeProgram& utility) {
+static void TestOriginalSnapshotRestore(const sgre::script::BytecodeProgram& program, const std::vector<std::uint8_t>& bytes, const sgre::script::BytecodeProgram& utility, std::int32_t requested_line, std::size_t expected_index, std::int32_t expected_point, std::int32_t expected_line) {
 	SquirrelVm vm;
 	vm.InstallRecoveredBaseLibrary();
 	sgre::script::ScriptObjectBindings objects(vm);
@@ -287,15 +288,43 @@ static void TestOriginalSnapshotRestore(const sgre::script::BytecodeProgram& pro
 	const auto root = vm.ReadSlot(wrapped, std::string("root"));
 	const auto owner = vm.CreateTable();
 	vm.NewSlot(owner, std::string("scenes"), vm.ReadSlot(root, std::string("scenes")));
-	const auto scene = vm.Invoke(OriginalClosure(vm, program, "findSceneLine", 399), std::array<SquirrelValue, 2>{owner, std::int32_t{135}}).Value;
+	const auto scene = vm.Invoke(OriginalClosure(vm, program, "findSceneLine", 399), std::array<SquirrelValue, 2>{owner, requested_line}).Value;
 	const auto* scene_value = psb.ValueAsset(scene).Value;
 	Require(std::get<std::string>(scene_value->Find("label")->Data) == "*dummy1", "original source-line lookup selected another actual scene");
 	const auto& lines = std::get<sgre::resource::PsbArray>(scene_value->Find("lines")->Data);
-	Require(lines.size() > 33 && std::get<std::int64_t>(lines[33].Data) == 1, "actual first dialogue reference changed");
-	const auto& first_text = std::get<sgre::resource::PsbArray>(std::get<sgre::resource::PsbArray>(scene_value->Find("texts")->Data).front().Data);
-	Require(first_text.size() > 3 && (std::get<std::int64_t>(first_text[3].Data) & 2) == 0, "actual first dialogue unexpectedly requests continuation redraw during original restoreText(1)");
-	const auto& snapshot = std::get<sgre::resource::PsbArray>(lines[17].Data);
-	Require(snapshot.size() == 5 && std::get<std::int64_t>(snapshot[0].Data) == 4 && std::get<std::int64_t>(snapshot[4].Data) == 135, "actual post-movie snapshot identity changed");
+	if (requested_line == 135) {
+		Require(lines.size() > 33 && std::get<std::int64_t>(lines[33].Data) == 1, "actual first dialogue reference changed");
+		const auto& first_text = std::get<sgre::resource::PsbArray>(std::get<sgre::resource::PsbArray>(scene_value->Find("texts")->Data).front().Data);
+		Require(first_text.size() > 3 && (std::get<std::int64_t>(first_text[3].Data) & 2) == 0, "actual first dialogue unexpectedly requests continuation redraw during original restoreText(1)");
+	}
+	Require(expected_index < lines.size(), "actual direct-entry snapshot index is outside the selected scene");
+	const auto& snapshot = std::get<sgre::resource::PsbArray>(lines[expected_index].Data);
+	if (requested_line == 135) {
+		Require(snapshot.size() == 5 && std::get<std::int64_t>(snapshot[0].Data) == 4 && std::get<std::int64_t>(snapshot[4].Data) == 135, "actual post-movie snapshot identity changed");
+	}
+	Require(snapshot.size() >= 5 && std::get<std::int64_t>(snapshot[0].Data) == expected_point && std::get<std::int64_t>(snapshot[4].Data) == expected_line, "actual direct-entry snapshot point/source-line metadata changed");
+	std::int32_t expected_text_id = 0;
+	bool first_snapshot_found = false;
+	for (std::size_t index = 0; index < lines.size(); ++index) {
+		if (const auto* text_id = std::get_if<std::int64_t>(&lines[index].Data)) {
+			Require(*text_id >= 0 && *text_id < std::numeric_limits<std::int32_t>::max(), "actual preceding text reference exceeds the original signed integer domain");
+			expected_text_id = static_cast<std::int32_t>(*text_id);
+		}
+		const auto* candidate = std::get_if<sgre::resource::PsbArray>(&lines[index].Data);
+		if (candidate == nullptr || candidate->size() < 5 || !std::holds_alternative<std::int64_t>((*candidate)[0].Data)) {
+			continue;
+		}
+		const auto source_line = std::get<std::int64_t>((*candidate)[4].Data);
+		if (source_line >= requested_line) {
+			Require(index == expected_index, "direct entry did not select the first original snapshot at or after the requested line");
+			first_snapshot_found = true;
+			break;
+		}
+	}
+	Require(first_snapshot_found, "actual direct-entry request has no original qualifying snapshot");
+	if (requested_line == 135) {
+		Require(expected_text_id == 0, "post-movie snapshot changed its original preceding text reference");
+	}
 	vm.NewSlot(owner, std::string("scenario"), scene);
 	for (const auto* field : {"curTextId", "cur", "curPoint", "curLine"}) {
 		vm.NewSlot(owner, std::string(field), std::int32_t{0});
@@ -315,22 +344,34 @@ static void TestOriginalSnapshotRestore(const sgre::script::BytecodeProgram& pro
 	}));
 	std::size_t restorations = 0;
 	vm.NewSlot(owner, std::string("restore"), vm.CreateNativeClosure("prepared-environment-restore", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
-		Require(arguments.size() == 2 && psb.ValueAsset(arguments[1]).Value == &snapshot[1], "original goToLine did not restore the exact owned serialized post-movie environment");
+		if (requested_line == 135) {
+			Require(arguments.size() == 2 && psb.ValueAsset(arguments[1]).Value == &snapshot[1], "original goToLine did not restore the exact owned serialized post-movie environment");
+		} else {
+			Require(std::get<std::int64_t>(snapshot[1].Data) == 231, "actual later snapshot changed its original one-based text/state reference");
+			Require(arguments.size() == 2 && std::get<std::int32_t>(arguments[1]) == std::get<std::int64_t>(snapshot[1].Data), "original goToLine changed the actual integer text/state restoration reference");
+		}
 		++restorations;
 
 		return sgre::script::SquirrelNativeResult{};
 	}));
-	vm.NewSlot(owner, std::string("restoreText"), vm.CreateNativeClosure("prepared-text-restore", [](SquirrelVm&, std::span<const SquirrelValue> arguments) {
-		Require(arguments.size() == 2 && std::get<std::int32_t>(arguments[1]) == 1, "original source-line entry changed its next text-info query");
+	vm.NewSlot(owner, std::string("restoreText"), vm.CreateNativeClosure("prepared-text-restore", [requested_line, expected_text_id](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		if (requested_line == 135) {
+			Require(arguments.size() == 2 && std::get<std::int32_t>(arguments[1]) == 1, "original source-line entry changed its next text-info query");
+		}
+		Require(arguments.size() == 2 && std::get<std::int32_t>(arguments[1]) == expected_text_id + 1, "original direct source-line entry changed its actual next text reference");
 
 		return sgre::script::SquirrelNativeResult{};
 	}));
 	vm.NewSlot(owner, std::string("isReaded"), vm.CreateNativeClosure("prepared-read-state", [](SquirrelVm&, auto) {
 		return sgre::script::SquirrelNativeResult::ReturnValue(false);
 	}));
-	const auto result = vm.Invoke(OriginalClosure(vm, program, "goToLine", 4637), std::array<SquirrelValue, 2>{owner, std::int32_t{135}});
-	Require(std::get<bool>(result.Value) && restorations == 1 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("cur"))) == 17 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curPoint"))) == 4 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curLine"))) == 135 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curTextId"))) == 0, "original goToLine publication differs at the first post-movie gameplay snapshot");
-	Require(system_flags.size() == 2 && system_flags.at("cg_bg_white") && system_flags.at("cg_prologue02.wmv"), "original goToLine skipped or invented metadata read-flag mutations before source135");
+	const auto result = vm.Invoke(OriginalClosure(vm, program, "goToLine", 4637), std::array<SquirrelValue, 2>{owner, requested_line});
+	if (requested_line == 135) {
+		Require(std::get<bool>(result.Value) && restorations == 1 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("cur"))) == 17 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curPoint"))) == 4 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curLine"))) == 135 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curTextId"))) == 0, "original goToLine publication differs at the first post-movie gameplay snapshot");
+		Require(system_flags.size() == 2 && system_flags.at("cg_bg_white") && system_flags.at("cg_prologue02.wmv"), "original goToLine skipped or invented metadata read-flag mutations before source135");
+	}
+	Require(std::get<bool>(result.Value) && restorations == 1 && std::get<std::int32_t>(vm.GetSlot(owner, std::string("cur"))) == static_cast<std::int64_t>(expected_index) && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curPoint"))) == expected_point && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curLine"))) == expected_line && std::get<std::int32_t>(vm.GetSlot(owner, std::string("curTextId"))) == expected_text_id, "original goToLine publication differs from the exact direct-entry snapshot/text identity");
+	std::cout << "original direct snapshot requested=" << requested_line << " index=" << expected_index << " point=" << expected_point << " source=" << expected_line << " preceding_text=" << expected_text_id << " restore_count=" << restorations << '\n';
 }
 
 static void TestParsedJumpUsesOwnedOriginalEntryHook() {
@@ -370,9 +411,15 @@ int main(int argc, char** argv) {
 		TestParsedJumpUsesOwnedOriginalEntryHook();
 		if (argc == 5) {
 			const auto utility = sgre::script::ReadSquirrelBytecode(ReadBounded(argv[4]));
-			TestOriginalMainEntry(sgre::script::ReadSquirrelBytecode(ReadBounded(argv[1])), utility);
-			TestOriginalSnapshotRestore(sgre::script::ReadSquirrelBytecode(ReadBounded(argv[2])), ReadBounded(argv[3]), utility);
-			std::cout << "original Application.main/findSceneLine/goToLine bytecode receiving passed; actual post-movie snapshot135; prepared startup/scene/environment consumer boundaries only\n";
+			const auto application = sgre::script::ReadSquirrelBytecode(ReadBounded(argv[1]));
+			TestOriginalMainEntry(application, utility, 135);
+			TestOriginalMainEntry(application, utility, 1480);
+			const auto player = sgre::script::ReadSquirrelBytecode(ReadBounded(argv[2]));
+			const auto scenario = ReadBounded(argv[3]);
+			TestOriginalSnapshotRestore(player, scenario, utility, 135, 17, 4, 135);
+			TestOriginalSnapshotRestore(player, scenario, utility, 1480, 1154, 317, 1480);
+			TestOriginalSnapshotRestore(player, scenario, utility, 1479, 1154, 317, 1480);
+			std::cout << "original Application.main/findSceneLine/goToLine bytecode receiving passed; direct requested135/1480/1479; prepared startup/scene/environment consumer boundaries only\n";
 		}
 		std::cout << "original debug scene entry tests passed\n";
 
