@@ -896,6 +896,7 @@ if(SGRE_BUILD_TESTS)
 		text_font_clear_binding
 		text_glyph_drawing
 		text_render_cursor
+		text_characters
 		text_render_bindings
 		opentype_layout
 		opentype_positioning

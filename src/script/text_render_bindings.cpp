@@ -193,6 +193,112 @@ namespace sgre::script {
 		}
 	};
 
+	static std::string CharacterText(std::u16string_view text) {
+		std::string result;
+		for (std::size_t index = 0; index < text.size() && text[index] != 0; ++index) {
+			std::uint32_t scalar = text[index];
+			if (scalar >= 0xd800 && scalar <= 0xdbff && index + 1 < text.size() && text[index + 1] >= 0xdc00 && text[index + 1] <= 0xdfff) {
+				scalar = 0x10000 + ((scalar - 0xd800) << 10) + (std::uint32_t(text[++index]) - 0xdc00);
+			} else if (scalar >= 0xd800 && scalar <= 0xdfff) {
+				scalar = 0xfffd;
+			}
+
+			if (scalar < 0x80) {
+				result.push_back(static_cast<char>(scalar));
+			} else if (scalar < 0x800) {
+				result.push_back(static_cast<char>(0xc0 | (scalar >> 6)));
+				result.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+			} else if (scalar < 0x10000) {
+				result.push_back(static_cast<char>(0xe0 | (scalar >> 12)));
+				result.push_back(static_cast<char>(0x80 | ((scalar >> 6) & 0x3f)));
+				result.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+			} else {
+				result.push_back(static_cast<char>(0xf0 | (scalar >> 18)));
+				result.push_back(static_cast<char>(0x80 | ((scalar >> 12) & 0x3f)));
+				result.push_back(static_cast<char>(0x80 | ((scalar >> 6) & 0x3f)));
+				result.push_back(static_cast<char>(0x80 | (scalar & 0x3f)));
+			}
+		}
+
+		return result;
+	}
+
+	static SquirrelValue CharacterRecord(SquirrelVm& vm, const text::TextContentElement& element, const text::TextFaceNames& names) {
+		const auto record = vm.CreateTable();
+		const auto root = vm.Retain(record);
+		// The content owner admits ordinary horizontal text; graph and vertical producers still reject.
+		vm.NewSlot(record, "graph", false);
+		vm.NewSlot(record, "text", CharacterText(element.Text));
+		vm.NewSlot(record, "x", element.Geometry.Position.X);
+		vm.NewSlot(record, "y", element.Geometry.Position.Y);
+		vm.NewSlot(record, "cw", element.Geometry.Metrics.Width);
+		vm.NewSlot(record, "size", element.Geometry.Metrics.Height);
+		vm.NewSlot(record, "face", names.Utf8Name(element.Font.FaceIndex));
+		vm.NewSlot(record, "rubyface", names.Utf8Name(element.RubyFont.FaceIndex));
+		vm.NewSlot(record, "color", std::bit_cast<std::int32_t>(element.Style.MainColor));
+		vm.NewSlot(record, "bold", element.Style.Bold);
+		vm.NewSlot(record, "italic", element.Style.Italic);
+		vm.NewSlot(record, "shadow", element.Style.ShadowEnabled);
+		vm.NewSlot(record, "shadowColor", std::bit_cast<std::int32_t>(element.Style.ShadowColor));
+		vm.NewSlot(record, "shadowDiff", element.Style.ShadowOffset);
+		vm.NewSlot(record, "edge", element.Style.EdgeEnabled);
+		vm.NewSlot(record, "edgeColor", std::bit_cast<std::int32_t>(element.Style.EdgeColor));
+		vm.NewSlot(record, "edgeSize", element.Style.EdgeWidth);
+		vm.NewSlot(record, "vertical", false);
+		if (!element.Ruby.empty()) {
+			const auto annotations = vm.CreateArray();
+			const auto annotations_root = vm.Retain(annotations);
+			for (const auto& ruby : element.Ruby) {
+				const auto entry = vm.CreateTable();
+				vm.NewSlot(entry, "text", CharacterText(ruby.Text));
+				vm.NewSlot(entry, "x", ruby.Geometry.Position.X);
+				vm.NewSlot(entry, "y", ruby.Geometry.Position.Y);
+				vm.NewSlot(entry, "size", ruby.Geometry.Metrics.Height);
+				vm.AppendArray(annotations, entry);
+			}
+			vm.NewSlot(record, "ruby", annotations);
+		}
+
+		return record;
+	}
+
+	static SquirrelValue Characters(SquirrelVm& vm, const TextRenderTask* task, std::int32_t first, std::int32_t count) {
+		const auto result = vm.CreateArray();
+		const auto root = vm.Retain(result);
+		if (task == nullptr) {
+			return result;
+		}
+
+		const auto& content = task->Context.Content();
+		const auto& order = content.Plan().RenderOrder;
+		// Original03AE30 uses signed comparisons on wrapping 32-bit start/count arithmetic.
+		const auto end_word = count == 0 ? content.RenderedElementCount() : std::bit_cast<std::uint32_t>(first) + std::bit_cast<std::uint32_t>(count);
+		const auto end = std::min(std::bit_cast<std::int32_t>(end_word), static_cast<std::int32_t>(order.size()));
+		if (first >= end) {
+			return result;
+		}
+		if (first < 0) {
+			throw std::runtime_error("TextRender.getCharacters negative index precedes the native finalized vector");
+		}
+
+		std::vector<const text::TextContentElement*> elements;
+		elements.reserve(order.size());
+		for (const auto& line : content.Lines()) {
+			for (const auto& element : line.Elements) {
+				elements.push_back(&element);
+			}
+		}
+		for (auto index = first; index < end; ++index) {
+			const auto id = order[static_cast<std::size_t>(index)];
+			if (id >= elements.size()) {
+				throw std::runtime_error("TextRender.getCharacters order escaped its owned finalized elements");
+			}
+			vm.AppendArray(result, CharacterRecord(vm, *elements[id], task->Context.FaceNames()));
+		}
+
+		return result;
+	}
+
 	struct TextRenderBindingRecord {
 		SquirrelObjectIdentity Instance;
 		std::weak_ptr<TextRenderTask> Task;
@@ -974,6 +1080,13 @@ namespace sgre::script {
 			}
 
 			return result;
+		});
+		method("getCharacters", true, [](Implementation& owner, const auto arguments) -> SquirrelValue {
+			const auto count = TextRenderInteger(owner.Vm, 2);
+			const auto first = TextRenderInteger(owner.Vm, 1);
+			const auto task = Implementation::Task(owner.Record(arguments[0]));
+
+			return Characters(owner.Vm, task.get(), first, count);
 		});
 		method("getRenderCurX", true, [](Implementation& owner, const auto arguments) -> SquirrelValue {
 			const auto task = Implementation::Task(owner.Record(arguments[0]));
