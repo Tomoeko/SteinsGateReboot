@@ -384,7 +384,11 @@ namespace sgre::scene {
 	void MotionSelectedMeshVertices::RequirePhase(std::uint32_t layer) const {
 		RequireOwners();
 		m_Ancestry.RequirePhase();
-		if (!m_Composed || (m_RowOwner != nullptr && m_RowPreparationSerial != m_RowOwner->m_PreparationSerial) || m_PreparationSerial != m_Ancestry.m_AncestrySerial || layer >= m_Entries.size() || &m_Ancestry.State(layer).Node() != m_Entries[layer].Node || m_Entries[layer].Geometry.Positions.data() != m_Entries[layer].Positions.data() || m_Entries[layer].Geometry.Positions.size() != m_Entries[layer].Positions.size()) {
+		RequireCellPhase(layer);
+	}
+
+	void MotionSelectedMeshVertices::RequireCellPhase(std::uint32_t layer) const {
+		if (!m_Composed || (m_RowOwner != nullptr && m_RowPreparationSerial != m_RowOwner->m_PreparationSerial) || m_PreparationSerial != m_Ancestry.m_AncestrySerial || layer >= m_Entries.size() || m_Ancestry.StateAfterPhase(layer).m_Node != m_Entries[layer].Node || m_Entries[layer].Geometry.Positions.data() != m_Entries[layer].Positions.data() || m_Entries[layer].Geometry.Positions.size() != m_Entries[layer].Positions.size()) {
 			throw std::runtime_error("motion selected vertices require their current actual completed owned geometry phase");
 		}
 	}

@@ -17,6 +17,7 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <fstream>
 #include <iostream>
 #include <memory>
 #include <span>
@@ -143,6 +144,9 @@ struct Fixture {
 	std::unique_ptr<sgre::scene::MotionManagerRuntime> Runtime;
 	sgre::scene::MotionLayerTasks Tasks;
 	std::vector<std::pair<std::string, std::string>> Events;
+	std::size_t AliasReads = 0;
+	std::size_t AssetReads = 0;
+	std::shared_ptr<const sgre::scene::LoadedMotionAsset> InvalidReadAsset;
 
 	explicit Fixture(bool retained_child = false, bool sync_child = false, bool retained_mesh = false, bool timeline_scalar = false, std::size_t draw_capacity = 32, bool missing_child = false, std::size_t extra_timelines = 0, std::shared_ptr<const sgre::resource::PsbDocument> document = {})
 	    : Cache([this](auto, const auto&) {
@@ -170,12 +174,17 @@ struct Fixture {
 	sgre::scene::MotionManagerRuntimeServices Services() {
 		sgre::scene::MotionManagerRuntimeServices services;
 		services.ReadSourceAliases = [this](auto project) {
+			++AliasReads;
 			Require(project == Project, "scene aliases borrowed a different actual registration");
 			return std::span<const sgre::scene::MotionSourceAlias>(Asset->Aliases);
 		};
 		services.SceneAssets = &Catalog;
 		services.ReadRegisteredAsset = [this](auto project) -> const sgre::scene::LoadedMotionAsset& {
+			++AssetReads;
 			Require(project == Project, "scene asset borrowed a different actual registration");
+			if (InvalidReadAsset) {
+				return *InvalidReadAsset;
+			}
 			return *Asset;
 		};
 		return services;
@@ -1413,8 +1422,303 @@ static void TestActualSceneCloneWithUnrelatedClearedSnapshots() {
 	}
 }
 
-int main() {
+static sgre::resource::PsbValue& ValidationProperty(sgre::resource::PsbValue& value, std::string_view name) {
+	for (auto& [key, child] : std::get<sgre::resource::PsbObject>(value.Data)) {
+		if (key == name) {
+			return child;
+		}
+	}
+	throw std::runtime_error("validation fixture is missing an authored property");
+}
+
+static std::shared_ptr<sgre::resource::PsbDocument> ValidationNestedDocument() {
+	auto document = Document();
+	auto& objects = ValidationProperty(document->Root, "object");
+	auto& root_timeline = ValidationProperty(ValidationProperty(ValidationProperty(objects, "character"), "motion"), "main");
+	std::get<sgre::resource::PsbObject>(root_timeline.Data).emplace_back("layerIndexMap", Atom(sgre::resource::PsbObject{{"sprite", Atom(std::int64_t{0})}}));
+	auto& child = ValidationProperty(ValidationProperty(ValidationProperty(objects, "child"), "motion"), "main");
+	auto grand_layer = Layer("selected-grandchild", true);
+	for (auto& frame : std::get<sgre::resource::PsbArray>(ValidationProperty(grand_layer, "frameList").Data)) {
+		auto& content = ValidationProperty(frame, "content");
+		ValidationProperty(content, "src") = Atom(std::string("grandchild"));
+	}
+	std::get<sgre::resource::PsbArray>(ValidationProperty(child, "layer").Data).push_back(std::move(grand_layer));
+	auto& priority = std::get<sgre::resource::PsbArray>(ValidationProperty(child, "priority").Data);
+	ValidationProperty(priority.front(), "content") = Atom(sgre::resource::PsbArray{Atom(std::int64_t{0}), Atom(std::int64_t{1})});
+	auto grand_timeline = Timeline(true);
+	auto& grand_layers = std::get<sgre::resource::PsbArray>(ValidationProperty(grand_timeline, "layer").Data);
+	ValidationProperty(grand_layers.front(), "label") = Atom(std::string("grand-sprite"));
+	std::get<sgre::resource::PsbObject>(objects.Data).emplace_back("grandchild", Atom(sgre::resource::PsbObject{{"type", Atom(std::int64_t{0})}, {"motion", Atom(sgre::resource::PsbObject{{"main", std::move(grand_timeline)}})}}));
+
+	return document;
+}
+
+struct ValidationWork {
+	std::string Operation;
+	std::size_t AliasReads = 0;
+	std::size_t AssetReads = 0;
+};
+
+struct ValidationReport {
+	std::vector<std::uint32_t> SemanticWords;
+	std::vector<ValidationWork> Work;
+};
+
+static void ValidationWord(std::vector<std::uint32_t>& output, std::uint64_t value) {
+	Require(output.size() < 65534, "validation snapshot exceeds its bounded word extent");
+	output.push_back(static_cast<std::uint32_t>(value));
+	output.push_back(static_cast<std::uint32_t>(value >> 32));
+}
+
+static void ValidationFloat(std::vector<std::uint32_t>& output, float value) {
+	ValidationWord(output, std::bit_cast<std::uint32_t>(value));
+}
+
+static void ValidationText(std::vector<std::uint32_t>& output, std::string_view text) {
+	ValidationWord(output, text.size());
+	for (const auto character : text) {
+		ValidationWord(output, static_cast<unsigned char>(character));
+	}
+}
+
+static void ValidationBounds(std::vector<std::uint32_t>& output, const sgre::scene::MotionBounds& bounds) {
+	for (const auto value : {bounds.MinimumX, bounds.MinimumY, bounds.MaximumX, bounds.MaximumY}) {
+		ValidationFloat(output, value);
+	}
+}
+
+static void ValidationClip(std::vector<std::uint32_t>& output, const sgre::scene::MotionClipCommand& clip) {
+	ValidationWord(output, clip.ClipGroup);
+	ValidationWord(output, clip.GeometryCount);
+	ValidationWord(output, clip.Hidden);
+	ValidationWord(output, clip.Geometry != nullptr);
+	if (clip.Geometry) {
+		ValidationWord(output, clip.Geometry->Positions.size());
+		for (const auto& point : clip.Geometry->Positions) {
+			ValidationFloat(output, point.X);
+			ValidationFloat(output, point.Y);
+		}
+		ValidationWord(output, clip.Geometry->Calculated);
+		ValidationBounds(output, clip.Geometry->CachedBounds);
+	}
+}
+
+static void ValidationFrame(std::vector<std::uint32_t>& output, const sgre::scene::MotionPreparedFrame& frame) {
+	ValidationWord(output, frame.Nodes.size());
+	for (const auto& node : frame.Nodes) {
+		ValidationWord(output, node.ModeFlags);
+		ValidationWord(output, node.Parent.value_or(0xffffffffu));
+		ValidationClip(output, node.Command);
+		ValidationWord(output, node.Members.size());
+		for (const auto& member : node.Members) {
+			ValidationClip(output, member);
+		}
+	}
+	ValidationWord(output, frame.MaskSettings.size());
+	for (const auto& settings : frame.MaskSettings) {
+		ValidationWord(output, settings.Operation);
+		ValidationFloat(output, settings.ThresholdMinimum);
+		ValidationFloat(output, settings.ThresholdExtent);
+	}
+	ValidationWord(output, frame.Queue.size());
+	for (const auto& command : frame.Queue) {
+		Require(command.Clip != nullptr, "validation frame must have its actual clip descriptor");
+		ValidationClip(output, *command.Clip);
+		ValidationWord(output, command.IndividualClip != nullptr);
+		if (command.IndividualClip) {
+			ValidationBounds(output, *command.IndividualClip);
+		}
+		ValidationWord(output, static_cast<std::uint32_t>(command.Texture));
+		ValidationWord(output, command.BlendMode);
+		ValidationFloat(output, command.BlendParameter);
+		ValidationWord(output, command.Filter);
+		ValidationWord(output, command.FilterColor);
+		for (const auto value : {command.PixelUvs.X, command.PixelUvs.Y, command.PixelUvs.Width, command.PixelUvs.Height}) {
+			ValidationFloat(output, value);
+		}
+		ValidationWord(output, command.Subdivision.X);
+		ValidationWord(output, command.Subdivision.Y);
+		for (const auto color : command.Colors) {
+			ValidationWord(output, color);
+		}
+		ValidationWord(output, command.Key);
+	}
+}
+
+static void ValidationScene(std::vector<std::uint32_t>& output, const sgre::scene::MotionPlayerTask& task) {
+	const auto* scene = task.GenericPlayer()->Scene();
+	Require(scene != nullptr, "validation requires the genuine published selected scene");
+	const auto rows = scene->PacketRows();
+	ValidationWord(output, rows.size());
+	for (const auto* row : rows) {
+		const auto& node = row->Node();
+		ValidationWord(output, node.NativeOrdinal);
+		ValidationWord(output, node.Identifier);
+		ValidationWord(output, node.Prepared->Type);
+		ValidationWord(output, row->Published());
+		const auto state = scene->DrawState(*row);
+		Require(state.Numeric != nullptr, "validation draw state requires its completed numeric owner");
+		ValidationWord(output, static_cast<std::uint32_t>(state.RequestingProject.Value));
+		ValidationFloat(output, state.RootPriority);
+		ValidationWord(output, state.Subdivision.X);
+		ValidationWord(output, state.Subdivision.Y);
+		const auto& numeric = *state.Numeric;
+		ValidationWord(output, numeric.EffectiveParent.value_or(0xffffffffu));
+		ValidationWord(output, numeric.FrameHidden);
+		ValidationWord(output, numeric.Visible);
+		ValidationWord(output, numeric.Active);
+		for (const auto value : numeric.Hierarchy.Attributes.Coordinate) {
+			ValidationFloat(output, value);
+		}
+		for (const auto value : {numeric.Hierarchy.Transform.XX, numeric.Hierarchy.Transform.XY, numeric.Hierarchy.Transform.YX, numeric.Hierarchy.Transform.YY}) {
+			ValidationFloat(output, value);
+		}
+		ValidationWord(output, numeric.Hierarchy.ModulationColor);
+		ValidationWord(output, numeric.Hierarchy.UnresolvedInheritMask);
+	}
+	for (const auto word : task.Random().State()) {
+		ValidationWord(output, word);
+	}
+	ValidationFloat(output, task.Commands().ClockState().TickCount);
+	ValidationWord(output, task.Commands().SelectionSerial());
+}
+
+static ValidationReport TestNestedValidationWorkAndOutput() {
+	Fixture fixture(false, false, false, false, 32, false, 0, ValidationNestedDocument());
+	auto first = fixture.Attach();
+	auto second = fixture.Attach();
+	for (auto* task : {&first, &second}) {
+		task->SetVisible(true);
+		task->Play("main");
+		task->Progress(0);
+	}
+	first.SetPriority(7);
+	first.SetAngleDegrees(17);
+	first.SetZoom(1.5f, 0.75f);
+	first.Progress(0);
+	second.SetPriority(-3);
+	second.Progress(0);
+	Require(first.GenericPlayer()->Scene()->PacketRows().size() == 5 && second.GenericPlayer()->Scene()->PacketRows().size() == 5 && fixture.Runtime->Identifiers().LiveCount() == 10, "work fixture must construct both genuine root/child/grandchild selected trees");
+	Require(fixture.Events.size() == 10, "actual nested frame actions must each dispatch once before readonly validation");
+	ValidationReport report;
+	const std::array<sgre::resource::MotionPoint, 1> sizes{{{4, 4}}};
+	auto& group = fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second);
+	const auto capture = [&](std::string name, bool both) {
+		const auto aliases = fixture.AliasReads;
+		const auto assets = fixture.AssetReads;
+		group.Draw(0x12345678);
+		const auto frame = fixture.Runtime->SceneContext().Prepare(Globals(sizes));
+		report.Work.push_back({std::move(name), fixture.AliasReads - aliases, fixture.AssetReads - assets});
+		Require(frame.Nodes.size() == (both ? 10u : 5u) && frame.Queue.size() == (both ? 6u : 3u), "actual nested publication lost an ordinary draw or selected structural row");
+		if (both) {
+			Require(HasGeometry(*second.GenericPlayer()->Scene(), frame.Queue.front().Clip->Geometry) && HasGeometry(*first.GenericPlayer()->Scene(), frame.Queue.back().Clip->Geometry), "actual manager-wide priority order changed");
+		}
+		std::vector<std::uint32_t> words;
+		ValidationFrame(words, frame);
+		if (both) {
+			ValidationScene(words, first);
+		}
+		ValidationScene(words, second);
+		ValidationWord(words, fixture.Runtime->Identifiers().LiveCount());
+		ValidationWord(words, fixture.Events.size());
+		for (const auto& [layer, action] : fixture.Events) {
+			ValidationText(words, layer);
+			ValidationText(words, action);
+		}
+		fixture.Runtime->SceneContext().Clear();
+		report.SemanticWords.insert(report.SemanticWords.end(), words.begin(), words.end());
+		Require(report.SemanticWords.size() <= 65536, "nested semantic output exceeds its fixed fixture extent");
+
+		return words;
+	};
+	const auto initial_random = first.Random().State();
+	const auto initial_events = fixture.Events;
+	const auto initial = capture("nested_initial_prepare", true);
+	Require(capture("nested_repeat_prepare", true) == initial && first.Random().State() == initial_random && fixture.Events == initial_events, "readonly repeated packet validation must preserve all geometry/material/order/action/RNG words");
+	group.Draw(0);
+	const auto queued_tick = first.Commands().ClockState().TickCount;
+	RequireFailure([&] {
+		first.Progress(1);
+	},
+	    "queued");
+	RequireFailure([&] {
+		first.Clear();
+	},
+	    "queued");
+	Require(first.Commands().ClockState().TickCount == queued_tick && fixture.Runtime->Identifiers().LiveCount() == 10 && first.Random().State() == initial_random, "queued failures must precede clock/UID/random mutation");
+	fixture.Runtime->SceneContext().Clear();
+	first.SetCoordinate({4, 6});
+	first.Progress(1);
+	second.Progress(1);
+	Require(capture("nested_moved_prepare", true) != initial, "genuine movement must discriminate numeric/output changes from validation reuse");
+	first.RequestRetire();
+	group.Update();
+	Require(!first.IsLive() && second.IsLive() && fixture.Runtime->Identifiers().LiveCount() == 5, "source-first retirement must destroy its complete nested selected graph only");
+	static_cast<void>(capture("source_retired_prepare", false));
+	const auto stale = second.GenericPlayer()->Scene()->FindLayer("sprite");
+	Require(stale.has_value(), "stale-selection test requires its actual old layer reference");
+	second.Play("main", sgre::scene::MotionPlayFlags::Force);
+	second.Progress(0);
+	RequireFailure([&] {
+		static_cast<void>(second.GenericPlayer()->Scene()->LayerCoordinate(*stale));
+	},
+	    "retired actual root selection");
+	static_cast<void>(capture("force_rebuilt_prepare", false));
+	fixture.InvalidReadAsset = fixture.Catalog.Prepare(Document(), std::make_shared<const std::vector<std::uint8_t>>(144, 255));
+	RequireFailure([&] {
+		static_cast<void>(second.GenericPlayer()->Scene()->Packets().Nodes());
+	},
+	    "actual manager/catalog registration");
+	fixture.InvalidReadAsset.reset();
+	static_cast<void>(capture("asset_producer_restored_prepare", false));
+	ValidationFloat(report.SemanticWords, fixture.Runtime->NextUnitFloat());
+	Require(fixture.Manager.Unregister(fixture.Project), "negative retirement must genuinely remove the selected registration");
+	const auto before_loss = second.Commands().ClockState().TickCount;
+	RequireFailure([&] {
+		second.Progress(1);
+	},
+	    "registered");
+	RequireFailure([&] {
+		group.Draw(0);
+	},
+	    "registered");
+	Require(second.Commands().ClockState().TickCount == before_loss && fixture.Runtime->SceneContext().Size() == 0, "registration loss must reject before time or queue publication changes");
+	fixture.Tasks.Clear();
+	Require(!second.IsLive() && fixture.Runtime->PlayerCount() == 0 && fixture.Runtime->Identifiers().LiveCount() == 0, "negative registration loss must still permit actual task retirement");
+	fixture.Runtime->Close();
+	fixture.Runtime.reset();
+	fixture.Catalog.Prune();
+	Require(fixture.Uploads == fixture.Releases && fixture.Cache.Count() == 0, "all genuine GPU-opaque texture/cache owners must retire");
+
+	return report;
+}
+
+static void WriteValidationReport(const ValidationReport& report, const char* path) {
+	std::ofstream output(path, std::ios::binary);
+	Require(output.is_open(), "cannot open validation differential output");
+	output << "{\n  \"semantic_words\": [";
+	for (std::size_t index = 0; index < report.SemanticWords.size(); ++index) {
+		output << (index == 0 ? "" : ",") << report.SemanticWords[index];
+	}
+	output << "],\n  \"read_counts\": [\n";
+	for (std::size_t index = 0; index < report.Work.size(); ++index) {
+		const auto& row = report.Work[index];
+		output << (index == 0 ? "" : ",\n") << "    {\"operation\":\"" << row.Operation << "\",\"alias_reads\":" << row.AliasReads << ",\"asset_reads\":" << row.AssetReads << '}';
+	}
+	output << "\n  ]\n}\n";
+	output.close();
+	Require(static_cast<bool>(output), "cannot write complete validation differential output");
+}
+
+int main(int argc, char** argv) {
 	try {
+		if (argc == 3 && std::string_view(argv[1]) == "--validation-work") {
+			WriteValidationReport(TestNestedValidationWorkAndOutput(), argv[2]);
+
+			return 0;
+		}
+		Require(argc == 1, "usage: motion_scene_player_task_tests [--validation-work output.json]");
+		static_cast<void>(TestNestedValidationWorkAndOutput());
 		TestFreshSceneSelectionAfterClearedSnapshotRetires();
 		TestScenePreparationKeepsEveryCurrentSnapshotMember();
 		TestActualSceneCloneWithUnrelatedClearedSnapshots();

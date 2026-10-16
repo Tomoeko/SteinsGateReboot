@@ -295,6 +295,10 @@ namespace sgre::scene {
 
 	void MotionSelectedMeshAncestry::RequireLive(const MotionSelectedDeformationState& state) const {
 		RequirePhase();
+		RequireCell(state);
+	}
+
+	void MotionSelectedMeshAncestry::RequireCell(const MotionSelectedDeformationState& state) const {
 		if (state.m_Owner != this || state.m_Node == nullptr || state.m_Node->NativeOrdinal == 0) {
 			throw std::runtime_error("motion mixed deformation borrow requires its actual selected ancestry cell");
 		}
@@ -310,6 +314,15 @@ namespace sgre::scene {
 			throw std::runtime_error("motion mixed deformation index exceeds its actual selected cells");
 		}
 		RequireLive(m_States[layer]);
+
+		return m_States[layer];
+	}
+
+	const MotionSelectedDeformationState& MotionSelectedMeshAncestry::StateAfterPhase(std::uint32_t layer) const {
+		if (layer >= m_States.size()) {
+			throw std::runtime_error("motion mixed deformation index exceeds its actual selected cells");
+		}
+		RequireCell(m_States[layer]);
 
 		return m_States[layer];
 	}

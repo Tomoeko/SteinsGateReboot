@@ -3063,6 +3063,34 @@ namespace sgre::script {
 				return nullptr;
 			}
 
+			if (object.Type == SquirrelValueType::Table) {
+				const auto capacity = object.Slots.size();
+				if (!std::has_single_bit(capacity)) {
+					throw VmSafetyFailure("Squirrel corrupt table lookup capacity");
+				}
+
+				// Native25ca70 follows only the existing home bucket and collision chain.
+				auto position = static_cast<std::size_t>(HashKey(key) & (capacity - 1));
+				for (std::size_t depth = 0; depth < capacity; ++depth) {
+					auto& candidate = object.Slots[position];
+					if (EqualKeys(candidate.Key, key)) {
+						return &candidate;
+					}
+
+					if (!candidate.Next) {
+						return nullptr;
+					}
+
+					if (*candidate.Next >= capacity) {
+						throw VmSafetyFailure("Squirrel corrupt table lookup chain");
+					}
+
+					position = *candidate.Next;
+				}
+
+				throw VmSafetyFailure("Squirrel corrupt table lookup chain");
+			}
+
 			const auto slot = std::find_if(object.Slots.begin(), object.Slots.end(), [&](const VmSlot& candidate) {
 				return EqualKeys(candidate.Key, key);
 			});

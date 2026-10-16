@@ -46,6 +46,8 @@ namespace sgre::scene {
 		};
 		void RequireOwners() const;
 		void RequirePhase(std::uint32_t layer) const;
+		// No callbacks or owner mutations may intervene after the batch ancestry preflight.
+		void RequireCellPhase(std::uint32_t layer) const;
 		[[nodiscard]] const MotionSelectedDeformationState* NextAncestor(const MotionSelectedDeformationState& state) const;
 		[[nodiscard]] bool CombinedChainReaches(const MotionSelectedDeformationState& state, const MotionSelectedDeformationState& ancestor) const;
 		[[nodiscard]] MotionMeshSubdivision SelectSubdivision(const MotionSelectedDeformationState& state, float ratio, MotionMeshDivisionCache& cache) const;

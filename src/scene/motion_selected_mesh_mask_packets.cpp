@@ -110,7 +110,8 @@ namespace sgre::scene {
 		}
 		// Empty child trees still have a real numeric and geometry phase; a zero row count cannot bypass it.
 		for (std::uint32_t layer = 0; layer < owner.Vertices.m_Entries.size(); ++layer) {
-			owner.Vertices.RequirePhase(layer);
+			// This loop performs only local cell checks after the callback-bearing owner preflight above.
+			owner.Vertices.RequireCellPhase(layer);
 		}
 	}
 

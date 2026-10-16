@@ -1505,7 +1505,18 @@ static void TestGlobalTrimNativeByteRanges() {
 	    Case{std::string("a\0 \t", 4), {std::string("a\0", 2), "a", std::string("a\0", 2)}},
 	    Case{std::string("\t a\0b \r", 7), {std::string("a\0b", 3), "a", std::string("\t a\0b", 5)}},
 	    Case{std::string("\xff a \x80", 5), {std::string("\xff a \x80", 5), std::string("\xff a \x80", 5), std::string("\xff a \x80", 5)}},
-	    Case{"\xc2\xa0" "a" "\xc2\xa0", {"\xc2\xa0" "a" "\xc2\xa0", "\xc2\xa0" "a" "\xc2\xa0", "\xc2\xa0" "a" "\xc2\xa0"}},
+	    Case{"\xc2\xa0"
+	         "a"
+	         "\xc2\xa0",
+	        {"\xc2\xa0"
+	         "a"
+	         "\xc2\xa0",
+	            "\xc2\xa0"
+	            "a"
+	            "\xc2\xa0",
+	            "\xc2\xa0"
+	            "a"
+	            "\xc2\xa0"}},
 	};
 	SquirrelVm vm;
 	vm.InstallRecoveredBaseLibrary();
@@ -2420,6 +2431,216 @@ static void TestArrayJoinLivingWeakStringLifetimeAndBounds() {
 	Require(bounded.Length(too_large) == 2 && StringText(bounded.GetSlot(too_large, std::int32_t{0})) == std::string(16, 'a') && StringText(InvokeDelegate(bounded, too_large, "join", std::array<SquirrelValue, 1>{std::string("")})) == std::string(16, 'a') + std::string(16, 'b'), "checked string output bound must preserve inputs and allow an exact-limit retry");
 }
 
+static void TestTableChainCollisionGrowthDeletionAndOrder() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto table = vm.CreateTable();
+	constexpr std::int32_t kEntries = 129;
+	for (std::int32_t step = 0; step < kEntries; ++step) {
+		const auto index = (step * 73 + 19) % kEntries;
+		const auto key = index * 4096 + index % 7;
+		vm.NewSlot(table, key, index + 1000);
+	}
+
+	for (std::int32_t index = 0; index < kEntries; ++index) {
+		const auto key = index * 4096 + index % 7;
+		Require(std::get<std::int32_t>(vm.GetSlot(table, key)) == index + 1000, "colliding table lookup must find every inserted integer after growth");
+		vm.SetSlot(table, key, index + 2000);
+	}
+
+	const auto before = IteratorPairs(vm, table);
+	for (std::int32_t index = 0; index < kEntries; ++index) {
+		const auto key = index * 4096 + index % 7;
+		Require(std::get<std::int32_t>(vm.GetSlot(table, key)) == index + 2000 && !vm.HasSlot(table, key + 1000001), "collision-chain replacement and missing-key lookup must stay distinct");
+	}
+	const auto after = IteratorPairs(vm, table);
+	Require(vm.Length(before) == vm.Length(after), "readonly table lookup must preserve physical enumeration length");
+	for (std::size_t index = 0; index < vm.Length(before); ++index) {
+		Require(vm.GetSlot(before, static_cast<std::int32_t>(index)) == vm.GetSlot(after, static_cast<std::int32_t>(index)), "readonly table lookup must preserve every physical iteration key and value");
+	}
+
+	for (std::int32_t index = 0; index < kEntries; index += 2) {
+		const auto key = index * 4096 + index % 7;
+		Require(std::get<std::int32_t>(InvokeDelegate(vm, table, "rawdelete", std::array<SquirrelValue, 1>{key})) == index + 2000, "deletion must return the actual colliding table value");
+	}
+	for (std::int32_t index = 0; index < kEntries; ++index) {
+		const auto key = index * 4096 + index % 7;
+		Require(vm.HasSlot(table, key) == (index % 2 != 0), "deletion and shrink must preserve membership of every surviving collision");
+		if (index % 2 != 0) {
+			Require(std::get<std::int32_t>(vm.GetSlot(table, key)) == index + 2000, "shrink must preserve every surviving collision value");
+		}
+		vm.NewSlot(table, key, index + 3000);
+	}
+	for (std::int32_t index = 0; index < kEntries; ++index) {
+		Require(std::get<std::int32_t>(vm.GetSlot(table, index * 4096 + index % 7)) == index + 3000, "reinserted collisions must retain independent values");
+	}
+}
+
+static void TestTableChainTypedPayloadAndWeakValues() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SquirrelVm vm(limits);
+	const auto table = vm.CreateTable();
+	const auto table_root = vm.Retain(table);
+	const std::array<SquirrelValue, 10> keys{std::int32_t{0}, false, 0.0f, std::bit_cast<float>(std::uint32_t{0x80000000}), std::bit_cast<float>(std::uint32_t{0x7fc01234}), std::bit_cast<float>(std::uint32_t{0xffc05678}), std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(), std::string("embedded\0name", 13), std::string("embedded")};
+	for (std::size_t index = 0; index < keys.size(); ++index) {
+		vm.NewSlot(table, keys[index], static_cast<std::int32_t>(index));
+	}
+	for (std::size_t index = 0; index < keys.size(); ++index) {
+		Require(std::get<std::int32_t>(vm.GetSlot(table, keys[index])) == static_cast<std::int32_t>(index), "table key types, signed zero, NaN payloads and embedded NUL bytes must remain distinct");
+	}
+	Require(!vm.HasSlot(table, SquirrelValue{}) && !vm.HasSlot(table, std::bit_cast<float>(std::uint32_t{0x7fc01235})), "null and a distinct NaN payload must remain missing table keys");
+
+	const auto object_key = vm.CreateTable();
+	const auto other_key = vm.CreateTable();
+	vm.NewSlot(table, object_key, std::int32_t{900});
+	Require(std::get<std::int32_t>(vm.GetSlot(table, object_key)) == 900 && !vm.HasSlot(table, other_key), "object keys must retain exact VM identity through the existing logical hash");
+
+	SquirrelValue target = vm.CreateTable();
+	const auto weak = vm.CreateWeakReference(target);
+	vm.NewSlot(table, std::string("weak-value"), weak);
+	Require(vm.GetSlot(table, std::string("weak-value")) == target, "successful table lookup must resolve the original living weak value");
+	target = {};
+	vm.ResetExecution();
+	static_cast<void>(vm.CollectGarbage());
+	Require(vm.HasSlot(table_root.Value(), std::string("weak-value")) && std::holds_alternative<std::monostate>(vm.GetSlot(table_root.Value(), std::string("weak-value"))), "a retained table must preserve its key while the unrooted weak value expires");
+	vm.RethrowReleaseFailure();
+}
+
+static void TestTableChainClassIndexAndCurrentRoot() {
+	SquirrelVm vm;
+	const auto base = vm.CreateClass();
+	for (std::int32_t index = 0; index < 96; ++index) {
+		vm.NewSlot(base, std::string("field-") + std::to_string(index), index);
+	}
+	const auto derived = vm.CreateClass(base);
+	vm.NewSlot(base, std::string("late-base-field"), std::int32_t{700});
+	const auto instance = vm.CreateInstance(derived);
+	for (std::int32_t index = 0; index < 96; ++index) {
+		const auto name = std::string("field-") + std::to_string(index);
+		Require(std::get<std::int32_t>(vm.ReadSlot(instance, name)) == index, "hashed class member index must resolve the actual copied instance field");
+		vm.SetSlot(instance, name, index + 100);
+		Require(std::get<std::int32_t>(vm.ReadSlot(instance, name)) == index + 100, "class member index lookup must preserve ordinary instance field assignment");
+	}
+	Require(!vm.HasSlot(instance, std::string("late-base-field")), "member-index lookup must not search late additions to the parent class");
+
+	const auto child = vm.CreateContext();
+	const auto child_root = vm.CreateTable();
+	vm.NewSlot(vm.RootTable(), std::string("chain-root"), std::int32_t{11});
+	vm.NewSlot(child_root, std::string("chain-root"), std::int32_t{29});
+	vm.SetRootTableInContext(child, child_root);
+	auto program = Program({Instruction(21, 1), Instruction(1, 2, 0), Instruction(9, 3, 0, 1), Instruction(19, 1, 3)});
+	program.MainFunction.Literals = {std::string("chain-root")};
+	const auto closure = vm.CreateClosure(std::move(program));
+	const std::array<SquirrelValue, 1> receiver{vm.RootTable()};
+	Require(std::get<std::int32_t>(vm.InvokeInContext(child, closure, receiver).Value) == 29 && std::get<std::int32_t>(vm.Invoke(closure, receiver).Value) == 11, "hash-chain reads must retain the executing context's actual root");
+	vm.ReleaseContext(child);
+}
+
+static void TestTableChainSparseReadWorkDomain() {
+	SquirrelVm vm;
+	const auto table = Run(vm, Program({Instruction(30, 1, 4096), Instruction(19, 1, 1)}));
+	for (std::int32_t index = 0; index < 32; ++index) {
+		vm.NewSlot(table, index, index + 100);
+	}
+	for (std::int32_t index = 32; index < 132; ++index) {
+		Require(!vm.HasSlot(table, index), "sparse table work domain must contain exactly the authored integer keys");
+	}
+	for (std::int32_t index = 0; index < 32; ++index) {
+		Require(std::get<std::int32_t>(vm.GetSlot(table, index)) == index + 100, "sparse table work domain must preserve all existing values");
+	}
+}
+
+static void TestTableChainCloneAfterCollisionsAndSourceRetirement() {
+	for (const bool delete_before_clone : {false, true}) {
+		sgre::script::SquirrelVmLimits limits;
+		limits.ReclaimObjects = true;
+		SquirrelVm vm(limits);
+		vm.InstallRecoveredBaseLibrary();
+
+		SquirrelValue source = vm.CreateTable();
+		auto source_root = vm.Retain(source);
+		const auto source_weak_root = vm.Retain(vm.CreateWeakReference(source));
+		constexpr std::int32_t kEntries = 129;
+		for (std::int32_t step = 0; step < kEntries; ++step) {
+			const auto index = (step * 73 + 19) % kEntries;
+			vm.NewSlot(source, index * 4096 + index % 7, index + 1000);
+		}
+
+		if (delete_before_clone) {
+			for (std::int32_t index = 0; index < kEntries; index += 2) {
+				static_cast<void>(InvokeDelegate(vm, source, "rawdelete", std::array<SquirrelValue, 1>{index * 4096 + index % 7}));
+			}
+		}
+
+		const auto object_key = vm.CreateTable();
+		SquirrelValue payload = vm.CreateTable();
+		vm.NewSlot(payload, std::string("value"), std::int32_t{77});
+		const auto payload_weak_root = vm.Retain(vm.CreateWeakReference(payload));
+		vm.NewSlot(source, object_key, payload);
+		SquirrelValue weak_target = vm.CreateTable();
+		auto weak_target_root = vm.Retain(weak_target);
+		vm.NewSlot(source, std::string("weak-value"), vm.CreateWeakReference(weak_target));
+
+		auto program = Program({Instruction(10, 1, 1), Instruction(54, 2, 1), Instruction(19, 1, 2)}, 3);
+		program.MainFunction.Parameters.push_back(std::string("value"));
+		const auto closure = vm.CreateClosure(std::move(program));
+		std::array<SquirrelValue, 2> arguments{vm.RootTable(), source};
+		SquirrelValue cloned = vm.Invoke(closure, arguments).Value;
+		auto clone_root = vm.Retain(cloned);
+		const auto clone_weak_root = vm.Retain(vm.CreateWeakReference(cloned));
+		Require(cloned != source && vm.Length(cloned) == vm.Length(source), "actual CLONE must allocate an independent table with every surviving entry");
+		for (std::int32_t index = 0; index < kEntries; ++index) {
+			const auto key = index * 4096 + index % 7;
+			const bool present = !delete_before_clone || index % 2 != 0;
+			Require(vm.HasSlot(cloned, key) == present, "clone must reconstruct reachability of every collision and deleted hole");
+			if (present) {
+				Require(std::get<std::int32_t>(vm.GetSlot(cloned, key)) == index + 1000, "clone must preserve every surviving collision value");
+			}
+		}
+
+		constexpr std::int32_t kPresentKey = 4097;
+		vm.SetSlot(cloned, kPresentKey, std::int32_t{9001});
+		Require(std::get<std::int32_t>(vm.GetSlot(source, kPresentKey)) == 1001, "clone slot replacement must not overwrite its source table");
+		static_cast<void>(InvokeDelegate(vm, source, "rawdelete", std::array<SquirrelValue, 1>{kPresentKey}));
+		Require(!vm.HasSlot(source, kPresentKey) && std::get<std::int32_t>(vm.GetSlot(cloned, kPresentKey)) == 9001, "source deletion must not unlink the clone collision chain");
+		vm.NewSlot(cloned, std::int32_t{9876543}, std::int32_t{123});
+		Require(!vm.HasSlot(source, std::int32_t{9876543}), "new clone entry must not become a source entry");
+		Require(vm.GetSlot(cloned, object_key) == payload && vm.GetSlot(cloned, std::string("weak-value")) == weak_target, "clone must preserve raw object-key/value identity and living weak-value resolution");
+
+		arguments = {};
+		cloned = {};
+		source_root = {};
+		source = {};
+		vm.ResetExecution();
+		static_cast<void>(vm.CollectGarbage());
+		Require(std::holds_alternative<std::monostate>(vm.ResolveWeakReference(source_weak_root.Value())) && vm.ResolveWeakReference(payload_weak_root.Value()) == payload, "source-first collection must retire the source while actual cloned entries retain their values");
+		Require(std::get<std::int32_t>(vm.GetSlot(clone_root.Value(), kPresentKey)) == 9001 && vm.GetSlot(clone_root.Value(), object_key) == payload && std::get<std::int32_t>(vm.GetSlot(payload, std::string("value"))) == 77, "all clone chains and transitive values must remain usable after source collection");
+		for (std::int32_t index = 0; index < kEntries; ++index) {
+			const auto key = index * 4096 + index % 7;
+			const bool present = !delete_before_clone || index % 2 != 0;
+			Require(vm.HasSlot(clone_root.Value(), key) == present, "source retirement must retain all cloned collision-chain membership");
+			if (present) {
+				const auto expected = key == kPresentKey ? std::int32_t{9001} : index + 1000;
+				Require(std::get<std::int32_t>(vm.GetSlot(clone_root.Value(), key)) == expected, "source retirement must retain every cloned collision value");
+			}
+		}
+
+		weak_target_root = {};
+		weak_target = {};
+		vm.ResetExecution();
+		static_cast<void>(vm.CollectGarbage());
+		Require(vm.HasSlot(clone_root.Value(), std::string("weak-value")) && std::holds_alternative<std::monostate>(vm.GetSlot(clone_root.Value(), std::string("weak-value"))), "cloning must retain the raw weak wrapper rather than a resolved strong target");
+
+		payload = {};
+		clone_root = {};
+		vm.ResetExecution();
+		static_cast<void>(vm.CollectGarbage());
+		Require(std::holds_alternative<std::monostate>(vm.ResolveWeakReference(clone_weak_root.Value())) && std::holds_alternative<std::monostate>(vm.ResolveWeakReference(payload_weak_root.Value())), "final clone retirement must release its transitive table values");
+		vm.RethrowReleaseFailure();
+	}
+}
+
 int main(int argc, char** argv) {
 	try {
 		Require(argc == 1 || argc == 2, "usage: squirrel_vm_tests [native-trim.bin]");
@@ -2475,6 +2696,11 @@ int main(int argc, char** argv) {
 		TestNativeInstanceBridge();
 		TestNestedNativeInvocations();
 		TestSafetyLimits();
+		TestTableChainCollisionGrowthDeletionAndOrder();
+		TestTableChainTypedPayloadAndWeakValues();
+		TestTableChainClassIndexAndCurrentRoot();
+		TestTableChainSparseReadWorkDomain();
+		TestTableChainCloneAfterCollisionsAndSourceRetirement();
 		if (argc == 2) {
 			ReplayGlobalTrimNative(argv[1]);
 		}

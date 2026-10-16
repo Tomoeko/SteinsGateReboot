@@ -98,6 +98,9 @@ namespace sgre::scene {
 		void RequireOwners() const;
 		void RequirePhase() const;
 		void RequireLive(const MotionSelectedDeformationState& state) const;
+		// Only synchronous internal batches may reuse an already checked owner phase.
+		void RequireCell(const MotionSelectedDeformationState& state) const;
+		[[nodiscard]] const MotionSelectedDeformationState& StateAfterPhase(std::uint32_t layer) const;
 		void RequireChildBorrow(const MotionChildConstructionState& child) const;
 		void RequireParticleBorrow(const MotionParticlePlayerState& child, const MotionSelectedLayerNodes& selected) const;
 		[[nodiscard]] bool CombinedChainReaches(const MotionSelectedDeformationState& state, const MotionSelectedDeformationState& ancestor) const;
