@@ -298,6 +298,16 @@ namespace sgre::script {
 					return SquirrelNativeResult::ReturnValue(coordinate[axis]);
 				}));
 			}
+			Vm.NewSlot(GetterClass, std::string("contains"), Vm.CreateNativeClosure("MotionLayerGetter.contains", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				const auto owner = weak.lock();
+				if (!owner || arguments.empty()) {
+					throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
+				}
+				const auto& record = owner->Getter(arguments[0]);
+				const resource::MotionPoint point{arguments.size() > 1 ? ShapeNumber(arguments[1]) : 0, arguments.size() > 2 ? ShapeNumber(arguments[2]) : 0};
+
+				return SquirrelNativeResult::ReturnValue(ActualScene(record.Task, record.Child).Contains(record.Layer, point));
+			}));
 			Vm.NewSlot(ShapeClass, std::string("contains"), Vm.CreateNativeClosure("MotionShapeContains.contains", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) {
 				const auto owner = weak.lock();
 				if (!owner || arguments.empty()) {
@@ -322,7 +332,7 @@ namespace sgre::script {
 
 				return SquirrelNativeResult::ReturnValue(owner->MakeChildMotion(*record.OwningLayer, record.Task, child));
 			}));
-			static constexpr std::array<std::string_view, 16> unsupported{"getVisible", "getBranchVisible", "getLayerVisible", "getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "getChildren", "contains", "containsArea"};
+			static constexpr std::array<std::string_view, 15> unsupported{"getVisible", "getBranchVisible", "getLayerVisible", "getFlipX", "getFlipY", "getZoomX", "getZoomY", "getSlantX", "getSlantY", "getAngleRad", "getAngleDeg", "getOpacity", "getPosition", "getChildren", "containsArea"};
 			for (const auto method : unsupported) {
 				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, method](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
 					const auto owner = weak.lock();

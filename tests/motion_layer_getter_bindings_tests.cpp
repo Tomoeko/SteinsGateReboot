@@ -1000,8 +1000,237 @@ static void TestEmptyBorrowedChildLookupDoesNotEscapeToSibling() {
 	Require(fixture.Second().Count() == 1 && fixture.Secondary->PlayerCount() == 1 && fixture.Uploads == 0, "empty borrowed-child queries do not create a selected player, task or replacement texture");
 }
 
+static sgre::script::SquirrelValue ContainsMouseCall(Fixture& fixture, const sgre::script::SquirrelValue& getter, const sgre::script::SquirrelValue& x, const sgre::script::SquirrelValue& y) {
+	const auto instruction = [](std::uint8_t opcode, std::uint8_t destination, std::int32_t argument1, std::uint8_t argument2 = 0, std::uint8_t argument3 = 0) {
+		sgre::script::SquirrelInstruction result;
+		result.Opcode = opcode;
+		result.Argument0 = destination;
+		result.Argument1 = argument1;
+		result.Argument2 = argument2;
+		result.Argument3 = argument3;
+
+		return result;
+	};
+	sgre::script::BytecodeProgram program;
+	program.MainFunction.Name = std::string("independent_mouse_hit_test");
+	program.MainFunction.SourceName = std::string("independent-input-fixture.nut");
+	program.MainFunction.Parameters = {std::string("this"), std::string("getter"), std::string("mouse_x"), std::string("mouse_y")};
+	program.MainFunction.StackSize = 8;
+	program.MainFunction.Literals = {std::string("contains")};
+	program.MainFunction.Instructions = {instruction(8, 4, 0, 1, 5), instruction(10, 6, 2), instruction(10, 7, 3), instruction(5, 4, 4, 5, 3), instruction(19, 1, 4)};
+	const auto callable = fixture.Vm.CreateClosure(std::move(program));
+	const auto result = fixture.Vm.Invoke(callable, std::array<sgre::script::SquirrelValue, 4>{fixture.Vm.RootTable(), getter, x, y});
+	Require(result.State == sgre::script::SquirrelRunState::Completed && fixture.Vm.Type(result.Value) == sgre::script::SquirrelValueType::Boolean, "actual script mouse hit-test must return the native boolean without suspending");
+
+	return result.Value;
+}
+
+static std::shared_ptr<const sgre::resource::PsbDocument> FolderContainsDocument() {
+	using sgre::resource::PsbArray;
+	using sgre::resource::PsbObject;
+	auto shape = Layer(false, 2);
+	auto ordinary = Layer(false, 0);
+	FixtureField(ordinary, "type") = Integer(0);
+	std::get<PsbObject>(ordinary.Data).emplace_back("objTriPriority", Integer(0));
+	auto& ordinary_frame = std::get<PsbArray>(FixtureField(ordinary, "frameList").Data)[0];
+	auto& ordinary_content = std::get<PsbObject>(FixtureField(ordinary_frame, "content").Data);
+	ordinary_content.emplace_back("src", Atom(std::string("")));
+	ordinary_content.emplace_back("icon", Atom(std::string("")));
+	FixtureField(ordinary, "children") = Atom(PsbArray{std::move(shape)});
+	auto folder = Layer(false, 0);
+	FixtureField(folder, "type") = Integer(2);
+	FixtureField(folder, "children") = Atom(PsbArray{std::move(ordinary)});
+	auto timeline = Timeline(true, 2, false);
+	FixtureField(timeline, "layer") = Atom(PsbArray{std::move(folder)});
+	FixtureField(timeline, "layerIndexMap") = Atom(PsbObject{{"folder", Integer(0)}, {"ordinary", Integer(1)}, {"leaf shape", Integer(2)}});
+	auto& priority = std::get<PsbArray>(FixtureField(timeline, "priority").Data)[0];
+	FixtureField(priority, "content") = Atom(PsbArray{Integer(0), Integer(1), Integer(2)});
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	auto& outer = FixtureField(FixtureField(document->Root, "object"), "outer");
+	FixtureField(FixtureField(outer, "motion"), "main") = std::move(timeline);
+
+	return document;
+}
+
+static void TestGetterContainsActualVmMouseAndTypedArguments() {
+	for (const auto shape : {std::uint32_t{0}, std::uint32_t{1}, std::uint32_t{2}, std::uint32_t{3}}) {
+		Fixture fixture(shape);
+		const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+		const auto motion_root = fixture.Vm.Retain(motion);
+		static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+		static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+		static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+		const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+		const auto getter_root = fixture.Vm.Retain(getter);
+		const auto tick = fixture.Bindings->NativeOwners().Commands(motion).ClockState().TickCount;
+		Require(std::get<bool>(ContainsMouseCall(fixture, getter, 20.0f, 40.0f)) == (shape != 0), "script mouse hit-test must use the actual retained point/circle/rectangle/quad shape");
+		if (shape == 1) {
+			Require(std::get<bool>(ContainsMouseCall(fixture, getter, std::int32_t{36}, std::int32_t{40})) && !std::get<bool>(ContainsMouseCall(fixture, getter, 37.0f, 40.0f)), "live getter circle includes its native closed radius boundary");
+		} else if (shape == 2) {
+			Require(std::get<bool>(ContainsMouseCall(fixture, getter, 4.0f, 16.0f)) && !std::get<bool>(ContainsMouseCall(fixture, getter, 36.0f, 16.0f)) && !std::get<bool>(ContainsMouseCall(fixture, getter, 4.0f, 64.0f)), "live getter rectangle includes lower bounds and excludes upper bounds");
+		} else if (shape == 3) {
+			Require(std::get<bool>(ContainsMouseCall(fixture, getter, 36.0f, 64.0f)) && !std::get<bool>(ContainsMouseCall(fixture, getter, 37.0f, 64.0f)), "live getter quad keeps closed edge containment");
+		}
+		Require(fixture.Bindings->NativeOwners().Commands(motion).ClockState().TickCount == tick && fixture.Uploads == 0, "mouse queries cannot advance the player clock or invent texture work");
+	}
+
+	Fixture fixture;
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "setCoord", {-20.0f, -40.0f}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	std::size_t conversions = 0;
+	const auto conversion_class = fixture.Vm.CreateClass();
+	const auto class_root = fixture.Vm.Retain(conversion_class);
+	fixture.Vm.NewSlot(conversion_class, std::string("_tostring"), fixture.Vm.CreateNativeClosure("forbidden_hit_test_conversion", [&](auto&, const auto) {
+		++conversions;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("99"));
+	}));
+	const auto poison = fixture.Vm.CreateInstance(conversion_class);
+	const auto poison_root = fixture.Vm.Retain(poison);
+	Require(std::get<bool>(ContainsMouseCall(fixture, getter, std::string("99"), poison)) && std::get<bool>(fixture.Call(getter, "contains", {true, std::int32_t{1}, poison})) && std::get<bool>(fixture.Call(getter, "contains", {sgre::script::SquirrelValue{}, false})), "typed actual hit-test uses zero for failed conversions, numeric booleans and ignores extras");
+	Require(conversions == 0, "contains must not perform object/string conversion for float arguments or extras");
+	const auto forged = fixture.Vm.CreateInstance(fixture.Vm.GetSlot(fixture.Vm.RootTable(), std::string("MotionLayerGetter")));
+	const auto forged_root = fixture.Vm.Retain(forged);
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(forged, "contains", {0.0f, 0.0f}));
+	},
+	    "native receiver");
+}
+
+static void TestGetterContainsRetainedGeometryAndNoVisibilityFilter() {
+	Fixture fixture;
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	Require(!std::get<bool>(fixture.Call(getter, "contains", {20.0f, 40.0f})), "initial zero rectangle must remain uncomposed during a getter hit-test");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto snapshot = fixture.Call(getter, "getShape");
+	const auto snapshot_root = fixture.Vm.Retain(snapshot);
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto tick = task.Commands().ClockState().TickCount;
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	static_cast<void>(fixture.Call(motion, "setCoord", {100.0f, 200.0f}));
+	Require(std::get<bool>(ContainsMouseCall(fixture, getter, 20.0f, 40.0f)) && !std::get<bool>(ContainsMouseCall(fixture, getter, 120.0f, 240.0f)), "hit-test must read completed geometry while a different pose is only pending");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(!std::get<bool>(fixture.Call(getter, "contains", {20.0f, 40.0f})) && std::get<bool>(fixture.Call(getter, "contains", {120.0f, 240.0f})) && std::get<bool>(fixture.Call(snapshot, "contains", {20.0f, 40.0f})), "only genuine progression changes live geometry; prior copied snapshot remains independent");
+	static_cast<void>(fixture.Call(motion, "setVisible", {false}));
+	Require(std::get<bool>(fixture.Call(getter, "contains", {120.0f, 240.0f})) && task.Commands().ClockState().TickCount == tick && fixture.Secondary->Identifiers().LiveCount() == identifiers && fixture.Uploads == 0, "native getter hit-test has no containing visibility filter, clock step or ownership allocation");
+}
+
+static void TestGetterContainsFolderAndActualChildSubtree() {
+	{
+		Fixture fixture(2, false, FolderContainsDocument());
+		const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+		const auto motion_root = fixture.Vm.Retain(motion);
+		static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+		static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+		static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+		const auto folder = fixture.Call(motion, "getLayerGetter", {std::string("folder")});
+		const auto folder_root = fixture.Vm.Retain(folder);
+		const auto ordinary = fixture.Call(motion, "getLayerGetter", {std::string("ordinary")});
+		const auto ordinary_root = fixture.Vm.Retain(ordinary);
+		const auto leaf = fixture.Call(motion, "getLayerGetter", {std::string("leaf shape")});
+		const auto leaf_root = fixture.Vm.Retain(leaf);
+		const auto shape = fixture.Call(leaf, "getShape");
+		const auto shape_root = fixture.Vm.Retain(shape);
+		const auto x = std::get<float>(fixture.Read(shape, "left")) + std::get<float>(fixture.Read(shape, "width")) * .5f;
+		const auto y = std::get<float>(fixture.Read(shape, "top")) + std::get<float>(fixture.Read(shape, "height")) * .5f;
+		Require(std::get<bool>(fixture.Call(leaf, "contains", {x, y})) && std::get<bool>(fixture.Call(folder, "contains", {x, y})) && !std::get<bool>(fixture.Call(ordinary, "contains", {x, y})), "folder recursive descent crosses ordinary nodes while a direct ordinary getter remains false");
+	}
+	{
+		auto document = std::make_shared<sgre::resource::PsbDocument>(*NestedGetterDocument());
+		auto& inner = FixtureField(FixtureField(FixtureField(FixtureField(document->Root, "object"), "inner"), "motion"), "main");
+		auto& layer = std::get<sgre::resource::PsbArray>(FixtureField(inner, "layer").Data)[0];
+		auto& frame = std::get<sgre::resource::PsbArray>(FixtureField(layer, "frameList").Data)[0];
+		FixtureField(FixtureField(frame, "content"), "coord") = Atom(sgre::resource::PsbArray{Atom(100.0), Atom(100.0), Atom(0.0)});
+		Fixture fixture(2, false, std::move(document));
+		const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+		const auto motion_root = fixture.Vm.Retain(motion);
+		static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+		static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+		static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+		const auto child_getter = fixture.Call(motion, "getLayerGetter", {std::string("child map key")});
+		const auto getter_root = fixture.Vm.Retain(child_getter);
+		const auto child = fixture.Call(child_getter, "getMotion");
+		const auto child_root = fixture.Vm.Retain(child);
+		const auto inner_getter = fixture.Call(child, "getLayerGetter", {std::string("shared lookup key")});
+		const auto inner_root = fixture.Vm.Retain(inner_getter);
+		const auto deep = fixture.Call(child, "getLayerMotion", {std::string("deep child key")});
+		const auto deep_root = fixture.Vm.Retain(deep);
+		const auto deep_getter = fixture.Call(deep, "getLayerGetter", {std::string("deep shape key")});
+		const auto deep_getter_root = fixture.Vm.Retain(deep_getter);
+		Require(!std::get<bool>(fixture.Call(inner_getter, "contains", {3.0f, 5.0f})) && std::get<bool>(fixture.Call(deep_getter, "contains", {3.0f, 5.0f})) && std::get<bool>(fixture.Call(child_getter, "contains", {3.0f, 5.0f})), "kind3 hit-test includes actual descendant child shape catalogue beyond its immediate player's shape");
+		Require(fixture.Second().Count() == 1 && fixture.Secondary->PlayerCount() == 1 && fixture.Uploads == 0, "recursive hit-test cannot create wrappers as new tasks, players or textures");
+	}
+}
+
+static void TestGetterContainsQueuedReadonlyAndWeakRetirement() {
+	Fixture fixture;
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto snapshot = fixture.Call(getter, "getShape");
+	const auto snapshot_root = fixture.Vm.Retain(snapshot);
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto tick = task.Commands().ClockState().TickCount;
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	fixture.Second().Draw(0);
+	try {
+		Require(fixture.Secondary->SceneContext().Size() != 0 && std::get<bool>(ContainsMouseCall(fixture, getter, 20.0f, 40.0f)), "real queued scene permits readonly hit-testing of already retained geometry");
+		RequireFailure([&] {
+			static_cast<void>(fixture.Call(motion, "progress", {1.0f}));
+		},
+		    "idle");
+		RequireFailure([&] {
+			static_cast<void>(fixture.Call(motion, "clear"));
+		},
+		    "idle");
+	} catch (...) {
+		fixture.Primary->SceneContext().Clear();
+		fixture.Secondary->SceneContext().Clear();
+		throw;
+	}
+	fixture.Primary->SceneContext().Clear();
+	fixture.Secondary->SceneContext().Clear();
+	Require(task.Commands().ClockState().TickCount == tick && fixture.Secondary->Identifiers().LiveCount() == identifiers && std::get<bool>(fixture.Call(getter, "contains", {20.0f, 40.0f})), "queued query and rejected mutations preserve actual completed state");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(getter, "contains", {20.0f, 40.0f}));
+	},
+	    "root selection");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto last = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto last_root = fixture.Vm.Retain(last);
+	fixture.Bindings->NativeOwners().ReleaseInstance(motion);
+	fixture.Second().Update();
+	Require(!task.IsLive(), "live getter hit-test weak borrow cannot keep its source task alive");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(last, "contains", {20.0f, 40.0f}));
+	},
+	    "retired");
+	Require(std::get<bool>(fixture.Call(snapshot, "contains", {20.0f, 40.0f})), "separate copied shape remains usable after live getter source retirement");
+}
+
 int main() {
 	try {
+		TestGetterContainsActualVmMouseAndTypedArguments();
+		TestGetterContainsRetainedGeometryAndNoVisibilityFilter();
+		TestGetterContainsFolderAndActualChildSubtree();
+		TestGetterContainsQueuedReadonlyAndWeakRetirement();
 		TestBorrowedChildScopedGettersAndRetainedTransforms();
 		TestNestedBorrowedGetterMotionAndSourceFirstRetirement();
 		TestBorrowedChildGetterQueueAndExpiredSelectionGuards();

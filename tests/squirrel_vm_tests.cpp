@@ -2295,6 +2295,131 @@ static void TestIdleChildReleaseDuringParentExecution() {
 	Require(vm.ContextState(vm.RootContext()) == sgre::script::SquirrelContextState::Idle, "child release must not reset the executing parent's state");
 }
 
+static void TestArrayJoinNativeBytesAndSignature() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto array = vm.CreateArray();
+	const auto join = vm.GetSlot(array, std::string("join"));
+	const auto info = InvokeDelegate(vm, join, "getinfos");
+	const auto masks = vm.GetSlot(info, std::string("typecheck"));
+	Require(std::get<std::int32_t>(vm.GetSlot(info, std::string("paramscheck"))) == 2 && StringText(vm.GetSlot(info, std::string("name"))) == "join" && vm.Length(masks) == 2 && std::get<std::int32_t>(vm.GetSlot(masks, std::int32_t{0})) == 64 && std::get<std::int32_t>(vm.GetSlot(masks, std::int32_t{1})) == 16, "Array.join must retain its receiver-inclusive2/as native registration");
+	const auto joined = [&](std::initializer_list<SquirrelValue> values, std::string separator) {
+		const auto source = vm.CreateArray(std::span<const SquirrelValue>(values.begin(), values.size()));
+		const std::array<SquirrelValue, 1> arguments{std::move(separator)};
+
+		return std::string(StringText(InvokeDelegate(vm, source, "join", arguments)));
+	};
+	Require(joined({}, ",").empty() && joined({std::string(""), std::string("a")}, ",") == "a" && joined({std::string("a"), std::string(""), std::string("b")}, ",") == "a,,b" && joined({std::string(""), std::string("")}, ",").empty(), "native join inserts a separator only after cumulative output becomes nonempty");
+	Require(joined({std::string("a\0hidden", 8), std::string("b")}, std::string("::\0hidden", 9)) == "a::b" && joined({std::string("a"), std::string("b")}, std::string("\0hidden", 7)) == "ab", "native join uses C prefixes independently for elements and separator");
+	Require(joined({std::string("\xc3\xa9", 2), std::string("\xe7\x95\x8c", 3)}, "|") == std::string("\xc3\xa9|\xe7\x95\x8c", 6), "string join must preserve UTF8 bytes");
+	const std::array<SquirrelValue, 3> complete{array, std::string(","), std::int32_t{1}};
+	for (const auto count : {std::size_t{0}, std::size_t{1}, std::size_t{3}}) {
+		RequireFailure([&] {
+			static_cast<void>(vm.Invoke(join, std::span<const SquirrelValue>(complete).first(count)));
+		},
+		    "wrong number of parameters");
+	}
+	std::size_t conversions = 0;
+	const auto conversion_class = vm.CreateClass();
+	vm.NewSlot(conversion_class, std::string("_tostring"), vm.CreateNativeClosure("forbidden_join_separator_conversion", [&](SquirrelVm&, const auto) {
+		++conversions;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string(","));
+	}));
+	for (const auto& invalid : std::array<SquirrelValue, 5>{SquirrelValue{}, std::int32_t{1}, true, vm.CreateTable(), vm.CreateInstance(conversion_class)}) {
+		RequireFailure([&] {
+			static_cast<void>(vm.Invoke(join, std::array<SquirrelValue, 2>{array, invalid}));
+		},
+		    "type mismatch");
+		RequireFailure([&] {
+			static_cast<void>(vm.Invoke(join, std::array<SquirrelValue, 2>{invalid, std::string(",")}));
+		},
+		    "type mismatch");
+	}
+	Require(conversions == 0 && vm.Length(array) == 0, "join signature rejection must not coerce the separator or mutate its receiver");
+}
+
+static void TestArrayJoinScriptContextAndExplicitConversionGate() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	// Independently authored Array construction and tail-call shape; no extracted original bytecode.
+	auto script = Program({Instruction(31, 1, 3), Instruction(1, 2, 0), Instruction(32, 1, 2), Instruction(1, 2, 1), Instruction(32, 1, 2), Instruction(1, 2, 2), Instruction(32, 1, 2), Instruction(8, 3, 3, 1, 4), Instruction(1, 5, 4), Instruction(5, 3, 3, 4, 2), Instruction(19, 1, 3)}, 6);
+	script.MainFunction.Literals = {std::string("first"), std::string("second"), std::string("third"), std::string("join"), std::string("\n")};
+	const auto callable = vm.CreateClosure(std::move(script));
+	const auto child = vm.CreateContext();
+	vm.SetRootTableInContext(child, vm.CreateTable());
+	vm.SetLastErrorInContext(vm.RootContext(), std::string("root-sentinel"));
+	vm.SetLastErrorInContext(child, std::string("child-sentinel"));
+	const auto result = vm.InvokeInContext(child, callable, std::array<SquirrelValue, 1>{vm.RootTable()});
+	Require(result.State == sgre::script::SquirrelRunState::Completed && StringText(result.Value) == "first\nsecond\nthird" && StringText(vm.LastErrorInContext(vm.RootContext())) == "root-sentinel" && StringText(vm.LastErrorInContext(child)) == "child-sentinel", "actual Array delegate script tail-call works in a child context without changing either error slot");
+	std::size_t conversions = 0;
+	const auto conversion_class = vm.CreateClass();
+	vm.NewSlot(conversion_class, std::string("_tostring"), vm.CreateNativeClosure("forbidden_join_element_conversion", [&](SquirrelVm&, const auto) {
+		++conversions;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("replacement"));
+	}));
+	const auto instance = vm.CreateInstance(conversion_class);
+	const auto instance_weak = vm.CreateWeakReference(instance);
+	const std::array<SquirrelValue, 8> rejected{SquirrelValue{}, std::int32_t{7}, 1.5f, true, vm.CreateArray(), vm.CreateTable(), instance, instance_weak};
+	for (const auto& value : rejected) {
+		const auto source = vm.CreateArray(std::array<SquirrelValue, 2>{std::string("prefix"), value});
+		RequireFailure([&] {
+			static_cast<void>(InvokeDelegate(vm, source, "join", std::array<SquirrelValue, 1>{std::string(",")}));
+		},
+		    "Array.join nonstring conversion requires recovered shared scratch ownership");
+		Require(vm.Length(source) == 2 && StringText(vm.GetSlot(source, std::int32_t{0})) == "prefix", "explicit unrecovered shared-scratch gate must preserve the actual source array");
+	}
+	Require(conversions == 0, "unrecovered nonstring join conversion must reject before invoking user tostring or its mutations");
+	vm.ReleaseContext(child);
+}
+
+static void TestArrayJoinLivingWeakStringLifetimeAndBounds() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SquirrelVm vm(limits);
+	vm.InstallRecoveredBaseLibrary();
+	SquirrelValue text = vm.CreateString("retained-source");
+	auto text_root = vm.Retain(text);
+	const auto weak = vm.CreateWeakReference(text);
+	const auto weak_root = vm.Retain(weak);
+	Require(vm.Type(weak) == sgre::script::SquirrelValueType::WeakReference, "positive weak-string test requires the genuine weak intern target");
+	SquirrelValue source = vm.CreateArray(std::array<SquirrelValue, 2>{weak, std::string("tail")});
+	auto source_root = vm.Retain(source);
+	const auto source_weak = vm.CreateWeakReference(source);
+	const auto source_weak_root = vm.Retain(source_weak);
+	SquirrelValue result = InvokeDelegate(vm, source, "join", std::array<SquirrelValue, 1>{std::string("|")});
+	auto output_root = vm.Retain(result);
+	Require(StringText(result) == "retained-source|tail", "living weak-string elements must resolve to their actual string bytes");
+	text_root = {};
+	source_root = {};
+	text = {};
+	source = {};
+	result = {};
+	vm.ResetExecution();
+	static_cast<void>(vm.CollectGarbage());
+	Require(StringText(output_root.Value()) == "retained-source|tail" && std::holds_alternative<std::monostate>(vm.ResolveWeakReference(source_weak_root.Value())) && std::holds_alternative<std::monostate>(vm.ResolveWeakReference(weak_root.Value())), "joined output owns bytes while its source array and distinct weak intern target can retire");
+	const auto expired_source = vm.CreateArray(std::array<SquirrelValue, 1>{weak_root.Value()});
+	const auto expired_root = vm.Retain(expired_source);
+	RequireFailure([&] {
+		static_cast<void>(InvokeDelegate(vm, expired_source, "join", std::array<SquirrelValue, 1>{std::string(",")}));
+	},
+	    "Array.join nonstring conversion requires recovered shared scratch ownership");
+	output_root = {};
+	vm.RethrowReleaseFailure();
+
+	sgre::script::SquirrelVmLimits bounded_limits;
+	bounded_limits.MaxStringBytes = 32;
+	SquirrelVm bounded(bounded_limits);
+	bounded.InstallRecoveredBaseLibrary();
+	const auto too_large = bounded.CreateArray(std::array<SquirrelValue, 2>{std::string(16, 'a'), std::string(16, 'b')});
+	RequireFailure([&] {
+		static_cast<void>(InvokeDelegate(bounded, too_large, "join", std::array<SquirrelValue, 1>{std::string(",")}));
+	},
+	    "string limit");
+	Require(bounded.Length(too_large) == 2 && StringText(bounded.GetSlot(too_large, std::int32_t{0})) == std::string(16, 'a') && StringText(InvokeDelegate(bounded, too_large, "join", std::array<SquirrelValue, 1>{std::string("")})) == std::string(16, 'a') + std::string(16, 'b'), "checked string output bound must preserve inputs and allow an exact-limit retry");
+}
+
 int main(int argc, char** argv) {
 	try {
 		Require(argc == 1 || argc == 2, "usage: squirrel_vm_tests [native-trim.bin]");
@@ -2316,6 +2441,9 @@ int main(int argc, char** argv) {
 		TestBaseLibrary();
 		TestSharedConstantTable();
 		TestAdditionalDelegates();
+		TestArrayJoinNativeBytesAndSignature();
+		TestArrayJoinScriptContextAndExplicitConversionGate();
+		TestArrayJoinLivingWeakStringLifetimeAndBounds();
 		TestClassMemberCallReceivers();
 		TestBuiltinSuspensionAndMetaErrorPolicy();
 		TestFailedGetterFallbacks();

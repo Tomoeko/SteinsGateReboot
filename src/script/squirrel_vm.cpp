@@ -6836,6 +6836,47 @@ namespace sgre::script {
 			});
 		}
 
+		AddDelegate(SquirrelValueType::Array, "join", [this](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+			RequireArguments(arguments, 2, 2);
+			const auto source = arguments[0];
+			const auto& stored_delimiter = StringText(arguments[1]);
+			const auto delimiter = std::string_view(stored_delimiter).substr(0, stored_delimiter.find('\0'));
+			const auto initial_count = Object(source).Elements.size();
+			const auto native_limit = static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max());
+			if (initial_count > native_limit || delimiter.size() >= native_limit) {
+				throw std::runtime_error("Squirrel string limit exceeded by array join");
+			}
+
+			const auto output_limit = std::min(m_Limits.MaxStringBytes, native_limit - 1 - delimiter.size());
+			std::string result;
+			const auto append = [&](std::string_view piece) {
+				if (piece.size() > output_limit - result.size()) {
+					throw std::runtime_error("Squirrel string limit exceeded by array join");
+				}
+
+				result.append(piece);
+			};
+			// Native2A2BE0 captures the initial count, then rereads each slot and its C-prefix bytes.
+			for (std::size_t index = 0; index < initial_count; ++index) {
+				if (index >= Object(source).Elements.size()) {
+					continue;
+				}
+
+				const auto element = ResolveStoredValue(Object(source).Elements[index]);
+				const auto* text = TryStringText(element);
+				if (!text) {
+					throw std::runtime_error("Array.join nonstring conversion requires recovered shared scratch ownership");
+				}
+
+				if (!result.empty()) {
+					append(delimiter);
+				}
+
+				append(std::string_view(*text).substr(0, text->find('\0')));
+			}
+
+			return SquirrelNativeResult::ReturnValue(std::move(result));
+		});
 		AddDelegate(SquirrelValueType::Array, "pop", [this](SquirrelVm&, std::span<const SquirrelValue> arguments) {
 			RequireArguments(arguments, 1, 1);
 			auto& elements = Object(arguments[0]).Elements;

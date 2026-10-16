@@ -1422,6 +1422,70 @@ namespace sgre::scene {
 			throw std::runtime_error("motion layer getter target context has retired");
 		}
 
+		bool PlayerContains(const Context& context, resource::MotionPoint point) const {
+			context.RequireSelected();
+			// Native510780 searches the actual player catalogue, including emitted players. Its particle catalogue producer remains separate.
+			for (const auto ordinal : context.Selected.ParticleOrdinals()) {
+				if (context.Selected.Particles(ordinal - 1).Size() != 0) {
+					throw std::runtime_error("motion child hit test requires its actual emitted-player shape catalogue");
+				}
+			}
+			for (const auto ordinal : context.Selected.ShapeOrdinals()) {
+				if (context.Selected.Shape(ordinal - 1).Snapshot().Contains(point)) {
+					return true;
+				}
+			}
+			for (const auto ordinal : context.Selected.ChildOrdinals()) {
+				const auto& child = context.Children.at(ordinal - 1);
+				if (child) {
+					if (PlayerContains(*child, point)) {
+						return true;
+					}
+				} else if (const auto* nodes = context.Selected.ChildNodes(ordinal - 1); nodes != nullptr && !nodes->Nodes().empty()) {
+					throw std::runtime_error("motion child hit test requires its actual completed selected context");
+				}
+			}
+
+			return false;
+		}
+
+		bool LayerContains(const Context& context, std::uint32_t layer, resource::MotionPoint point) const {
+			struct PendingLayer {
+				std::uint32_t Layer = 0;
+				bool Recursive = false;
+			};
+			const auto nodes = context.Selected.Nodes();
+			std::vector<PendingLayer> pending{{layer, false}};
+			while (!pending.empty()) {
+				const auto query = pending.back();
+				pending.pop_back();
+				const auto type = nodes[query.Layer].Prepared->Type;
+				if (type == 1 && context.Selected.Shape(query.Layer).Snapshot().Contains(point)) {
+					return true;
+				}
+				if (type == 3) {
+					const auto& child = context.Children.at(query.Layer);
+					if (child) {
+						if (PlayerContains(*child, point)) {
+							return true;
+						}
+					} else if (const auto* selected = context.Selected.ChildNodes(query.Layer); selected != nullptr && !selected->Nodes().empty()) {
+						throw std::runtime_error("motion layer hit test requires its actual completed child context");
+					}
+				}
+				// Native2741F0 always enters folders; other nodes descend only within an existing recursive search.
+				if (type == 2 || query.Recursive) {
+					for (std::size_t index = nodes.size(); index != 0; --index) {
+						if (nodes[index - 1].Parent == query.Layer) {
+							pending.push_back({static_cast<std::uint32_t>(index - 1), true});
+						}
+					}
+				}
+			}
+
+			return false;
+		}
+
 		const LoadedMotionAsset& ReadAsset(MotionProjectId project) const {
 			const auto& asset = Services.ReadRegisteredAsset(project);
 			if (!Runtime.Manager().Contains(project) || Runtime.Manager().Identity(project) != asset.Identity || !Catalog.ContainsPrepared(asset) || asset.Model.get() != &Runtime.Manager().Resource(project)) {
@@ -1787,6 +1851,18 @@ namespace sgre::scene {
 			}
 		}
 		throw std::runtime_error("motion shape getter context is no longer current");
+	}
+
+	bool MotionSceneEvaluation::Contains(const MotionSceneLayerReference& reference, resource::MotionPoint point) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			const auto* context = entry.Actual;
+			if (context != nullptr && context->Identity == reference.ContextIdentity) {
+				return state.LayerContains(*context, reference.NativeOrdinal - 1, point);
+			}
+		}
+		throw std::runtime_error("motion layer hit test context is no longer current");
 	}
 
 	std::uint64_t MotionSceneEvaluation::GraphGeneration() const noexcept {

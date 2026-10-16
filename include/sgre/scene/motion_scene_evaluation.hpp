@@ -94,6 +94,8 @@ namespace sgre::scene {
 		// The actual child commands select a current catalogue subtree; no containing/sibling names leak into its lookup.
 		[[nodiscard]] std::optional<MotionSceneLayerReference> FindLayer(std::string_view name, const MotionPlayerCommands& actual_player) const;
 		[[nodiscard]] MotionShapeSnapshot Shape(const MotionSceneLayerReference& reference) const;
+		// Queries retained shape owners without advancing selected frames or requiring an unqueued draw.
+		[[nodiscard]] bool Contains(const MotionSceneLayerReference& reference, resource::MotionPoint point) const;
 		[[nodiscard]] std::uint32_t LayerType(const MotionSceneLayerReference& reference) const;
 		// Checked borrow of the actual kind3 player; no task/resource retain. Expires on its genuine retirement.
 		[[nodiscard]] const MotionChildConstructionState& LayerChild(const MotionSceneLayerReference& reference) const;
