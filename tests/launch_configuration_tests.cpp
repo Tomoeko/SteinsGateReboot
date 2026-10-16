@@ -561,11 +561,41 @@ static void SceneJumpDoesNotPersistTests(const std::filesystem::path& parent) {
 	Require(retained.DebugStartInGame && retained.Installation == manual.Installation && retained.SaveDirectory == manual.SaveDirectory && retained.AudioSamplesPerSecond == manual.AudioSamplesPerSecond, "jump must preserve an explicit manual startup default and resource/audio/save preferences");
 }
 
+static void ResolutionPreferenceTests(const Fixture& fixture) {
+	const auto base = fixture.Configuration();
+	Require(!sgre::app::LaunchConfiguration{}.Fullscreen, "new end-user configuration must default to windowed mode");
+	for (const auto& resolution : sgre::app::kDisplayResolutions) {
+		const auto named = LaunchArguments({"--resolution", resolution.Name});
+		const auto dimensions = LaunchArguments({"--resolution", resolution.Dimensions});
+		Require(named.Resolution && dimensions.Resolution && named.Resolution->Width == dimensions.Resolution->Width && named.Resolution->Height == dimensions.Resolution->Height, "resolution names and explicit dimensions must select the same supported option");
+		const auto applied = sgre::app::ApplyLaunchPreferences(base, named);
+		Require(applied.Width == resolution.Width && applied.Height == resolution.Height && applied.WindowWidth == applied.Width && applied.WindowHeight == applied.Height, "resolution selection must update both render and requested window dimensions together");
+		Require(applied.Installation == base.Installation && applied.DebugStartInGame == base.DebugStartInGame && applied.Fullscreen == base.Fullscreen && applied.WindowCentered == base.WindowCentered && applied.AudioSamplesPerSecond == base.AudioSamplesPerSecond, "resolution selection must retain resource, startup, window mode, placement and audio preferences");
+		const auto parsed = sgre::app::ParseLaunchConfiguration(sgre::app::SerializeLaunchConfiguration(applied));
+		Require(parsed.Width == resolution.Width && parsed.Height == resolution.Height && parsed.WindowWidth == resolution.Width && parsed.WindowHeight == resolution.Height, "remembered resolution must round-trip with its matching requested window size");
+	}
+	const auto ultra = LaunchArguments({"--resolution", "4K", "--windowed"});
+	const auto applied = sgre::app::ApplyLaunchPreferences(base, ultra);
+	Require(applied.Width == 3840 && applied.Height == 2160 && !applied.Fullscreen, "4K alias and explicit windowed selection must retain UHD dimensions");
+	for (const auto value : {"1440", "2560x1080", "0x0", "3840x2160junk", "8k"}) {
+		Reject([&] {
+			static_cast<void>(LaunchArguments({"--resolution", value}));
+		});
+	}
+	Reject([] {
+		static_cast<void>(LaunchArguments({"--resolution", "1440p", "--resolution", "4k"}));
+	});
+	Reject([] {
+		static_cast<void>(LaunchArguments({"--resolution"}));
+	});
+}
+
 int main(int argument_count, char** arguments) {
 	try {
 		Require(argument_count == 2 || argument_count == 3, "supply ignored fixture parent and optional original installation for real seed/automatic repair checks");
 		Fixture fixture(std::filesystem::canonical(arguments[1]));
 		JsonTests(fixture);
+		ResolutionPreferenceTests(fixture);
 		WindowSchemaAndMigrationTests(std::filesystem::canonical(arguments[1]));
 		LaunchArgumentTests(fixture);
 		SceneJumpArgumentTests();

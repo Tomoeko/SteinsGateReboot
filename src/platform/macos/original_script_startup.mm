@@ -2361,6 +2361,7 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 	if (!loaded.RecoveryDiagnostic.empty()) {
 		std::cerr << "launch config repaired: " << loaded.RecoveryDiagnostic << '\n';
 	}
+	loaded.Configuration = sgre::app::ApplyLaunchPreferences(std::move(loaded.Configuration), options);
 	const auto& configuration = loaded.Configuration;
 	sgre::platform::OriginalStartupRun run;
 	run.Installation = configuration.Installation;
@@ -2429,8 +2430,7 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		}
 		std::cerr << (run.SceneEntry ? "original direct entry validated: storage=" : "original stateful seek validated: storage=") << std::quoted(target.CanonicalStorage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << " point=" << target.Point << '\n';
 	}
-	loaded.Configuration = sgre::app::ApplyLaunchPreferences(std::move(loaded.Configuration), options);
-	if (options.Fullscreen || options.WindowCentered) {
+	if (!options.Headless && !options.ValidateOnly && (options.Fullscreen || options.WindowCentered || options.Resolution)) {
 		store.Save(loaded.Configuration);
 	}
 	run.Presentation.VisibleWindow = !run.Headless;
@@ -2541,7 +2541,7 @@ int main(int argc, char** argv) {
 				}
 				const auto options = sgre::app::ParseLaunchArguments(arguments);
 				if (options.Help) {
-					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a complete recorded original checkpoint for this run.\n";
+					std::cout << "usage: sgre-game [GAME_ROOT] [--skip-startup|--normal-start] [--jump SCENE.ks:LINE] [--resolution 576p|720p|1080p|1440p|4k] [--fullscreen|--windowed] [--center-window|--no-center-window] [--headless] [--validate-config] [--maximum-milliseconds N] [--maximum-iterations N] [--save-root PATH]\n  --jump restores a complete recorded original checkpoint for this run.\n";
 
 					return 0;
 				}

@@ -71,6 +71,21 @@ namespace sgre::app {
 		return {std::string(storage), target};
 	}
 
+	static DisplayResolution ParseDisplayResolution(std::string_view value) {
+		std::string normalized(value);
+		for (auto& character : normalized) {
+			if (character >= 'A' && character <= 'Z') {
+				character = static_cast<char>(character - 'A' + 'a');
+			}
+		}
+		for (const auto& resolution : kDisplayResolutions) {
+			if (normalized == resolution.Name || normalized == resolution.Dimensions) {
+				return resolution;
+			}
+		}
+		throw std::runtime_error("--resolution requires 576p, 720p, 1080p, 1440p or 4k (or their exact WIDTHxHEIGHT dimensions)");
+	}
+
 	LaunchArguments ParseLaunchArguments(std::span<const std::string_view> arguments) {
 		if (arguments.size() > kMaximumLaunchArguments) {
 			throw std::runtime_error("launch argument count exceeds32");
@@ -98,6 +113,9 @@ namespace sgre::app {
 			} else if (option == "--center-window" || option == "--no-center-window") {
 				RequireUnique(result.WindowCentered.has_value(), "window placement");
 				result.WindowCentered = option == "--center-window";
+			} else if (option == "--resolution") {
+				RequireUnique(result.Resolution.has_value(), "display resolution");
+				result.Resolution = ParseDisplayResolution(OptionValue(arguments, index));
 			} else if (option == "--headless") {
 				RequireUnique(result.Headless, "headless observation");
 				result.Headless = true;
@@ -142,6 +160,12 @@ namespace sgre::app {
 		}
 		if (arguments.WindowCentered) {
 			configuration.WindowCentered = *arguments.WindowCentered;
+		}
+		if (arguments.Resolution) {
+			configuration.Width = arguments.Resolution->Width;
+			configuration.Height = arguments.Resolution->Height;
+			configuration.WindowWidth = arguments.Resolution->Width;
+			configuration.WindowHeight = arguments.Resolution->Height;
 		}
 		return configuration;
 	}

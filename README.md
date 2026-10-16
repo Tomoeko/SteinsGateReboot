@@ -38,7 +38,9 @@ Use `--skip-startup` to enter gameplay directly, `--normal-start` for ordinary s
 
 Jumps restore the most recently recorded complete state, including the phone and route flags. Missing checkpoints are reconstructed in the background without showing startup movies. Checkpoints stay in ignored `Files/checkpoints/`.
 
-The default window is centered and resizable, with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default.
+Windowed mode is the default, centered and resizable with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default.
+
+Use `--resolution 1440p` or `--resolution 4k` to remember 2560×1440 or 3840×2160 rendering and matching requested window dimensions. `--windowed` selects windowed mode.
 
 ## Find a scene
 
