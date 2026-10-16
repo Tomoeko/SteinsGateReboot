@@ -16,6 +16,8 @@
 namespace sgre::scene {
 
 	class MotionScenePlayer;
+	struct MotionSceneLayerReference;
+	struct MotionLayerOverrides;
 
 	enum class MotionTaskInsertion {
 		Append,
@@ -49,6 +51,8 @@ namespace sgre::scene {
 		void ReleaseChildSyncWait(const MotionChildBorrow& child);
 		void Clear();
 		void Progress(float elapsed_ticks);
+		// Native setter acquisition forces dirty; ordinary writes dirty only when a field changes.
+		void SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty = false);
 		void SetTickCount(float ticks);
 		void SetTickLabel(std::string_view label);
 		void SetSpeed(float speed);

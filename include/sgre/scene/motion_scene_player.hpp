@@ -7,6 +7,8 @@
 
 namespace sgre::scene {
 	class MotionManagerRuntime;
+	struct MotionSceneLayerReference;
+	struct MotionLayerOverrides;
 	class MotionRootScene;
 	class MotionPlayerRandom;
 	class MotionSceneEvaluation;
@@ -26,6 +28,8 @@ namespace sgre::scene {
 		void Rebuild(const ResolvedMotionTimeline& actual_selection);
 		void Update();
 		void Progress(float elapsed_ticks);
+		// Native setter acquisition forces dirty; ordinary writes dirty only when a field changes.
+		void SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty = false);
 		void PostUpdate();
 		void Draw();
 		[[nodiscard]] bool CanMutate() const noexcept;

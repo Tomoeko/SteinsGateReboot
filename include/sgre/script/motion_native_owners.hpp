@@ -10,6 +10,7 @@
 
 namespace sgre::script {
 	class ScriptMotionLayerGetters;
+	class ScriptMotionLayerSetters;
 
 	class ScriptMotionNativeOwners {
 	public:
@@ -36,6 +37,7 @@ namespace sgre::script {
 		[[nodiscard]] scene::MotionPlayerTask Task(const SquirrelValue& instance) const;
 		[[nodiscard]] SquirrelObjectIdentity LayerIdentity(const SquirrelValue& instance) const;
 		// Getter dispatch preserves the actual borrowed child scope; Task() remains root-control-only.
+		[[nodiscard]] SquirrelValue GetLayerSetter(ScriptMotionLayerSetters& setters, const SquirrelValue& instance, std::string_view name) const;
 		[[nodiscard]] SquirrelValue GetLayerGetter(ScriptMotionLayerGetters& getters, const SquirrelValue& instance, std::string_view name) const;
 		[[nodiscard]] SquirrelValue GetLayerMotion(ScriptMotionLayerGetters& getters, const SquirrelValue& instance, std::string_view name) const;
 		// Native273300 wraps an existing kind3 player with release policy false and no new task/listener.

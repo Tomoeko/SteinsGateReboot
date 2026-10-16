@@ -355,6 +355,15 @@ namespace sgre::scene {
 		});
 	}
 
+	void MotionScenePlayer::SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty) {
+		auto& state = *m_Implementation;
+		state.RequireMutable();
+		if (!state.Current || !state.Current->Scene) {
+			throw std::runtime_error("motion layer setter requires its actual selected scene");
+		}
+		state.Current->Scene->SetLayerOverrides(reference, overrides, force_dirty);
+	}
+
 	bool MotionScenePlayer::CanMutate() const noexcept {
 		return m_Implementation->CanMutate();
 	}

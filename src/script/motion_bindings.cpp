@@ -1,6 +1,7 @@
 #include "sgre/script/motion_bindings.hpp"
 
 #include "sgre/script/motion_layer_getter_bindings.hpp"
+#include "sgre/script/motion_layer_setter_bindings.hpp"
 #include "sgre/script/motion_resource_owner.hpp"
 #include "sgre/script/motion_root_coordinate_bindings.hpp"
 #include "sgre/script/motion_variable_bindings.hpp"
@@ -48,6 +49,7 @@ namespace sgre::script {
 		UnregisterAlternateTexture,
 		ClearAlternateTextures,
 		GetLayerGetter,
+		GetLayerSetter,
 		GetLayerMotion,
 		Progress,
 		Clear
@@ -153,6 +155,7 @@ namespace sgre::script {
 		SquirrelHostRoot ClassRoot;
 		std::unique_ptr<ScriptMotionNativeOwners> Owners;
 		std::unique_ptr<ScriptMotionLayerGetters> Getters;
+		std::unique_ptr<ScriptMotionLayerSetters> Setters;
 		std::unique_ptr<ScriptMotionRootCoordinates> RootCoordinates;
 		std::unique_ptr<ScriptMotionVariables> Variables;
 		SquirrelHostRoot NativeTextureClass;
@@ -290,7 +293,7 @@ namespace sgre::script {
 
 				return {};
 			}
-			if (method == MotionMethod::GetLayerGetter || method == MotionMethod::GetLayerMotion) {
+			if (method == MotionMethod::GetLayerGetter || method == MotionMethod::GetLayerSetter || method == MotionMethod::GetLayerMotion) {
 				if (detached) {
 					throw std::runtime_error(method == MotionMethod::GetLayerMotion ? "Motion.getLayerMotion() owner layer already desructed.\n" : "Motion.getLayerGetter() owner layer already desructed.\n");
 				}
@@ -302,6 +305,9 @@ namespace sgre::script {
 					return Owners->GetLayerMotion(*Getters, instance, name);
 				}
 
+				if (method == MotionMethod::GetLayerSetter) {
+					return Owners->GetLayerSetter(*Setters, instance, name);
+				}
 				return Owners->GetLayerGetter(*Getters, instance, name);
 			}
 			switch (method) {
@@ -486,7 +492,7 @@ namespace sgre::script {
 				return SquirrelNativeResult::ReturnValue(vm.CreateWeakReference(arguments.back()));
 			});
 			Vm.NewSlot(Class, std::string("weakref"), weakref);
-			const std::array<std::pair<std::string_view, MotionMethod>, 29> methods = {{
+			const std::array<std::pair<std::string_view, MotionMethod>, 30> methods = {{
 			    {"setChara", MotionMethod::SetCharacter},
 			    {"getChara", MotionMethod::GetCharacter},
 			    {"setStealthChara", MotionMethod::SetStealthCharacter},
@@ -511,6 +517,7 @@ namespace sgre::script {
 			    {"setEventEnabled", MotionMethod::SetEventEnabled},
 			    {"getEventEnabled", MotionMethod::GetEventEnabled},
 			    {"getLayerGetter", MotionMethod::GetLayerGetter},
+			    {"getLayerSetter", MotionMethod::GetLayerSetter},
 			    {"getLayerMotion", MotionMethod::GetLayerMotion},
 			    {"progress", MotionMethod::Progress},
 			    {"registerAlternateTexture", MotionMethod::RegisterAlternateTexture},
@@ -525,7 +532,7 @@ namespace sgre::script {
 					}
 
 					const auto value = owner->Dispatch(method, arguments);
-					if (method == MotionMethod::GetCharacter || method == MotionMethod::GetStealthCharacter || method == MotionMethod::GetMotion || method == MotionMethod::GetStealthMotion || method == MotionMethod::GetPlaying || method == MotionMethod::GetAllPlaying || method == MotionMethod::GetTickCount || method == MotionMethod::GetVisible || method == MotionMethod::GetPriority || method == MotionMethod::GetSpeed || method == MotionMethod::GetEventEnabled || method == MotionMethod::GetLayerGetter || method == MotionMethod::GetLayerMotion) {
+					if (method == MotionMethod::GetCharacter || method == MotionMethod::GetStealthCharacter || method == MotionMethod::GetMotion || method == MotionMethod::GetStealthMotion || method == MotionMethod::GetPlaying || method == MotionMethod::GetAllPlaying || method == MotionMethod::GetTickCount || method == MotionMethod::GetVisible || method == MotionMethod::GetPriority || method == MotionMethod::GetSpeed || method == MotionMethod::GetEventEnabled || method == MotionMethod::GetLayerGetter || method == MotionMethod::GetLayerSetter || method == MotionMethod::GetLayerMotion) {
 						return SquirrelNativeResult::ReturnValue(value);
 					}
 
@@ -611,7 +618,7 @@ namespace sgre::script {
 				Vm.NewSlot(Class, std::string(name), callback);
 			}
 
-			const std::array<std::string_view, 61> unsupported = {{
+			const std::array<std::string_view, 60> unsupported = {{
 			    "pause",
 			    "setPosition",
 			    "getPosition",
@@ -655,7 +662,6 @@ namespace sgre::script {
 			    "getModified",
 			    "contains",
 			    "getLayerNames",
-			    "getLayerSetter",
 			    "getCameraAlive",
 			    "getCameraOffset",
 			    "getCameraPosition",
@@ -695,6 +701,7 @@ namespace sgre::script {
 
 				return owner->Owners->CreateBorrowedChild(layer, containing, child);
 			});
+			Setters = std::make_unique<ScriptMotionLayerSetters>(Vm, Objects);
 			RootCoordinates = std::make_unique<ScriptMotionRootCoordinates>(Vm, Class, *Owners);
 			Variables = std::make_unique<ScriptMotionVariables>(Vm, Class, *Owners);
 			Vm.NewSlot(Vm.RootTable(), std::string("Motion"), Class);

@@ -27,6 +27,7 @@ namespace sgre::scene {
 		bool Visible = true;
 		bool FlipX = false;
 		bool FlipY = false;
+		bool operator==(const MotionLayerOverrides&) const = default;
 	};
 
 	struct MotionLayerVisibility {
@@ -55,7 +56,7 @@ namespace sgre::scene {
 		~MotionLayerComposition() noexcept;
 		MotionLayerComposition(const MotionLayerComposition&) = delete;
 		MotionLayerComposition& operator=(const MotionLayerComposition&) = delete;
-		void SetOverrides(std::uint32_t layer, const MotionLayerOverrides& overrides);
+		void SetOverrides(std::uint32_t layer, const MotionLayerOverrides& overrides, bool force_dirty = false);
 		[[nodiscard]] const MotionLayerOverrides& Overrides(std::uint32_t layer) const;
 		// Actual local frame preparation/variable/actions must precede this forced numeric composition.
 		// Source readiness, geometry, clips and draw-packet publication follow as separate required phases.

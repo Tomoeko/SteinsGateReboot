@@ -338,6 +338,7 @@ add_library(sgre_resource
 	src/script/source_expression.cpp
 	src/script/source_compiler.cpp
 	src/script/motion_layer_getter_bindings.cpp
+	src/script/motion_layer_setter_bindings.cpp
 	src/script/motion_root_coordinate_bindings.cpp
 	src/script/motion_variable_bindings.cpp
 	src/resource/emote_selectors.cpp

@@ -234,19 +234,22 @@ namespace sgre::scene {
 		return &mesh;
 	}
 
-	void MotionLayerComposition::SetOverrides(std::uint32_t layer, const MotionLayerOverrides& overrides) {
-		RequireSelectedOwner();
+	void MotionLayerComposition::SetOverrides(std::uint32_t layer, const MotionLayerOverrides& overrides, bool force_dirty) {
+		RequireSelectedOwner(false);
 		if (layer >= m_Overrides.size()) {
 			throw std::runtime_error("motion layer override index exceeds selected preparation");
 		}
 
 		RequireOverrides(overrides);
+		if (!force_dirty && m_Overrides[layer] == overrides) {
+			return;
+		}
 		m_Overrides[layer] = overrides;
 		m_OverrideDirty[layer] = true;
 	}
 
 	const MotionLayerOverrides& MotionLayerComposition::Overrides(std::uint32_t layer) const {
-		RequireSelectedOwner();
+		RequireSelectedOwner(false);
 		if (layer >= m_Overrides.size()) {
 			throw std::runtime_error("motion layer override index exceeds selected preparation");
 		}

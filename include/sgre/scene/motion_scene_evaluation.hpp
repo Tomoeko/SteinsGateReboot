@@ -104,6 +104,8 @@ namespace sgre::scene {
 		// Native Getter left/top read retained numeric coordinates independently of deformed shape bounds.
 		[[nodiscard]] std::array<float, 3> LayerCoordinate(const MotionSceneLayerReference& reference) const;
 		[[nodiscard]] MotionLayerVisibility LayerVisibility(const MotionSceneLayerReference& reference) const;
+		[[nodiscard]] MotionLayerOverrides LayerOverrides(const MotionSceneLayerReference& reference) const;
+		void SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty = false);
 		[[nodiscard]] std::uint64_t GraphGeneration() const noexcept;
 
 	private:

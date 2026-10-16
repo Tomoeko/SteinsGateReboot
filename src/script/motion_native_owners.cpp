@@ -1,6 +1,7 @@
 #include "sgre/script/motion_native_owners.hpp"
 
 #include "sgre/script/motion_layer_getter_bindings.hpp"
+#include "sgre/script/motion_layer_setter_bindings.hpp"
 #include "sgre/script/motion_resource_owner.hpp"
 
 #include <array>
@@ -320,6 +321,15 @@ namespace sgre::script {
 		}
 
 		return *record.PlayerTask;
+	}
+
+	SquirrelValue ScriptMotionNativeOwners::GetLayerSetter(ScriptMotionLayerSetters& setters, const SquirrelValue& instance, std::string_view name) const {
+		const auto& record = m_Implementation->Record(instance);
+		static_cast<void>(Commands(instance));
+		const auto task = *record.PlayerTask;
+		const auto child = record.Child;
+
+		return setters.GetLayerSetter(task, name, child);
 	}
 
 	SquirrelValue ScriptMotionNativeOwners::GetLayerGetter(ScriptMotionLayerGetters& getters, const SquirrelValue& instance, std::string_view name) const {

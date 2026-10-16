@@ -272,6 +272,16 @@ namespace sgre::scene {
 		return Require()->ScenePlayer.get();
 	}
 
+	void MotionPlayerTask::SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty) {
+		const auto owner = Require();
+		owner->RequireMutable();
+		const MotionTaskControlScope control(owner->Controlling);
+		if (!owner->ScenePlayer) {
+			throw std::runtime_error("motion layer setter requires its actual generic scene player");
+		}
+		owner->ScenePlayer->SetLayerOverrides(reference, overrides, force_dirty);
+	}
+
 	void MotionPlayerTask::SetCharacter(std::string_view character, MotionCharacterMode mode) {
 		const auto owner = Require();
 		owner->RequireMutable();

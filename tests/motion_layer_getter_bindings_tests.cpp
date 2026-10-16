@@ -467,6 +467,87 @@ static void TestRetainedLayerVisibility() {
 	    "retired");
 }
 
+static void TestSelectedLayerSetterControls() {
+	Fixture fixture;
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	Require(std::holds_alternative<std::monostate>(fixture.Call(motion, "getLayerSetter", {std::string("missing")})), "an unselected player must have no layer setter");
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "setVisible", {true}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	fixture.Second().Update();
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto setter = fixture.Call(motion, "getLayerSetter", {std::string("rectangle map key")});
+	const auto setter_root = fixture.Vm.Retain(setter);
+	const auto alias = fixture.Call(motion, "getLayerSetter", {std::string("rectangle map key")});
+	const auto alias_root = fixture.Vm.Retain(alias);
+	Require(std::holds_alternative<std::monostate>(fixture.Call(motion, "getLayerSetter", {std::string("different from lookup key")})), "setter lookup must use the real name map");
+	Require(fixture.Read(setter, "visible") == sgre::script::SquirrelValue{true} && fixture.Read(setter, "branchVisible") == sgre::script::SquirrelValue{true} && fixture.Read(setter, "left") == sgre::script::SquirrelValue{0.0f}, "setter getters must expose initial override fields rather than completed numeric coordinates");
+	static_cast<void>(fixture.Call(setter, "set", {std::string("visible"), false}));
+	Require(fixture.Read(alias, "visible") == sgre::script::SquirrelValue{false} && fixture.Read(getter, "visible") == sgre::script::SquirrelValue{true}, "aliases share pending overrides while numeric visibility remains completed");
+	fixture.Second().Update();
+	Require(fixture.Read(getter, "visible") == sgre::script::SquirrelValue{false} && fixture.Read(getter, "branchVisible") == sgre::script::SquirrelValue{true}, "native visible override disables only this layer's active gate");
+	static_cast<void>(fixture.Call(setter, "setBranchVisible", {false}));
+	fixture.Second().Update();
+	Require(fixture.Read(getter, "branchVisible") == sgre::script::SquirrelValue{false}, "branch visibility must affect composed branch state");
+	static_cast<void>(fixture.Call(setter, "setVisible", {true}));
+	static_cast<void>(fixture.Call(setter, "setBranchVisible", {true}));
+	static_cast<void>(fixture.Call(setter, "setCoord", {7.0f, 11.0f}));
+	Require(fixture.Read(alias, "left") == sgre::script::SquirrelValue{7.0f} && fixture.Read(alias, "top") == sgre::script::SquirrelValue{11.0f}, "paired coordinate setter must preserve both native override words");
+	static_cast<void>(fixture.Call(setter, "setLeft", {13.0f}));
+	static_cast<void>(fixture.Call(setter, "setTop", {19.0f}));
+	static_cast<void>(fixture.Call(setter, "setZoom", {2.0f, 3.0f}));
+	static_cast<void>(fixture.Call(setter, "setZoomX", {4.0f}));
+	static_cast<void>(fixture.Call(setter, "setZoomY", {5.0f}));
+	static_cast<void>(fixture.Call(setter, "setFlip", {true, false}));
+	static_cast<void>(fixture.Call(setter, "setFlipX", {false}));
+	static_cast<void>(fixture.Call(setter, "setFlipY", {true}));
+	static_cast<void>(fixture.Call(setter, "setSlant", {0.25f, 0.5f}));
+	static_cast<void>(fixture.Call(setter, "setSlantX", {0.75f}));
+	static_cast<void>(fixture.Call(setter, "setSlantY", {0.125f}));
+	static_cast<void>(fixture.Call(setter, "setAngleDeg", {450.0f}));
+	Require(fixture.Read(alias, "angleRad") == sgre::script::SquirrelValue{450.0f * 6.28318548f / 360.0f}, "layer angles must retain unnormalized degrees and original conversion order");
+	static_cast<void>(fixture.Call(setter, "setAngleRad", {1.57079637f}));
+	static_cast<void>(fixture.Call(setter, "setOpacity", {std::int32_t{77}}));
+	Require(fixture.Read(alias, "left") == sgre::script::SquirrelValue{13.0f} && fixture.Read(alias, "top") == sgre::script::SquirrelValue{19.0f} && fixture.Read(alias, "zoomX") == sgre::script::SquirrelValue{4.0f} && fixture.Read(alias, "zoomY") == sgre::script::SquirrelValue{5.0f} && fixture.Read(alias, "flipX") == sgre::script::SquirrelValue{false} && fixture.Read(alias, "flipY") == sgre::script::SquirrelValue{true} && fixture.Read(alias, "slantX") == sgre::script::SquirrelValue{0.75f} && fixture.Read(alias, "slantY") == sgre::script::SquirrelValue{0.125f} && fixture.Read(alias, "angleDeg") == sgre::script::SquirrelValue{90.0f} && fixture.Read(alias, "opacity") == sgre::script::SquirrelValue{std::int32_t{77}}, "scalar layer controls must update independent real override fields");
+	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{20.0f}, "pending controls must not overwrite the completed numeric pose");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(setter, "setOpacity", {std::int32_t{-1}}));
+	},
+	    "byte opacity");
+	Require(fixture.Read(alias, "opacity") == sgre::script::SquirrelValue{std::int32_t{77}}, "invalid override admission must preserve every retained field");
+	fixture.Second().Update();
+	Require(fixture.Read(getter, "left") == sgre::script::SquirrelValue{33.0f} && fixture.Read(getter, "top") == sgre::script::SquirrelValue{59.0f}, "next real numeric phase must compose actual layer coordinate overrides");
+	const auto child = fixture.Call(motion, "getLayerMotion", {std::string("child map key")});
+	const auto child_root = fixture.Vm.Retain(child);
+	Require(std::holds_alternative<std::monostate>(fixture.Call(child, "getLayerSetter", {std::string("rectangle map key")})), "child setter lookup cannot escape to its containing sibling");
+	const auto nested = fixture.Call(child, "getLayerSetter", {std::string("nested map key")});
+	const auto nested_root = fixture.Vm.Retain(nested);
+	static_cast<void>(fixture.Call(nested, "setLeft", {51.0f}));
+	Require(fixture.Read(nested, "left") == sgre::script::SquirrelValue{51.0f} && fixture.Read(alias, "left") == sgre::script::SquirrelValue{13.0f} && fixture.Second().Count() == 1, "nested setters must control their genuine selected child without creating a task");
+	fixture.Second().Draw(0);
+	Require(fixture.Read(alias, "left") == sgre::script::SquirrelValue{13.0f}, "queued rows permit retained override reads");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(alias, "setLeft", {99.0f}));
+	},
+	    "queued row borrows");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(motion, "getLayerSetter", {std::string("rectangle map key")}));
+	},
+	    "queued row borrows");
+	fixture.Secondary->SceneContext().Clear();
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(alias, "setLeft", {99.0f}));
+	},
+	    "retired");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(nested, "getLeft"));
+	},
+	    "retired");
+}
+
 static void TestActualScriptProgress() {
 	Fixture fixture;
 	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
@@ -1382,6 +1463,7 @@ int main() {
 		TestEmptyActualChildCatalogueCount();
 		TestRetainedNumericPosition();
 		TestRetainedLayerVisibility();
+		TestSelectedLayerSetterControls();
 		TestActualScriptProgress();
 		TestNativeConstructorsAndArgumentGuards();
 		std::cout << "Motion layer getter: real recursive map, weak generation borrow and independent shape snapshots PASS\n";

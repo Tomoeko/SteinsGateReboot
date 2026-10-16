@@ -1878,6 +1878,32 @@ namespace sgre::scene {
 		throw std::runtime_error("motion visibility getter context is no longer current");
 	}
 
+	MotionLayerOverrides MotionSceneEvaluation::LayerOverrides(const MotionSceneLayerReference& reference) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			const auto* context = entry.Actual;
+			if (context != nullptr && context->Identity == reference.ContextIdentity) {
+				return context->Composition->Overrides(reference.NativeOrdinal - 1);
+			}
+		}
+		throw std::runtime_error("motion override getter context is no longer current");
+	}
+
+	void MotionSceneEvaluation::SetLayerOverrides(const MotionSceneLayerReference& reference, const MotionLayerOverrides& overrides, bool force_dirty) {
+		auto& state = *m_Implementation;
+		state.Services.RequireUnqueued();
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			auto* context = entry.Actual;
+			if (context != nullptr && context->Identity == reference.ContextIdentity) {
+				context->Composition->SetOverrides(reference.NativeOrdinal - 1, overrides, force_dirty);
+				return;
+			}
+		}
+		throw std::runtime_error("motion override setter context is no longer current");
+	}
+
 	MotionShapeSnapshot MotionSceneEvaluation::Shape(const MotionSceneLayerReference& reference) const {
 		const auto& state = *m_Implementation;
 		const auto& node = state.ResolveLayer(reference);
