@@ -45,6 +45,7 @@ namespace sgre::text {
 	[[nodiscard]] std::int32_t VectorFontRequestedHeight26Dot6(std::uint32_t size_word);
 	[[nodiscard]] VectorFontConfiguration ResolveVectorFontConfiguration(std::int32_t mode, std::string language);
 
+	class TrueTypeHintedGlyphFont;
 	class VectorFontNormalizationFont;
 	class UnicodeNormalizationBuffer;
 
@@ -78,7 +79,8 @@ namespace sgre::text {
 		// One actual UTF-16 buffer through neutral normalization, admitted GSUB/GPOS and owned run publication.
 		[[nodiscard]] OwnedTextGlyphRun PrepareRun(std::u16string_view text);
 		[[nodiscard]] std::uint16_t MapCharacter(std::uint32_t character) const;
-		// CPU preparation for the verified default CFF driver; does not perform shaping or GPU work.
+		// CPU flags-8 preparation retains cubic CFF or quadratic TrueType paths.
+		// Each font serializes its persistent TrueType hint state; no shaping or GPU work.
 		[[nodiscard]] CffPreparedGlyph PrepareGlyph(std::uint32_t glyph_index) const;
 
 	private:
@@ -90,6 +92,7 @@ namespace sgre::text {
 		bool m_DefaultLayoutScale = false;
 		std::unique_ptr<CffGlyphFont> m_Cff;
 		std::unique_ptr<TrueTypeGlyphFont> m_TrueType;
+		mutable std::unique_ptr<TrueTypeHintedGlyphFont> m_HintedTrueType;
 		std::unique_ptr<VectorFontMetricServices> m_MetricServices;
 		std::unique_ptr<VectorFontNormalizationFont> m_NormalizationFont;
 		std::unique_ptr<UnicodeNormalizationBuffer> m_InputBuffer;

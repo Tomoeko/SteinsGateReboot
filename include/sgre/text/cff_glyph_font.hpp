@@ -3,9 +3,11 @@
 #include "sgre/resource/cff.hpp"
 #include "sgre/resource/cff_driver_hints.hpp"
 #include "sgre/text/cff_glyph_metrics.hpp"
+#include "sgre/text/cff_glyph_path.hpp"
 #include "sgre/text/cff_hinted_metrics.hpp"
 
 #include <cstdint>
+#include <optional>
 #include <vector>
 
 namespace sgre::text {
@@ -15,6 +17,9 @@ namespace sgre::text {
 		std::uint16_t PixelSize = 0;
 		CffContourOutline Outline;
 		CffHintedGlyphMetrics Metrics;
+		// TrueType keeps its owned quadratic path instead of manufacturing cubic
+		// CFF point tags. An absent path retains the existing CFF decomposition.
+		std::optional<CffGlyphPath> PreparedPath;
 	};
 
 	struct CffUnhintedGlyph {

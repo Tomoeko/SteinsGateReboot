@@ -59,7 +59,7 @@ namespace sgre::text {
 			throw std::runtime_error("CFF glyph stroke input requires a positive actual edge width");
 		}
 
-		auto path = PrepareCffGlyphPath(glyph.Outline.Points, glyph.Outline.ContourEnds);
+		auto path = glyph.PreparedPath ? *glyph.PreparedPath : PrepareCffGlyphPath(glyph.Outline.Points, glyph.Outline.ContourEnds);
 		const auto plan = PlanCffGlyphBitmap(path.Bounds, edge_width_pixels);
 		if (!plan) {
 			return std::nullopt;
@@ -88,7 +88,7 @@ namespace sgre::text {
 	}
 
 	std::optional<PreparedCffGlyphRaster> PreparedCffGlyphRaster::Prepare(const CffPreparedGlyph& glyph) {
-		auto path = PrepareCffGlyphPath(glyph.Outline.Points, glyph.Outline.ContourEnds);
+		auto path = glyph.PreparedPath ? *glyph.PreparedPath : PrepareCffGlyphPath(glyph.Outline.Points, glyph.Outline.ContourEnds);
 		const auto plan = PlanCffGlyphBitmap(path.Bounds);
 		if (!plan) {
 			return std::nullopt;

@@ -88,6 +88,7 @@ add_library(sgre_resource
 	src/resource/sfnt.cpp
 	src/resource/truetype_outline.cpp
 	src/text/truetype_glyph_font.cpp
+	src/text/truetype_hinted_glyph_font.cpp
 	src/text/truetype_glyph_path.cpp
 	src/text/truetype_program.cpp
 	src/text/truetype_stack_program.cpp
@@ -839,6 +840,8 @@ if(SGRE_BUILD_TESTS)
 		truetype_state_program
 		truetype_point_program
 		truetype_vector_font_metric
+		truetype_hinted_glyph
+		text_truetype_hinted_integration
 		voice_uniqueness
 		squirrel_lifetime
 		sound_volume

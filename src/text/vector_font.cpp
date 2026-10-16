@@ -1,5 +1,7 @@
 #include "sgre/text/vector_font.hpp"
 
+#include "sgre/text/truetype_glyph_path.hpp"
+#include "sgre/text/truetype_hinted_glyph_font.hpp"
 #include "sgre/text/vector_font_metric_services.hpp"
 #include "sgre/text/vector_font_normalization_font.hpp"
 
@@ -164,22 +166,51 @@ namespace sgre::text {
 
 		m_Size.Word = word;
 		m_Size.RequestedHeight26Dot6 = VectorFontRequestedHeight26Dot6(word);
+		if (m_HintedTrueType) {
+			m_HintedTrueType->InvalidateSize();
+		}
 	}
 
 	std::uint16_t VectorFont::MapCharacter(std::uint32_t character) const {
 		return m_Font.MapCharacter(character);
 	}
 
+	static CffPreparedGlyph PrepareHintedTrueType(TrueTypeHintedGlyphFont& font, std::uint32_t glyph_index, std::int32_t pixel_size) {
+		const auto glyph = font.PrepareGlyph(glyph_index, pixel_size);
+		CffPreparedGlyph result;
+		result.GlyphIndex = glyph.GlyphIndex;
+		result.PixelSize = glyph.PixelSize;
+		result.PreparedPath = PrepareTrueTypeGlyphPath(glyph.Points, glyph.ContourEnds);
+		result.Metrics.Width26Dot6 = glyph.Metrics.Width26Dot6;
+		result.Metrics.Height26Dot6 = glyph.Metrics.Height26Dot6;
+		result.Metrics.HorizontalBearingX26Dot6 = glyph.Metrics.HorizontalBearingX26Dot6;
+		result.Metrics.HorizontalBearingY26Dot6 = glyph.Metrics.HorizontalBearingY26Dot6;
+		result.Metrics.HorizontalAdvance26Dot6 = glyph.Metrics.HorizontalAdvance26Dot6;
+		result.Metrics.VerticalBearingX26Dot6 = glyph.Metrics.VerticalBearingX26Dot6;
+		result.Metrics.VerticalBearingY26Dot6 = glyph.Metrics.VerticalBearingY26Dot6;
+		result.Metrics.VerticalAdvance26Dot6 = glyph.Metrics.VerticalAdvance26Dot6;
+		result.Metrics.LinearHorizontalAdvance16Dot16 = glyph.Metrics.LinearHorizontalAdvance16Dot16;
+		result.Metrics.LinearVerticalAdvance16Dot16 = glyph.Metrics.LinearVerticalAdvance16Dot16;
+		result.Metrics.AdvanceX26Dot6 = glyph.Metrics.HorizontalAdvance26Dot6;
+		result.Metrics.OutlineFlags = glyph.OutlineFlags;
+
+		return result;
+	}
+
 	CffPreparedGlyph VectorFont::PrepareGlyph(std::uint32_t glyph_index) const {
-		if (!m_Cff) {
-			throw std::runtime_error("VectorFont TrueType outline preparation remains unrecovered");
-		}
 		if (!m_Size.RequestedHeight26Dot6) {
 			throw std::runtime_error("VectorFont glyph preparation requires an applied character size");
 		}
 
 		// FT_Set_Char_Size clamps both requested dimensions to at least one pixel.
 		const auto height = std::max(std::int32_t{64}, *m_Size.RequestedHeight26Dot6);
+		if (!m_Cff) {
+			if (!m_HintedTrueType) {
+				m_HintedTrueType = std::make_unique<TrueTypeHintedGlyphFont>(m_Font);
+			}
+
+			return PrepareHintedTrueType(*m_HintedTrueType, glyph_index, height / 64);
+		}
 
 		return m_Cff->PrepareGlyph(glyph_index, height / 64);
 	}

@@ -66,10 +66,9 @@ static void TestDefaultSameOwnerLiveSizeAndRetirement() {
 		bytes.reset();
 		const auto empty = metrics.VerticalOrigin(1);
 		Require(!weak.expired() && empty && empty->X26Dot6 == 307 && empty->Y26Dot6 == 61, "the real resource owner must preserve empty-glyph vertical metrics after external source retirement");
-		RequireFailure([&] {
-			static_cast<void>(font.PrepareGlyph(0));
-		},
-		    "TrueType outline preparation remains unrecovered");
+		const auto prepared = font.PrepareGlyph(0);
+		Require(prepared.GlyphIndex == 0 && prepared.PixelSize == 48 && prepared.PreparedPath && !prepared.PreparedPath->Commands.empty() && prepared.Outline.Points.empty() && prepared.Outline.ContourEnds.empty(), "TrueType glyph preparation must own its actual quadratic path without fabricated CFF point tags");
+		Require(prepared.Metrics.AdvanceX26Dot6 == prepared.Metrics.HorizontalAdvance26Dot6 && prepared.Metrics.AdvanceY26Dot6 == 0 && !weak.expired(), "TrueType flags-8 horizontal glyph metrics must retain their same live font owner");
 	}
 
 	Require(weak.expired(), "TrueType services must retire with the enclosing font and release all resource pins");
