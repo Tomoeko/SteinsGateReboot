@@ -610,8 +610,105 @@ static void TestSkipSceneFiniteRemovalAndLoopBlendCache() {
 	owner.Close();
 }
 
+static void TestContainingWarmClearAfterFinalResourceUnregister() {
+	{
+		Fixture fixture(OwnerDocument());
+		std::weak_ptr<const sgre::scene::LoadedMotionAsset> loaded = fixture.Asset;
+		std::weak_ptr<const sgre::resource::PsbDocument> document = fixture.Asset->Document;
+		std::weak_ptr<const std::vector<std::uint8_t>> pixels = fixture.Asset->Backing;
+		std::weak_ptr<const sgre::resource::MotionResource> metadata = fixture.Asset->Model;
+		std::size_t entropy_reads = 0;
+		{
+			sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [&] {
+				return static_cast<std::uint32_t>(++entropy_reads);
+			},
+			    [](const auto&) {
+			    });
+			const ClearPublication publication{*fixture.Runtime};
+			owner.SetVisible(true);
+			owner.Progress(1);
+			Require(owner.PhysicalCounts().Updated == 6 && fixture.Runtime->Identifiers().LiveCount() == 6, "containing unregister fixture requires a genuine visible six-family completion and initialized native reference history");
+			owner.SetCoordinate({8, -4}, 2, 0);
+			const auto serial = owner.Commands().SelectionSerial();
+			const auto tick = owner.Commands().ClockState().TickCount;
+			owner.Clear();
+			const auto next_uid = fixture.Runtime->Identifiers().NextIdentifier();
+			const auto retired_uids = fixture.Runtime->Identifiers().RetiredCount();
+			Require(owner.Commands().SelectedLayersCleared() && owner.PlainPlayer().Scene() == nullptr && fixture.Runtime->Identifiers().LiveCount() == 0, "native Common Clear must retire selected UIDs while preserving the containing owner and its pending property transition");
+			Require(fixture.Manager.Unregister(fixture.Project) && fixture.Manager.Count() == 0 && fixture.Cache.Count() == 0 && fixture.Releases == 1, "final unregister must release original source textures before containing post-Clear continuation");
+			fixture.Asset.reset();
+			fixture.Catalog.Prune();
+			Require(loaded.expired() && pixels.expired() && !document.expired() && !metadata.expired(), "containing owner must retain separate parsed Document and Model without LoadedMotionAsset or pixel/source ownership");
+			Require(!fixture.Runtime->ResourceBorrowsLive() && owner.PlainPlayer().ResourcesLive(), "cleared containing readiness must use its exact live cached plain metadata rather than the retired source-registration snapshot");
+
+			// First preparation after external document release discriminates a genuine retained metadata owner.
+			owner.PlayTimeline("phase");
+			Require(owner.TimelinePlaying("phase") && owner.ReadVariable("probe") == 7, "lazy timeline preparation must read the containing owner's exact parsed document after external owners retire");
+			owner.Progress(1);
+			const auto physical = owner.PhysicalCounts();
+			const auto conversion = owner.PhysicsToWorld();
+			Require(owner.Commands().ClockState().TickCount == tick + 1 && owner.Commands().SelectionSerial() == serial && owner.Root().Overrides().Coordinate == std::array<float, 3>{4, -2, 0} && owner.Commands().ParameterValues().Read("probe") == 7, "post-unregister containing Progress must advance real property, timeline and plain clocks once without a manufactured source selection");
+			Require(physical.Updated == 0 && physical.MeshWrites == 0 && std::isfinite(conversion.XX) && std::isfinite(conversion.YY) && entropy_reads == 2, "warm post-Clear Common phase must retain its measured reference conversion while updating no retired UID control instances or constructor entropy");
+			owner.Draw();
+			Require(fixture.Runtime->SceneContext().Size() == 0 && fixture.Runtime->Context().Size() == 0 && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->Identifiers().NextIdentifier() == next_uid && fixture.Runtime->Identifiers().RetiredCount() == retired_uids && owner.CanClose(), "containing empty Draw must not revive UIDs, acquire textures or publish a retired selected scene");
+			owner.Clear();
+		}
+		fixture.Catalog.Prune();
+		Require(document.expired() && metadata.expired() && fixture.Runtime->PlayerCount() == 0 && fixture.Runtime->CanClose(), "actual containing owner retirement must release its separate CPU document/model shares and all runtime borrows");
+	}
+
+	{
+		Fixture fixture(OwnerDocument());
+		sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+			return 17u;
+		},
+		    [](const auto&) {
+		    });
+		const ClearPublication publication{*fixture.Runtime};
+		owner.SetVisible(true);
+		owner.Progress(1);
+		const auto* selected = owner.PlainPlayer().Scene();
+		const auto tick = owner.Commands().ClockState().TickCount;
+		Require(selected && fixture.Runtime->Identifiers().LiveCount() == 6 && !owner.Commands().SelectedLayersCleared(), "active containing rejection requires a genuine non-cleared selected tree");
+		Require(fixture.Manager.Unregister(fixture.Project), "active containing rejection must remove the actual registration");
+		RequireFailure([&] {
+			owner.Progress(1);
+		},
+		    "containing Emote requires");
+		RequireFailure([&] {
+			owner.Draw();
+		},
+		    "containing Emote requires");
+		RequireFailure([&] {
+			owner.SetCoordinate({1, 2}, 0, 0);
+		},
+		    "containing Emote requires");
+		Require(owner.PlainPlayer().Scene() == selected && !owner.PlainPlayer().ResourcesLive() && owner.Commands().ClockState().TickCount == tick && fixture.Runtime->Identifiers().LiveCount() == 6 && fixture.Runtime->SceneContext().Size() == 0, "active registration loss must still reject before clock/control/UID or queued publication changes");
+	}
+
+	{
+		Fixture fixture(OwnerDocument());
+		sgre::scene::EmoteScenePlayer owner(*fixture.Runtime, fixture.Project, [] {
+			return 23u;
+		},
+		    [](const auto&) {
+		    });
+		const ClearPublication publication{*fixture.Runtime};
+		owner.SetVisible(true);
+		owner.Clear();
+		Require(fixture.Manager.Unregister(fixture.Project), "cold containing rejection must remove the real registration after actual tree retirement");
+		fixture.Asset.reset();
+		RequireFailure([&] {
+			owner.Progress(1);
+		},
+		    "initialized native reference history");
+		Require(owner.CanClose() && owner.PlainPlayer().Scene() == nullptr && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->SceneContext().Size() == 0, "cold post-Clear history rejection must remain safely retireable without inventing a reference or selected geometry");
+	}
+}
+
 int main() {
 	try {
+		TestContainingWarmClearAfterFinalResourceUnregister();
 		TestSkipSceneFinishesCurrentAndQueuedAngleWithoutPublication();
 		TestSkipSceneFiniteRemovalAndLoopBlendCache();
 		TestPassSceneKeepsActualClocksAndPropertyControllers();

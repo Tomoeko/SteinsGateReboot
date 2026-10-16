@@ -136,7 +136,7 @@ namespace sgre::scene {
 			}
 
 			void RequireSceneMutable() const {
-				if (Thread != std::this_thread::get_id() || !Plain || !Plain->CanMutate() || !Runtime.ResourceBorrowsLive()) {
+				if (Thread != std::this_thread::get_id() || Runtime.IsClosed() || !Plain || !Plain->CanMutate() || !Plain->ResourcesLive()) {
 					throw std::runtime_error("containing Emote requires its live unqueued actual plain/registration owners");
 				}
 			}
