@@ -1,5 +1,6 @@
 #include "sgre/script/source_compiler.hpp"
 
+#include "sgre/script/input_bindings.hpp"
 #include "sgre/script/squirrel_vm.hpp"
 
 #include <algorithm>
@@ -559,6 +560,139 @@ static void TestActualCompilestringRegistration() {
 	    "registered-error");
 }
 
+static void TestQualifiedConstantMembersAndOwnedSnapshots() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SquirrelVm vm(limits);
+	vm.InstallRecoveredBaseLibrary();
+	auto enumeration = vm.CreateTable();
+	vm.NewSlot(vm.ConstantTable(), std::string("ENUM"), enumeration);
+	vm.NewSlot(enumeration, std::string("Number"), std::int32_t{37});
+	vm.NewSlot(enumeration, std::string("Negative"), std::int32_t{-17});
+	vm.NewSlot(enumeration, std::string("Fraction"), 1.25f);
+	vm.NewSlot(enumeration, std::string("Enabled"), true);
+	vm.NewSlot(enumeration, std::string("Empty"), SquirrelValue{});
+	vm.NewSlot(enumeration, std::string("Text"), std::string("owned primitive"));
+	vm.NewSlot(enumeration, std::string("constructor"), std::int32_t{88});
+	Require(std::get<std::int32_t>(Run(vm, "return ENUM.Number;", vm.RootTable())) == 37 && std::get<std::int32_t>(Run(vm, "return ENUM.Negative;", vm.RootTable())) == -17, "qualified constant integers must fold the selected primitive member");
+	Require(std::get<float>(Run(vm, "return ENUM.Fraction;", vm.RootTable())) == 1.25f && std::get<bool>(Run(vm, "return ENUM.Enabled;", vm.RootTable())) && std::holds_alternative<std::monostate>(Run(vm, "return ENUM.Empty;", vm.RootTable())), "qualified constants changed existing primitive float/bool/null loading");
+	Require(std::get<std::int32_t>(Run(vm, "return ENUM.constructor;", vm.RootTable())) == 88, "native identifier expectation must retain its constructor-name exception");
+	const auto runtime_table = vm.CreateTable();
+	vm.NewSlot(vm.RootTable(), std::string("ENUM"), runtime_table);
+	vm.NewSlot(runtime_table, std::string("Number"), std::int32_t{91});
+	Require(std::get<std::int32_t>(Run(vm, "return ::ENUM.Number;", vm.RootTable())) == 91 && std::get<std::int32_t>(Run(vm, "return ENUM.Number;", vm.RootTable())) == 37, "explicit root access and shared compile-time constants must remain distinct");
+	const auto local = Run(vm, "return function(ENUM) { return ENUM.Number; };", vm.RootTable());
+	const auto local_root = vm.Retain(local);
+	const std::array<SquirrelValue, 2> local_arguments{vm.RootTable(), runtime_table};
+	Require(std::get<std::int32_t>(vm.Invoke(local, local_arguments).Value) == 91, "a real local table parameter must shadow the shared enum constant");
+	vm.SetSlot(runtime_table, std::string("Number"), std::int32_t{92});
+	Require(std::get<std::int32_t>(vm.Invoke(local, local_arguments).Value) == 92, "local member access must remain a runtime read rather than a folded enum member");
+	std::size_t delegated_reads = 0;
+	const auto delegate = vm.CreateTable();
+	const auto delegate_root = vm.Retain(delegate);
+	vm.NewSlot(delegate, std::string("Inherited"), std::int32_t{74});
+	vm.NewSlot(delegate, std::string("_get"), vm.CreateNativeClosure("forbidden_constant_get", [&](SquirrelVm&, std::span<const SquirrelValue>) {
+		++delegated_reads;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{75});
+	}));
+	sgre::script::BytecodeProgram attach_delegate;
+	attach_delegate.MainFunction.Name = std::string("attach-enum-delegate");
+	attach_delegate.MainFunction.SourceName = std::string("qualified-constant-fixture");
+	attach_delegate.MainFunction.Parameters = {std::string("this"), std::string("object"), std::string("delegate")};
+	attach_delegate.MainFunction.StackSize = 3;
+	sgre::script::SquirrelInstruction delegation;
+	delegation.Opcode = 53;
+	delegation.Argument0 = 1;
+	delegation.Argument1 = 1;
+	delegation.Argument2 = 2;
+	sgre::script::SquirrelInstruction returned;
+	returned.Opcode = 19;
+	returned.Argument0 = 1;
+	returned.Argument1 = 1;
+	attach_delegate.MainFunction.Instructions = {delegation, returned};
+	Require(vm.Invoke(vm.CreateClosure(std::move(attach_delegate)), std::array<SquirrelValue, 3>{vm.RootTable(), enumeration, delegate}).Value == enumeration, "real delegate instruction must return the actual enum table");
+	for (const auto source : {"return ENUM.Inherited;", "return ENUM.Missing;"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "raw-enum-source"));
+		},
+		    "invalid constant [ENUM.");
+	}
+	Require(delegated_reads == 0, "compile-time enum lookup must not traverse delegates or invoke _get");
+	for (const auto source : {"return ENUM;", "return ENUM[\"Number\"];"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "enum-qualifier-source"));
+		},
+		    "constant table requires '.'");
+	}
+	for (const auto source : {"return ENUM.;", "return ENUM.this;", "return ENUM.\"Number\";"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "enum-member-source"));
+		},
+		    "constant member requires identifier");
+	}
+	vm.NewSlot(enumeration, std::string("Object"), vm.CreateTable());
+	for (const auto& object : {vm.CreateTable(), vm.CreateArray(), vm.CreateNativeClosure("unrecovered_object_literal", [](SquirrelVm&, std::span<const SquirrelValue>) {
+		                           return sgre::script::SquirrelNativeResult::NoValues();
+	                           })}) {
+		vm.SetSlot(enumeration, std::string("Object"), object);
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, "return ENUM.Object;", "object-enum-source"));
+		},
+		    "constant-table value requires unrecovered object constant semantics");
+	}
+	const auto program = CompileSquirrelSource(vm, "return ENUM.Text;", "enum-owned-source");
+	Require(program.MainFunction.Literals == std::vector<sgre::script::SquirrelLiteral>{std::string("owned primitive")}, "folded enum text must own only the resolved primitive literal");
+	const auto compiled = vm.CreateClosure(program);
+	const auto compiled_root = vm.Retain(compiled);
+	vm.SetSlot(enumeration, std::string("Text"), std::string("changed after compilation"));
+	vm.SetConstantTable(vm.CreateTable());
+	enumeration = {};
+	vm.ResetContext(vm.RootContext());
+	static_cast<void>(vm.CollectGarbage());
+	Require(sgre::script::StringText(vm.Invoke(compiled, std::array<SquirrelValue, 1>{vm.RootTable()}).Value) == "owned primitive", "compiled member snapshot borrowed the retired compile-time table or its later string value");
+}
+
+static void TestActualRegisteredKeyMemberConditional() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	sgre::script::ScriptObjectBindings objects(vm);
+	sgre::input::KeyMappings mappings;
+	sgre::script::ScriptInputBindings inputs(vm, objects, mappings);
+	const auto keys = vm.GetSlot(vm.ConstantTable(), std::string("KEY"));
+	Require(std::get<std::int32_t>(vm.GetSlot(keys, std::string("B"))) == 2, "actual recovered input enum changed its B member");
+	vm.NewSlot(vm.ConstantTable(), std::string("KEY_OK"), std::int32_t{2});
+	bool nx = false;
+	std::size_t calls = 0;
+	const auto receiver = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("checkNX"), vm.CreateNativeClosure("actual_conditional_platform_query", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 1 && arguments[0] == receiver, "generated platform conditional changed the actual method receiver");
+		++calls;
+		return sgre::script::SquirrelNativeResult::ReturnValue(nx);
+	}));
+	constexpr std::string_view kOriginalSource = "return checkNX()?2:KEY_OK==KEY.B?1:0";
+	const auto program = CompileSquirrelSource(vm, kOriginalSource, "actual-key-member-source");
+	Require(std::none_of(program.MainFunction.Literals.begin(), program.MainFunction.Literals.end(), [](const auto& literal) {
+		const auto* text = std::get_if<std::string>(&literal);
+		return text && (*text == "KEY" || *text == "B" || *text == "KEY_OK");
+	}),
+	    "generated KEY.B must compile its primitive value without a runtime enum-object lookup");
+	const auto compiler = vm.GetSlot(vm.RootTable(), std::string("compilestring"));
+	const std::array<SquirrelValue, 3> compile_arguments{vm.RootTable(), std::string(kOriginalSource), std::string("registered-key-member-source")};
+	const auto closure = vm.Invoke(compiler, compile_arguments).Value;
+	Require(calls == 0, "registered member compilation must not execute the generated platform query");
+	const std::array<SquirrelValue, 1> arguments{receiver};
+	Require(std::get<std::int32_t>(vm.Invoke(closure, arguments).Value) == 1 && calls == 1, "generated non-NX equal-key conditional must select its middle result");
+	nx = true;
+	Require(std::get<std::int32_t>(vm.Invoke(closure, arguments).Value) == 2 && calls == 2, "generated NX conditional must preserve its first-arm short circuit");
+	nx = false;
+	vm.SetSlot(vm.ConstantTable(), std::string("KEY_OK"), std::int32_t{1});
+	Require(std::get<std::int32_t>(vm.Invoke(closure, arguments).Value) == 1 && calls == 3, "compiled key conditional changed after a shared constant mutation");
+	const auto different = vm.Invoke(compiler, compile_arguments).Value;
+	Require(calls == 3 && std::get<std::int32_t>(vm.Invoke(different, arguments).Value) == 0 && calls == 4, "fresh generated nonmatching-key conditional must select its final result");
+	vm.SetSlot(keys, std::string("B"), std::int32_t{64});
+	Require(std::get<std::int32_t>(vm.Invoke(closure, arguments).Value) == 1 && std::get<std::int32_t>(vm.Invoke(different, arguments).Value) == 0 && calls == 6, "registered bytecode retained a runtime dependency on the enum table");
+}
+
 int main() {
 	try {
 		TestLiteralsStatementsAndMainPrototype();
@@ -573,6 +707,8 @@ int main() {
 		TestUnsupportedGrammarAndDiagnostics();
 		TestNulBoundaryAndCompilerLimits();
 		TestActualCompilestringRegistration();
+		TestQualifiedConstantMembersAndOwnedSnapshots();
+		TestActualRegisteredKeyMemberConditional();
 		std::cout << "source compiler: real prototypes, receiver/context lookup, inert compilation, calls and grammar rejection passed\n";
 		return 0;
 	} catch (const std::exception& error) {

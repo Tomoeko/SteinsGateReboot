@@ -399,7 +399,21 @@ namespace sgre::script {
 				Fail("unsupported keyword in recovered expression grammar");
 			}
 			if (const auto constant = m_Vm.FindRawSlot(m_Vm.ConstantTable(), SquirrelString(name))) {
-				return LoadConstant(state, *constant);
+				if (m_Vm.Type(*constant) != SquirrelValueType::Table) {
+					return LoadConstant(state, *constant);
+				}
+				// Native25fcab resolves one enum member before emitting its primitive literal.
+				Require(SourceTokenKind::Dot, "constant table requires '.' and member identifier");
+				if (m_Token.Kind != SourceTokenKind::Identifier || (SourceKeyword(m_Token.Text) && m_Token.Text != "constructor")) {
+					Fail("constant member requires identifier");
+				}
+				const auto member_name = m_Token.Text;
+				m_Token = m_Lexer.Next();
+				const auto member = m_Vm.FindRawSlot(*constant, SquirrelString(member_name));
+				if (!member) {
+					Fail("invalid constant [" + name + "." + member_name + "]");
+				}
+				return LoadConstant(state, *member);
 			}
 			SourceOperand result;
 			result.IsSlot = true;
