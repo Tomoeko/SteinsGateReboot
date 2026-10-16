@@ -1,0 +1,13 @@
+# Native disk-file existence
+
+Reference: `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+The executable registers root `isExistFile` at `0x140048000..0x140048030`, binding `0x14004B580` through adapter `0x140043A70`. Registration precedes original `init.nut`; its always-true script function is installed only when root lacks the native name. `MyApplication.findMoviePath` in the later project override calls `getLangExistentMovieFile`, which uses this root predicate. The base `Application` helper instead uses `System.isExistentFile`. They have different backends.
+
+The adapter converts physical argument two with the existing VM string conversion, then passes its first-NUL prefix. Extra arguments are ignored. Function `0x14004B340` copies disk root zero through `0x1404D7720(0)`, appends the supplied bytes through `0x140049B00`, converts UTF-8 to UTF-16 and changes `/` to `\`. Function `0x14004B580` calls `GetFileAttributesW` and returns false for `0xFFFFFFFF` or `FILE_ATTRIBUTE_DIRECTORY` (`0x10`), true otherwise. It does not use the mounted archive map, append `.m`, search other disk roots or retry a localized filename.
+
+`ScriptSystemBindings` publishes the native root closure before scripts load. `ConfigureDiskFileExistence` supplies its once-configured disk service; closures borrow the live binding owner weakly. The current macOS host captures the actual configured resource directory, `wind3d11data/`, by value. It preserves root-prefix concatenation, converts separators and queries filesystem status with missing/error/directory returning false. `System.isExistentFile` and `System.isExistentFileRaw` retain their separate archive-remapping behavior.
+
+Validation is separated: retained original helper prototypes distinguish the base and project path decisions; portable fixtures cover the actual callback, conversion, C-prefix, service failures, owner expiry, temporary physical files and directories. Static executable evidence proves the native predicate and path append. Windows malformed UTF-8/drive/UNC behavior and unusual file attributes are outside this bounded platform admission. Headless helper or movie observations do not establish audible output, physical presentation timing or complete title acceptance.
+
+The eight retained original helper prototypes pass against the recovered root closure. A quiet normal-start observation now selects the existing unsuffixed title movie and records 2,861 advancing video draws plus decoded, advancing silent audio. The earlier observation selected an absent localized movie. Audio starvation remained zero; physical speaker output and complete title animation fidelity still require native comparison.

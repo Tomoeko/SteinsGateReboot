@@ -67,6 +67,14 @@ namespace sgre::text {
 		m_State.ShownElementCount = 0;
 		m_State.OffsetPosition = {};
 		m_State.ScrollOffset = {};
+		if (!m_AtlasCleared) {
+			if (callbacks.ClearPreparedFonts) {
+				callbacks.ClearPreparedFonts();
+			}
+			m_Atlas.ResetPacking();
+			// Commit after the private live-owner guard; no callback separates packing stores from this flag.
+			m_AtlasCleared = true;
+		}
 	}
 
 	void TextRenderContext::SetRenderSize(TextCursor size, const TextFontResetCallbacks& callbacks) {
@@ -165,6 +173,8 @@ namespace sgre::text {
 	}
 
 	bool TextRenderContext::Render(std::span<const std::uint16_t> input, const TextContentRequest& request, const TextContentCallbacks& callbacks) {
+		// Native036c20 rearms Clear before parsing, including empty input and later parser failures.
+		m_AtlasCleared = false;
 		return m_Content.Render(input, m_Formatting, m_Options, m_State.RenderSize, request, callbacks);
 	}
 

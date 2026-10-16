@@ -118,6 +118,14 @@ namespace sgre::text {
 		return result;
 	}
 
+	void TextGlyphAtlasOwner::ResetPacking() {
+		auto& state = *m_Implementation;
+		const Implementation::Mutation mutation(state);
+		state.Packing.PenXPixels = 0;
+		state.Packing.PenYPixels = 0;
+		state.Packing.RowHeightPixels = 0;
+	}
+
 	void TextGlyphAtlasOwner::SetFiltering(bool enabled) {
 		auto& state = *m_Implementation;
 		const Implementation::Mutation mutation(state);

@@ -69,6 +69,7 @@ namespace sgre::text {
 		TextProcessingOptions m_Options;
 		TextGlyphAtlasOwner m_Atlas;
 		TextContentOwner m_Content;
+		bool m_AtlasCleared = true;
 	};
 
 } // namespace sgre::text

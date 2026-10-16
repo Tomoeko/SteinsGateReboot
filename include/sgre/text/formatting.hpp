@@ -69,6 +69,8 @@ namespace sgre::text {
 		std::function<void()> SelectNormal;
 		std::function<resource::GlyphSize(std::uint16_t)> MeasureNormal;
 		std::function<void()> SelectRuby;
+		// Native clearFonts virtual slot+0x78 retires private normal/ruby interfaces before atlas packing reuse.
+		std::function<void()> ClearPreparedFonts;
 	};
 
 	struct TextFontSelectionRequest {

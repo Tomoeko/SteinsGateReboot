@@ -309,6 +309,11 @@ namespace sgre::script {
 
 				return task->Fonts->MeasureCurrentNormalCodeUnit(unit);
 			};
+			callbacks.ClearPreparedFonts = [task] {
+				if (task->Fonts) {
+					task->Fonts->Clear();
+				}
+			};
 
 			return callbacks;
 		}

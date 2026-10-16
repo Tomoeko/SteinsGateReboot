@@ -40,6 +40,9 @@ namespace sgre::text {
 		void Close();
 
 	private:
+		friend class TextRenderContext;
+		// Only the containing Clear handshake may reuse packing after its private font regions retire.
+		void ResetPacking();
 		class Implementation;
 		std::unique_ptr<Implementation> m_Implementation;
 	};

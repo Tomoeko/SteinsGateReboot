@@ -72,6 +72,7 @@ namespace sgre::script {
 		resource::ResourceCache* Resources = nullptr;
 		resource::ArchiveMounts* Mounts = nullptr;
 		ArchiveReadMountResolver ResolveArchiveRead;
+		DiskFileExistence DiskFileExists;
 		std::optional<core::OriginalLocale> Locale;
 		std::uint32_t Width = 0;
 		std::uint32_t Height = 0;
@@ -136,6 +137,27 @@ namespace sgre::script {
 			    captures);
 			vm.NewSlot(state.Class, name, closure, true);
 		}
+		// Native048030 publishes this physical-file predicate on root before init's optional true fallback.
+		const std::array<std::uint8_t, 8> disk_descriptor{0x80, 0xb5, 0x04, 0x40, 0x01, 0, 0, 0};
+		const std::array<SquirrelValue, 1> disk_captures{vm.CreateUserData(disk_descriptor)};
+		const auto disk_exists = vm.CreateNativeClosureWithCaptures("isExistFile", [weak, disk_descriptor](SquirrelVm& active, auto) {
+			const auto owner = weak.lock();
+			if (!owner || &owner->Vm != &active || std::this_thread::get_id() != owner->OwnerThread || active.IsClosed()) {
+				throw std::runtime_error("native disk file existence requires its live serialized System binding owner");
+			}
+			const auto payload = active.UserDataBytes(active.NativeStackValue(-1));
+			if (payload.size() != disk_descriptor.size() || !std::equal(payload.begin(), payload.end(), disk_descriptor.begin()) || !owner->DiskFileExists) {
+				throw std::runtime_error("native disk file existence requires its actual configured disk-root service and callback descriptor");
+			}
+
+			// Original043a70 stringifies physical argument two once;04b340 appends only its C-string prefix.
+			const auto filename = active.ToString(active.NativeStackValue(2));
+			const auto prefix = std::string_view(filename).substr(0, filename.find('\0'));
+
+			return SquirrelNativeResult::ReturnValue(owner->DiskFileExists(prefix));
+		},
+		    disk_captures);
+		vm.NewSlot(vm.RootTable(), std::string("isExistFile"), disk_exists);
 		method("exit", [](Implementation& owner, auto) {
 			if (owner.ApplicationEvents == nullptr) {
 				throw std::runtime_error("System.exit requires its actual containing application close owner");
@@ -514,6 +536,15 @@ namespace sgre::script {
 
 	void ScriptSystemBindings::ConfigureResourceCache(resource::ResourceCache& cache) {
 		m_Implementation->Resources = &cache;
+	}
+
+	void ScriptSystemBindings::ConfigureDiskFileExistence(DiskFileExistence service) {
+		auto& owner = *m_Implementation;
+		if (std::this_thread::get_id() != owner.OwnerThread || owner.Vm.IsClosed() || owner.DiskFileExists || !service) {
+			throw std::runtime_error("native disk file existence configuration requires one live serialized service");
+		}
+
+		owner.DiskFileExists = std::move(service);
 	}
 
 	void ScriptSystemBindings::ConfigureArchiveMounts(resource::ArchiveMounts& mounts) {

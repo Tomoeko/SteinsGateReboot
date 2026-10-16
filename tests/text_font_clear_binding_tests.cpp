@@ -6,6 +6,7 @@
 #include "sgre/scene/layer_camera_draw.hpp"
 #include "sgre/scene/motion_assets.hpp"
 #include "sgre/script/layer_bindings.hpp"
+#include "text_glyph_drawing_fixture.hpp"
 
 #include <array>
 #include <cstddef>
@@ -466,6 +467,147 @@ static void TestActualCameraScopeForConfiguredEmptyTask() {
 	fixture.Close();
 }
 
+static sgre::text::TextContentCallbacks EmptyClearContentCallbacks() {
+	sgre::text::TextContentCallbacks callbacks;
+	callbacks.Fonts.SelectNormal = [] {
+	};
+	callbacks.Fonts.MeasureNormal = [](std::uint16_t) {
+		return sgre::resource::GlyphSize{};
+	};
+	callbacks.Fonts.SelectRuby = [] {
+	};
+	callbacks.PrepareNormal = [](std::uint16_t) -> sgre::text::OwnedTextGlyphRun {
+		throw std::runtime_error("empty-render fixture unexpectedly requested a shaped glyph");
+	};
+
+	return callbacks;
+}
+
+static void TestClearHandshakeRetainsTextureAndOtherContexts() {
+	text_atlas_test::Backend backend;
+	sgre::text::TextRenderContext context(backend, true);
+	sgre::text::TextRenderContext unrelated(backend);
+	const auto bytes = vector_font_test::MakeFont();
+	const sgre::resource::SfntFont sfnt(bytes);
+	const sgre::text::CffGlyphFont font(sfnt);
+	const auto glyph = font.PrepareGlyph(0, 510);
+	auto callbacks = EmptyClearContentCallbacks();
+	std::size_t retired = 0;
+	context.ClearEmpty(callbacks.Fonts);
+	unrelated.ClearEmpty(callbacks.Fonts);
+	Require(context.Atlas().PrepareDefaultCffGlyph(glyph).has_value() && unrelated.Atlas().PrepareDefaultCffGlyph(glyph).has_value(), "real CFF glyphs must prepare each independently owned text atlas");
+	Require(!context.Atlas().PrepareDefaultCffGlyph(glyph) && context.Atlas().State().Packing.PenYPixels == 512, "actual strict height failure must retain the native wrapped row before Clear");
+	Require(context.Atlas().Bind(0, sgre::scene::MutableTextureStage::Pixel), "Clear fixture must own its actual uploaded texture and sampler");
+	const auto* texture = context.Atlas().Resource();
+	const auto before = context.Atlas().State();
+	callbacks.Fonts.ClearPreparedFonts = [&] {
+		++retired;
+		Require(context.Content().Lines().empty() && context.Content().CurrentLine().empty() && context.State().ShownElementCount == 0 && context.State().OffsetPosition.X == 0, "native derived font retirement follows completed content and facade clearing");
+		Require(context.Atlas().State().Packing.PenYPixels == 512 && context.Atlas().Resource() == texture, "font retirement must precede packing reuse while the same texture remains alive");
+	};
+	context.ClearEmpty(callbacks.Fonts);
+	Require(retired == 0 && context.Atlas().State().Packing.PenYPixels == 512, "constructor-cleared state must not invent a packing reset without a Render");
+	Require(context.Render({}, {}, callbacks), "genuine empty Render must enter the parser and rearm Clear");
+	context.SetShownElementCount(17);
+	context.SetOffsetPosition({11, 13});
+	context.ClearEmpty(callbacks.Fonts);
+	const auto cleared = context.Atlas().State();
+	Require(retired == 1 && cleared.Packing.PenXPixels == 0 && cleared.Packing.PenYPixels == 0 && cleared.Packing.RowHeightPixels == 0, "Render then Clear must reset exactly the three packing fields once");
+	Require(cleared.Packing.WidthPixels == before.Packing.WidthPixels && cleared.Packing.HeightPixels == before.Packing.HeightPixels && cleared.Filtering && cleared.Texture->DesiredSampler == before.Texture->DesiredSampler && cleared.Texture->Dirty == before.Texture->Dirty && context.Atlas().Resource() == texture && backend.Observed.Creates == 2 && backend.Observed.Uploads == 1 && backend.Observed.ReleasedTextures == 0, "packing reset must preserve fixed extent, filtering, existing pixels/upload state and texture identity");
+	Require(unrelated.Atlas().State().Packing.PenXPixels == 512 && unrelated.Atlas().State().Packing.PenYPixels == 0 && !unrelated.Atlas().State().Filtering, "one context Clear must leave another context's packing and filtering untouched");
+	const auto reused = context.Atlas().PrepareDefaultCffGlyph(glyph);
+	Require(reused && reused->Allocation.LeftPixels == 1 && reused->Allocation.TopPixels == 1 && backend.Observed.Creates == 2, "retired records permit a genuine glyph to reuse the original atlas origin without page growth");
+	context.ClearEmpty(callbacks.Fonts);
+	Require(retired == 1 && context.Atlas().State().Packing.PenXPixels == 512, "repeated Clear keeps packing when no further Render has rearmed the native handshake");
+	callbacks.Fonts.ClearPreparedFonts = [&] {
+		++retired;
+	};
+	Require(context.Render({}, {}, callbacks), "second genuine empty Render must rearm the same existing owner");
+	context.ClearEmpty(callbacks.Fonts);
+	Require(retired == 2 && context.Atlas().State().Packing.PenXPixels == 0 && context.Atlas().Resource() == texture, "empty Render rearm must permit a second font retirement and packing reset");
+}
+
+static void TestClearHandshakeRetriesAfterProviderFailure() {
+	text_atlas_test::Backend backend;
+	sgre::text::TextRenderContext context(backend);
+	const auto bytes = vector_font_test::MakeFont();
+	const sgre::resource::SfntFont sfnt(bytes);
+	const sgre::text::CffGlyphFont font(sfnt);
+	auto callbacks = EmptyClearContentCallbacks();
+	context.ClearEmpty(callbacks.Fonts);
+	Require(context.Atlas().PrepareDefaultCffGlyph(font.PrepareGlyph(0, 24)).has_value(), "callback failure fixture requires genuine nonempty atlas packing");
+	callbacks.Fonts.SelectNormal = [] {
+		throw std::runtime_error("observed font selection failure");
+	};
+	RequireFailure([&] {
+		static_cast<void>(context.Render({}, {}, callbacks));
+	},
+	    "observed font selection failure");
+	callbacks.Fonts.SelectNormal = [] {
+	};
+	std::size_t retire_calls = 0;
+	callbacks.Fonts.ClearPreparedFonts = [&] {
+		++retire_calls;
+		throw std::runtime_error("observed font retirement failure");
+	};
+	RequireFailure([&] {
+		context.ClearEmpty(callbacks.Fonts);
+	},
+	    "observed font retirement failure");
+	Require(retire_calls == 1 && context.Atlas().State().Packing.PenXPixels == 26 && backend.Observed.Creates == 1, "throwing font retirement must not reset packing or commit the cleared handshake");
+	callbacks.Fonts.ClearPreparedFonts = [&] {
+		++retire_calls;
+	};
+	context.ClearEmpty(callbacks.Fonts);
+	context.ClearEmpty(callbacks.Fonts);
+	Require(retire_calls == 2 && context.Atlas().State().Packing.PenXPixels == 0 && context.Atlas().State().Packing.PenYPixels == 0 && context.Atlas().State().Packing.RowHeightPixels == 0 && backend.Observed.Creates == 1, "failed Render still rearms Clear, and successful retry retires fonts once before packing reuse");
+}
+
+static void TestActualVectorClearReusesAtlasAcrossHistory() {
+	text_atlas_test::Backend backend;
+	sgre::scene::TextureCache cache([](auto, const auto&) -> sgre::render::SpriteTextureHandle {
+		throw std::runtime_error("vector Clear history must not load bitmap sources");
+	},
+	    [](auto) {
+	    });
+	std::vector<sgre::text::VectorGlyphDrawRectangle> draws;
+	text_drawing_test::Fixture fixture(cache, backend, [&](auto&, auto rectangles, const auto&) {
+		draws.assign(rectangles.begin(), rectangles.end());
+	});
+	fixture.Call("setDefault", {fixture.Properties({{"fontsize", std::int32_t{128}}, {"rubysize", std::int32_t{64}}, {"linesize", std::int32_t{128}}, {"shadow", false}, {"edge", false}})});
+	fixture.Call("resetFont");
+	fixture.Call("resetStyle");
+	const sgre::scene::MutableTextureResource* texture = nullptr;
+	for (std::size_t revision = 0; revision < 120; ++revision) {
+		fixture.Render("B");
+		fixture.Draw();
+		const auto& atlas = fixture.Text.Context(fixture.Instance).Atlas();
+		Require(draws.size() == 1 && draws[0].SourcePixels.Left == 1 && draws[0].SourcePixels.Top == 1 && draws[0].SourcePixels.Right - draws[0].SourcePixels.Left == 128 && atlas.State().Packing.PenXPixels == 130 && atlas.State().Packing.PenYPixels == 0, "each genuine revision must prepare a nonempty CFF record at the reused atlas origin");
+		if (!texture) {
+			texture = atlas.Resource();
+		}
+		Require(atlas.Resource() == texture && backend.Observed.Creates == 1, "history must preserve the original texture rather than replace an exhausted page");
+		if (revision == 0) {
+			const auto packing = atlas.State().Packing;
+			fixture.Call("clearFont");
+			Require(atlas.State().Packing.PenXPixels == packing.PenXPixels && atlas.State().Packing.PenYPixels == packing.PenYPixels && fixture.Text.Context(fixture.Instance).Content().ElementCount() == 1, "clearFont alone must retain packing and independently owned shaped history");
+			const auto find_calls = fixture.FindCalls;
+			fixture.Call("done");
+			fixture.Draw();
+			Require(fixture.FindCalls > find_calls && draws.size() == 1 && draws[0].SourcePixels.Left == 131 && atlas.State().Packing.PenXPixels == 260, "real cache retirement must reacquire a provider and allocate after the retained packing without a false reset");
+		}
+		fixture.Call("clear");
+		const auto finds = fixture.FindCalls;
+		Require(fixture.Text.Context(fixture.Instance).Content().ElementCount() == 0 && fixture.Vm.RetainedReferenceCount(fixture.Source) == 1 && atlas.State().Packing.PenXPixels == 0 && atlas.State().Packing.PenYPixels == 0 && atlas.State().Packing.RowHeightPixels == 0, "whole Clear must retire the real normal/ruby caches and old records before resetting packing");
+		fixture.Call("clear");
+		Require(fixture.FindCalls == finds && atlas.Resource() == texture && backend.Observed.Creates == 1 && backend.Observed.ReleasedTextures == 0, "repeated Clear must not invoke providers or retire the shared atlas texture");
+	}
+	fixture.Text.ReleaseInstance(fixture.Instance);
+	fixture.Layers.MotionTasks(fixture.Layer).Group(sgre::scene::MotionTaskGroup::First).Update();
+	fixture.Layers.ReleaseInstance(fixture.Layer);
+	Require(backend.Observed.ReleasedTextures == 1 && fixture.Vm.RetainedReferenceCount(fixture.Source) == 1 && cache.Count() == 0, "actual task retirement releases its sole atlas after all private glyph interfaces while retaining only the fixture's source root");
+}
+
 int main() {
 	try {
 		TestActualResetAndSequentialFontProperties();
@@ -478,7 +620,10 @@ int main() {
 		TestActualRenderOwnsBitmapRunsAndSurvivesFontCacheRetirement();
 		TestRenderReentrantStringAndActualParentRetirement();
 		TestActualCameraScopeForConfiguredEmptyTask();
-		std::cout << "Five actual TextRender font/reset/clear provider and retirement groups passed\n";
+		TestClearHandshakeRetainsTextureAndOtherContexts();
+		TestClearHandshakeRetriesAfterProviderFailure();
+		TestActualVectorClearReusesAtlasAcrossHistory();
+		std::cout << "Thirteen actual TextRender font/reset/clear provider and retirement groups passed\n";
 
 		return 0;
 	} catch (const std::exception& error) {

@@ -13,18 +13,25 @@ cmake -S . -B Files/build/recovery -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_S
 cmake --build Files/build/recovery --target sgre-inspect
 ```
 
+## Build game
+
+```sh
+cmake -S Files/research/runtime/game-release-cmake-stage -B Files/build/game-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0" -DCMAKE_OBJCXX_FLAGS_RELEASE="-O2 -DNDEBUG -g0"
+cmake --build Files/build/game-release --target sgre-game --parallel
+```
+
 ## Run
 
 Set the installation path once with the local application:
 
 ```sh
-Files/build/original-startup-release/original_startup Files/STEINS.GATE.REBOOT
+Files/build/game-release/sgre-game Files/STEINS.GATE.REBOOT
 ```
 
 Later launches reuse `Files/config.json`:
 
 ```sh
-Files/build/original-startup-release/original_startup
+Files/build/game-release/sgre-game
 ```
 
 Use `--skip-startup` to enter gameplay directly, `--normal-start` for ordinary startup, or `--headless` for hidden, silent debugging. Startup arguments apply only to that launch.
