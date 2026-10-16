@@ -444,7 +444,8 @@ namespace sgre::script {
 				return result;
 			}
 			if (Accept(SourceTokenKind::LeftParenthesis)) {
-				const auto result = Expression(state);
+				SourceOperand result;
+				result.Register = Materialize(state, CommaExpression(state));
 				Require(SourceTokenKind::RightParenthesis, "expression requires closing parenthesis");
 				return result;
 			}
@@ -633,6 +634,19 @@ namespace sgre::script {
 			return result;
 		}
 
+		SourceOperand CommaExpression(SourceFunctionState& state) {
+			const auto first_temporary = state.NextRegister;
+			auto result = Expression(state);
+			while (Accept(SourceTokenKind::Comma)) {
+				static_cast<void>(Materialize(state, result));
+				// Enclosing arguments and locals remain live below this expression's watermark.
+				state.NextRegister = first_temporary;
+				result = Expression(state);
+			}
+
+			return result;
+		}
+
 		void CompileStatements(SourceFunctionState& state, SourceTokenKind ending) {
 			while (m_Token.Kind != ending) {
 				if (m_Token.Kind == SourceTokenKind::End) {
@@ -653,7 +667,7 @@ namespace sgre::script {
 				if (returning && (m_Token.Kind == ending || m_Token.Kind == SourceTokenKind::Semicolon)) {
 					Emit(state, 19, 255);
 				} else {
-					const auto result = Materialize(state, Expression(state));
+					const auto result = Materialize(state, CommaExpression(state));
 					if (returning) {
 						if (state.Parent != nullptr && !state.Function.Instructions.empty() && state.Function.Instructions.back().Opcode == 6 && state.Function.Instructions.back().Argument0 == result) {
 							state.Function.Instructions.back().Opcode = 5;

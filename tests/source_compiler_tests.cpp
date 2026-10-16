@@ -263,6 +263,105 @@ static void TestLogicalConditionalAndRootExpressions() {
 	    "depth limit");
 }
 
+static void TestCommaExpressionsAndArgumentBoundaries() {
+	SquirrelVm vm;
+	const auto receiver = vm.CreateTable();
+	std::string trace;
+	for (const auto& [name, value] : std::array<std::pair<std::string, std::int32_t>, 3>{{{"first", 11}, {"second", 22}, {"last", 33}}}) {
+		vm.NewSlot(receiver, name, vm.CreateNativeClosure(name, [&, name, value](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+			Require(arguments.size() == 1 && arguments[0] == receiver, "comma call lost its original receiver");
+			trace += name;
+			return sgre::script::SquirrelNativeResult::ReturnValue(value);
+		}));
+	}
+	Require(std::get<std::int32_t>(Run(vm, "return first(),second(),last();", receiver)) == 33 && trace == "firstsecondlast", "comma expression must evaluate every operand once in source order and return only the last value");
+	trace.clear();
+	Require(std::get<std::int32_t>(Run(vm, "first(),second(); return 47;", receiver)) == 47 && trace == "firstsecond", "comma expression statement must discard its result before the next statement");
+	trace.clear();
+	Require(std::get<std::int32_t>(Run(vm, "return false && first(),second();", receiver)) == 22 && trace == "second", "comma must bind below short-circuit conjunction");
+	trace.clear();
+	Require(std::get<std::int32_t>(Run(vm, "return false ? first() : second(),last();", receiver)) == 33 && trace == "secondlast", "comma must bind below both conditional arms");
+	trace.clear();
+	Require(std::get<std::int32_t>(Run(vm, "return true ? (first(),second()) : last();", receiver)) == 22 && trace == "firstsecond", "parentheses must allow an ordered comma expression within the selected conditional arm");
+	vm.NewSlot(receiver, std::string("collect"), vm.CreateNativeClosure("collect", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 4 && arguments[0] == receiver && std::get<std::int32_t>(arguments[1]) == 11 && std::get<std::int32_t>(arguments[2]) == 22 && std::get<std::int32_t>(arguments[3]) == 33, "call commas must separate actual arguments while grouped commas retain one value");
+		trace += "collect";
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{71});
+	}));
+	trace.clear();
+	Require(std::get<std::int32_t>(Run(vm, "return collect(first(), (first(),second()), last());", receiver)) == 71 && trace == "firstfirstsecondlastcollect", "a grouped comma must preserve earlier live argument registers and argument order");
+	trace.clear();
+	RequireFailure([&] {
+		static_cast<void>(Run(vm, "return missing,first();", receiver));
+	},
+	    "does not exist");
+	Require(trace.empty(), "discarding a slot expression must retain its lookup failure before later comma operands");
+	const auto tools = vm.CreateTable();
+	vm.NewSlot(receiver, std::string("tools"), tools);
+	vm.NewSlot(tools, std::string("finish"), vm.CreateNativeClosure("finish", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 1, "grouped callable has unexpected arguments");
+		return sgre::script::SquirrelNativeResult::ReturnValue(arguments[0] == tools);
+	}));
+	Require(std::get<bool>(Run(vm, "return first(),this.tools.finish();", receiver)), "direct final comma method must retain its object receiver");
+	Require(!std::get<bool>(Run(vm, "return (first(),this.tools.finish)();", receiver)) && !std::get<bool>(Run(vm, "return (this.tools.finish)();", receiver)), "parenthesized function values must use the current this receiver instead of retaining an inner slot");
+	vm.NewSlot(receiver, std::string("chosen"), std::int32_t{91});
+	Require(std::get<std::int32_t>(Run(vm, "return this[(first(),\"chosen\")];", receiver)) == 91, "grouped index comma must select its final actual key");
+	std::string long_sequence = "return ";
+	for (std::size_t index = 0; index < 1000; ++index) {
+		long_sequence += "17,";
+	}
+	long_sequence += "53;";
+	Require(std::get<std::int32_t>(Run(vm, long_sequence, receiver)) == 53, "discarded comma operands must not exhaust the bounded VM register file");
+	for (const auto source : {"return ,1;", "return 1,;", "return (1,);", "return collect(1,,2);", "return true ? 1,2 : 3;", "return this[1,2];"}) {
+		RequireFailure([&] {
+			static_cast<void>(CompileSquirrelSource(vm, source, "comma-error"));
+		},
+		    "comma-error");
+	}
+}
+
+static void TestCommaActionSuspensionAndRegisteredCompilation() {
+	SquirrelVm vm;
+	vm.InstallRecoveredBaseLibrary();
+	const auto receiver = vm.CreateTable();
+	std::string trace;
+	vm.NewSlot(vm.RootTable(), std::string("wait"), vm.CreateNativeClosure("wait", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 2 && arguments[0] == vm.RootTable() && std::get<std::int32_t>(arguments[1]) == 10, "ordered action must invoke the explicit root wait with its exact argument");
+		trace += "wait";
+		sgre::script::SquirrelNativeResult result;
+		result.Value = std::string("waiting");
+		result.Suspend = true;
+		return result;
+	}));
+	vm.NewSlot(receiver, std::string("startContacts"), vm.CreateNativeClosure("startContacts", [&](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+		Require(arguments.size() == 1 && arguments[0] == receiver, "action continuation must retain its genuine panel receiver");
+		trace += "contacts";
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{79});
+	}));
+	const auto compiler = vm.GetSlot(vm.RootTable(), std::string("compilestring"));
+	const std::array<SquirrelValue, 2> compile_arguments{vm.RootTable(), std::string("return ::wait(10),startContacts()")};
+	const auto action = vm.Invoke(compiler, compile_arguments).Value;
+	Require(trace.empty() && !vm.HasBoundEnvironment(action), "registered comma action compilation must remain inert and unbound");
+	const std::array<SquirrelValue, 1> arguments{receiver};
+	const auto suspended = vm.Invoke(action, arguments);
+	Require(suspended.State == sgre::script::SquirrelRunState::Suspended && sgre::script::StringText(suspended.Value) == "waiting" && trace == "wait", "comma continuation must wait at the original call rather than running its later action early");
+	const auto resumed = vm.Resume(std::int32_t{97});
+	Require(resumed.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(resumed.Value) == 79 && trace == "waitcontacts" && !vm.IsSuspended(), "resume must discard only the left result and execute the original final action once");
+	const auto factory = CompileSquirrelSource(vm, "return function() { return ::wait(10),startContacts(); };", "nested-comma-action");
+	const auto& instructions = factory.MainFunction.Functions.front().Instructions;
+	std::vector<std::uint8_t> calls;
+	for (const auto& instruction : instructions) {
+		if (instruction.Opcode == 5 || instruction.Opcode == 6) {
+			calls.push_back(instruction.Opcode);
+		}
+	}
+	Require(calls == std::vector<std::uint8_t>{6, 5}, "only the final returned comma call may become a nested tail call");
+	const auto nested = Run(vm, "return function() { return ::wait(10),startContacts(); };", receiver);
+	trace.clear();
+	Require(vm.Invoke(nested, arguments).State == sgre::script::SquirrelRunState::Suspended && trace == "wait", "nested comma action must preserve the ordinary first-call suspension");
+	Require(std::get<std::int32_t>(vm.Resume().Value) == 79 && trace == "waitcontacts", "nested tail-call continuation must run after the original wait resumes");
+}
+
 static void TestUnsupportedGrammarAndDiagnostics() {
 	SquirrelVm vm;
 	for (const auto source : {"return (1;", "return \"unterminated;", "return this.;", "return this[;", "return function(value,,other) { return value; };", "return function(value,value) { return value; };", "return function() :(outer) { return outer; };", "local value = 1; return value;", "this.value = 1;", "return 1 + 2;", "if (true) return 1;", "while (true) {}", "return function(value) { return value;", "return 2147483648;"}) {
@@ -402,6 +501,8 @@ int main() {
 		TestNestedFunctionsParametersAndEquality();
 		TestConstantSnapshotsAndCurrentContextRoot();
 		TestLogicalConditionalAndRootExpressions();
+		TestCommaExpressionsAndArgumentBoundaries();
+		TestCommaActionSuspensionAndRegisteredCompilation();
 		TestUnsupportedGrammarAndDiagnostics();
 		TestNulBoundaryAndCompilerLimits();
 		TestActualCompilestringRegistration();
