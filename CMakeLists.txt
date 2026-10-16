@@ -84,6 +84,8 @@ add_library(sgre_resource
 	src/resource/archive_reader.cpp
 	src/resource/font.cpp
 	src/resource/sfnt.cpp
+	src/resource/truetype_outline.cpp
+	src/text/truetype_glyph_font.cpp
 	src/resource/opentype_layout.cpp
 	src/resource/cff.cpp
 	src/resource/cff_driver_hints.cpp
@@ -810,6 +812,7 @@ if(SGRE_BUILD_TESTS)
 		input_mouse
 		voice_allocation
 		sfnt
+		truetype_outline
 		voice_uniqueness
 		squirrel_lifetime
 		sound_volume

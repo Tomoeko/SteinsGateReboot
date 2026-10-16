@@ -1,0 +1,17 @@
+# Unhinted TrueType outline component
+
+Target `sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`.
+
+`TrueTypeFont` decodes checked `loca` and `glyf` records. `TrueTypeGlyphFont` assembles owned quadratic control points and contours, scales them using explicit positive native TT axis scales, chooses composite phantom ownership, and computes completed control bounds and metrics. The font bytes and `SfntFont` reader outlive these readers; prepared geometry is owned.
+
+The original no-hint path is `FT_Load_Glyph` at `0x14039C140`, TT driver `0x1403B4F40`, recursive loader `0x1403B9D90`, simple parser `0x1403B53B0`, component parser `0x1403B4910`, scaling `0x1403B5D20`, placement `0x1403B5890`, and completed metrics `0x1403B92A0`. Flag 2 bypasses interpreter initialization at `0x1403BB970`. The completed root alone receives the negative PP1 X translation. Header bounds initialize phantom metrics; visible bounds come from actual decoded control points and match native `0x14039E220`, rather than header bounds or analytic curve extrema.
+
+Composite flag `0x200` selects the child's four phantom points before visible placement; otherwise the parent points are restored (`0x1403BA4A8`–`0x1403BA4F4`). Vertical bearing divides to design units, narrows to signed 16 bits, then scales back. Vertical advance likewise narrows its design-unit result to unsigned 16 bits. Horizontal and vertical linear advances retain their separate 16.16 units.
+
+Root executed the actual four streamed Sarasa fonts with genuine FT construction, size requests 1 and 33, flag-2 glyph loads, CBox calls, and teardown. Thirty rows cover eight empty, eight simple and fourteen composite results (874 points, 106 contours). Forty component observations include 38 parent-restores and two `USE_MY_METRICS` selections. The latter selected equal parent/child phantom values, so they establish the executed branch but do not distinguish unequal metric owners numerically. All 9,845 executed sites (36,682 bytes) were checked against the target PE. Prepared allocator/CRT boundaries and process-global survivors remain explicit in private receipts.
+
+The first source-only witness used an incorrect Windows face-slot offset and failed before glyph loading. Its immutable successor uses the actual `FT_Face+0x78` slot and preserves the `slot+8 == face` assertion. The incorrect predecessor is not an accepted ABI authority.
+
+This component does not bind itself into `VectorFont`, CFF services, shaping, text layout, atlas packing or rendering. Matrix components, point attachment, absent vertical metrics, variable/bitmap owners and nonpositive scales are precise guards. Bytecode is checked but not executed. The four inspected fonts contain no matrix or point-attachment components; hinting, arbitrary glyph coverage, initial size selection and full-game TrueType rendering remain open. Native TT internal axis scales and public FT metric scales are recorded as distinct evidence fields; equality is checked for each retained case.
+
+Root receiving matches all 30 retained original rows across the four fonts. The passive scale observer records equal positive internal/public axes in these cases; 9,845 executed sites (36,682 bytes) match the original PE. Seven independent sanitizer fixture groups pass, including parser bounds, composite ownership and precise unsupported-domain rejection. This validates the unhinted component; the original hinted bitmap callback remains a separate recovery boundary.
