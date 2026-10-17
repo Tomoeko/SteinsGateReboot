@@ -2,6 +2,7 @@
 
 #include "sgre/scenario/scenario_search.hpp"
 
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -22,6 +23,8 @@ namespace sgre::platform {
 		DebugInspector& operator=(const DebugInspector&) = delete;
 		void Toggle();
 		void Hide();
+		// The containing application can route Esc to another in-window tool.
+		void ConfigureEscapeHandler(std::function<void()> handler);
 		void Update();
 		void SetJumpStatus(std::string message);
 		[[nodiscard]] bool CapturesInput() const noexcept;

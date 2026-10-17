@@ -18,6 +18,7 @@ namespace sgre::platform {
 		~VolumeMenu();
 		VolumeMenu(const VolumeMenu&) = delete;
 		VolumeMenu& operator=(const VolumeMenu&) = delete;
+		void Toggle();
 		void Update();
 		[[nodiscard]] bool CapturesInput() const noexcept;
 		[[nodiscard]] audio::UserAudioSettings Settings() const noexcept;

@@ -174,8 +174,9 @@ namespace sgre::platform {
 		debug::InspectorPanelInput Input;
 		debug::InspectorPanelFrame Frame;
 		std::vector<debug::InspectorRow> Rows;
-		std::string Status = "Search text, a character, or a scene.ks:line target. Esc closes this panel.";
+		std::string Status = "Search text, a character, or a scene.ks:line target.";
 		std::optional<std::string> Jump;
+		std::function<void()> EscapeHandler;
 		bool Busy = false;
 		bool Dirty = true;
 		bool SelectingQuery = false;
@@ -470,6 +471,10 @@ namespace sgre::platform {
 							                                              }
 							                                              handled = true;
 							                                              if (!event.isARepeat) {
+								                                              if (escape && state.EscapeHandler) {
+									                                              state.EscapeHandler();
+									                                              return;
+								                                              }
 								                                              state.Panel.Visible = toggle && !state.Panel.Visible;
 								                                              [view refresh];
 								                                              if (state.Panel.Visible) {
@@ -537,6 +542,10 @@ namespace sgre::platform {
 				RestoreGameFirstResponder(state.View);
 			}
 		});
+	}
+
+	void DebugInspector::ConfigureEscapeHandler(std::function<void()> handler) {
+		m_Implementation->State.EscapeHandler = std::move(handler);
 	}
 
 	void DebugInspector::Hide() {

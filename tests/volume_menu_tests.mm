@@ -2,6 +2,8 @@
 #include "sgre/core/application_event_control.hpp"
 #include "sgre/platform/application_pump.hpp"
 #include "sgre/platform/volume_menu.hpp"
+
+#include "sgre/platform/debug_inspector.hpp"
 #include "sgre/render/sprite_graphics_targets.hpp"
 
 #import <AppKit/AppKit.h>
@@ -52,17 +54,23 @@ int main(int argc, char** argv) {
 				const auto count = parent.subviews.count;
 				{
 					std::size_t opens = 0;
+					sgre::platform::DebugInspector inspector(surface, {});
 					sgre::platform::VolumeMenu menu(surface, {}, [&] {
 						++opens;
+						inspector.Hide();
+					});
+					inspector.ConfigureEscapeHandler([&] {
+						menu.Toggle();
 					});
 					pump.ConfigureToolInputCapture([&] {
-						return menu.CapturesInput();
+						return menu.CapturesInput() || inspector.CapturesInput();
 					});
 					NSView* view = parent.subviews.lastObject;
 					Require(view.hidden && !menu.TakeChanges(), "closed volume menu committed or captured input");
+					inspector.Toggle();
 					Escape(view);
 					menu.Update();
-					Require(!view.hidden && opens == 1 && menu.CapturesInput() && pump.ToolInputCaptured(), "Esc failed to open and capture the volume panel");
+					Require(!view.hidden && opens == 1 && !inspector.CapturesInput() && menu.CapturesInput() && pump.ToolInputCaptured(), "Esc failed to open and capture the volume panel");
 					Escape(view, true);
 					Require(menu.CapturesInput() && !menu.TakeChanges(), "Esc repeat toggled or opening saved unchanged settings");
 					NSBitmapImageRep* pixels = [view bitmapImageRepForCachingDisplayInRect:view.bounds];
@@ -85,6 +93,7 @@ int main(int argc, char** argv) {
 					Require(menu.Settings().Music == 25, "reopening discarded listening settings");
 					Escape(view);
 					pump.ConfigureToolInputCapture({});
+					inspector.ConfigureEscapeHandler({});
 				}
 				Require(parent.subviews.count == count && !parent.window.visible && !parent.window.keyWindow && !NSApp.active, "volume fixture retained a view or exposed the game window");
 				Require(foreground == NSWorkspace.sharedWorkspace.frontmostApplication.processIdentifier, "volume fixture changed foreground application");

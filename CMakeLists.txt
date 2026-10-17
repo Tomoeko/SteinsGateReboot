@@ -1964,7 +1964,7 @@ if(SGRE_BUILD_TESTS)
 		add_test(NAME macos_debug_inspector COMMAND debug_inspector_tests "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_pass.metal" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_presentation.metal")
 		set_tests_properties(macos_debug_inspector PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1" TIMEOUT 30 RUN_SERIAL TRUE)
 
-		add_executable(volume_menu_tests tests/volume_menu_tests.mm src/platform/macos/volume_menu.mm)
+		add_executable(volume_menu_tests tests/volume_menu_tests.mm src/platform/macos/volume_menu.mm src/platform/macos/debug_inspector.mm)
 		target_include_directories(volume_menu_tests PRIVATE include src/platform/macos)
 		target_link_libraries(volume_menu_tests PRIVATE sgre_resource sgre_platform_render)
 		target_compile_options(volume_menu_tests PRIVATE -fobjc-arc -Werror)

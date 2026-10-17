@@ -70,6 +70,19 @@ namespace sgre::platform {
 		}
 	}
 
+	static void ToggleVolumeMenu(SGREVolumeMenuView* view) noexcept {
+		VolumeCallback(view, [&](auto& state) {
+			state.Visible = !state.Visible;
+			state.Dragged.reset();
+			CommitVolume(state);
+			view.hidden = !state.Visible;
+			view.needsDisplay = YES;
+			if (state.Visible && state.OnOpen) {
+				state.OnOpen();
+			}
+		});
+	}
+
 	static void SetVolumeAtPointer(SGREVolumeMenuView* view, VolumeMenuState& state, NSEvent* event) {
 		if (!state.Dragged) {
 			return;
@@ -174,18 +187,9 @@ namespace sgre::platform {
 						                                              if (view == nil || event.window != view.window || event.keyCode != 53) {
 							                                              return event;
 						                                              }
-						                                              VolumeCallback(view, [&](auto& state) {
-							                                              if (!event.isARepeat) {
-								                                              state.Visible = !state.Visible;
-								                                              state.Dragged.reset();
-								                                              CommitVolume(state);
-								                                              view.hidden = !state.Visible;
-								                                              view.needsDisplay = YES;
-								                                              if (state.Visible && state.OnOpen) {
-									                                              state.OnOpen();
-								                                              }
-							                                              }
-						                                              });
+						                                              if (!event.isARepeat) {
+							                                              ToggleVolumeMenu(view);
+						                                              }
 						                                              return nil;
 					                                                }];
 					if (Monitor == nil) {
@@ -224,6 +228,10 @@ namespace sgre::platform {
 	VolumeMenu::VolumeMenu(render::SpritePassPresentation& presentation, audio::UserAudioSettings settings, std::function<void()> on_open) : m_Implementation(std::make_unique<Implementation>(presentation, settings, std::move(on_open))) {
 	}
 	VolumeMenu::~VolumeMenu() = default;
+
+	void VolumeMenu::Toggle() {
+		ToggleVolumeMenu(m_Implementation->View);
+	}
 
 	void VolumeMenu::Update() {
 		if (m_Implementation->State.Failure) {

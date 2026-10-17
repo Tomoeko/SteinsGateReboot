@@ -1653,6 +1653,9 @@ namespace sgre::platform {
 				m_VolumeMenu = std::make_unique<VolumeMenu>(m_Surface, m_UserAudio, [this] {
 					m_DebugInspector->Hide();
 				});
+				m_DebugInspector->ConfigureEscapeHandler([this] {
+					m_VolumeMenu->Toggle();
+				});
 				m_Platform.ConfigureToolInputCapture([this] {
 					return (m_DebugInspector && m_DebugInspector->CapturesInput()) || (m_VolumeMenu && m_VolumeMenu->CapturesInput());
 				});
@@ -1721,6 +1724,7 @@ namespace sgre::platform {
 			m_LivePrepared.reset();
 			if (m_DebugInspector) {
 				m_Platform.ConfigureToolInputCapture({});
+				m_DebugInspector->ConfigureEscapeHandler({});
 				m_VolumeMenu.reset();
 				m_DebugInspector.reset();
 			}
