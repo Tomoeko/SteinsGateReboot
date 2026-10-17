@@ -211,6 +211,108 @@ static void TestCurrentSceneArgumentPropagation() {
 	seek.Cancel();
 }
 
+static void TestCheckpointPredecessorEntry() {
+	sgre::script::SquirrelVmLimits limits;
+	limits.ReclaimObjects = true;
+	SeekFixture fixture(limits);
+	auto& vm = fixture.Vm;
+	const sgre::script::OriginalCheckpointLocation location{"prior.ks", "*actual", 42, 7, 11};
+	const auto flags = vm.CreateTable();
+	const auto flags_root = vm.Retain(flags);
+	vm.NewSlot(flags, std::string("phone-history"), std::int32_t{23});
+	const auto data = vm.CreateTable();
+	const auto data_root = vm.Retain(data);
+	vm.NewSlot(data, std::string("storage"), vm.CreateString(location.Storage));
+	vm.NewSlot(data, std::string("target"), vm.CreateString(location.Label));
+	vm.NewSlot(data, std::string("point"), location.Point);
+	vm.NewSlot(data, std::string("flags"), flags);
+	sgre::script::ScriptDebugSceneEntry initial;
+	initial.Storage = location.Storage;
+	initial.TargetLine = location.SourceLine;
+	initial.CheckpointLocation = location;
+	initial.CheckpointIdentity = std::string(64, 'a');
+	initial.Checkpoint = sgre::script::EncodeOriginalCheckpoint(vm, data, location, initial.CheckpointIdentity, "fixture-parent");
+	sgre::script::OriginalSceneSeekTarget target{"fixture.ks", 20, 20, 2};
+	target.InitialState = initial;
+	sgre::script::OriginalSceneSeek seek(vm, std::move(target));
+	seek.InstallAvailableHooks();
+	const auto application = vm.CreateInstance(fixture.Application);
+	const auto application_root = vm.Retain(application);
+	const auto restored = Call(vm, application, "getMainScene");
+	const auto restored_root = vm.Retain(restored);
+	Require(fixture.StartCalls == 0 && sgre::script::StringText(vm.GetSlot(restored, std::string("storage"))) == location.Storage && sgre::script::StringText(vm.GetSlot(restored, std::string("target"))) == location.Label && vm.GetSlot(restored, std::string("point")) == SquirrelValue{location.Point}, "predecessor entry invoked new game or substituted requested target coordinates");
+	Require(vm.GetSlot(vm.GetSlot(restored, std::string("flags")), std::string("phone-history")) == SquirrelValue{std::int32_t{23}}, "predecessor entry lost its actual phone state");
+	static_cast<void>(vm.CollectGarbage());
+	Require(std::holds_alternative<std::monostate>(Call(vm, application, "getMainScene")) && fixture.StartCalls == 0, "later application transition replayed the reconstruction predecessor");
+}
+
+static void TestMailInputAtOriginalCallsites() {
+	SeekFixture fixture;
+	auto& vm = fixture.Vm;
+	bool can_scroll = true;
+	std::size_t queries = 0;
+	const auto phone_type = vm.CreateClass();
+	const auto phone_type_root = vm.Retain(phone_type);
+	vm.NewSlot(phone_type, std::string("getVariable"), vm.CreateNativeClosure("prepared-mail-scroll-readiness", [&](SquirrelVm&, auto arguments) {
+		Require(arguments.size() == 2 && sgre::script::StringText(arguments[1]) == "isScrollDownEnabled", "mail seek queried an unrelated variable");
+		++queries;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(can_scroll);
+	}));
+	const auto phone = vm.CreateInstance(phone_type);
+	const auto phone_root = vm.Retain(phone);
+	const auto info = vm.CreateTable();
+	vm.NewSlot(info, std::string("func"), phone);
+	vm.NewSlot(fixture.Player, std::string("autoPhoneInfo"), info);
+	auto target = Target();
+	target.Navigation = std::make_shared<const sgre::scenario::ScenarioNavigation>();
+	sgre::script::OriginalSceneSeek seek(vm, std::move(target));
+	const auto player = fixture.Start(seek);
+	const auto player_root = vm.Retain(player);
+	const auto program = [](std::size_t next_instruction, std::string source) {
+		sgre::script::BytecodeProgram result;
+		auto& function = result.MainFunction;
+		function.Name = std::string("waitMailView");
+		function.SourceName = std::move(source);
+		function.Parameters = {std::string("this"), std::string("action")};
+		function.StackSize = 5;
+		function.Literals = {std::string("checkInputAction")};
+		function.Instructions.resize(next_instruction - 4, Operation(2, 4, 0));
+		auto prepare = Operation(8, 2, 0);
+		prepare.Argument2 = 0;
+		prepare.Argument3 = 3;
+		function.Instructions.push_back(prepare);
+		function.Instructions.push_back(Operation(10, 4, 1));
+		function.Instructions.push_back(Operation(2, 1, 0));
+		auto call = Operation(6, 2, 2);
+		call.Argument2 = 3;
+		call.Argument3 = 2;
+		function.Instructions.push_back(call);
+		function.Instructions.push_back(Operation(19, 1, 2));
+
+		return result;
+	};
+	const auto down = vm.CreateClosure(program(68, "rsc_project/script/phone.nut"));
+	const auto down_root = vm.Retain(down);
+	const auto accept = vm.CreateClosure(program(94, "rsc_project/script/phone.nut"));
+	const auto accept_root = vm.Retain(accept);
+	const auto unrelated = vm.CreateClosure(program(68, "fixture/unrelated.nut"));
+	const auto unrelated_root = vm.Retain(unrelated);
+	const auto action = vm.CreateArray(std::array<SquirrelValue, 2>{vm.CreateString("down"), vm.CreateString("wheeldown")});
+	const auto action_root = vm.Retain(action);
+	const std::array<SquirrelValue, 2> arguments{player, action};
+	Require(vm.Invoke(down, arguments).Value == SquirrelValue{true} && vm.Invoke(accept, arguments).Value == SquirrelValue{false}, "mail seek failed to scroll before allowing acknowledgement");
+	can_scroll = false;
+	Require(vm.Invoke(down, arguments).Value == SquirrelValue{false} && vm.Invoke(accept, arguments).Value == SquirrelValue{true}, "mail seek failed to acknowledge the original end of the mail");
+	Require(seek.Observation().PhoneActions == 2 && queries == 4, "mail seek fabricated or repeated original input effects");
+	Require(vm.Invoke(unrelated, arguments).Value == SquirrelValue{false} && queries == 4, "mail seek affected an unrelated script callsite");
+	const auto other = vm.CreateContext();
+	Require(vm.InvokeInContext(other, down, arguments).Value == SquirrelValue{false} && queries == 4, "mail seek affected another context");
+	vm.ReleaseContext(other);
+	seek.Cancel();
+	Require(vm.Invoke(accept, arguments).Value == SquirrelValue{false} && queries == 4, "cancelled mail seek retained input ownership");
+}
+
 static void TestFirstEntryFailureLatchesAndPreservesException() {
 	for (std::size_t stage = 0; stage != 4; ++stage) {
 		SeekFixture fixture;
@@ -790,6 +892,8 @@ int main(int argc, char** argv) {
 		Require(argc == 1 || argc == 4, "usage: original_scene_seek_tests [envplayer-bytecode util-bytecode init-bytecode]");
 		TestFirstEntryFailureLatchesAndPreservesException();
 		TestCurrentSceneArgumentPropagation();
+		TestCheckpointPredecessorEntry();
+		TestMailInputAtOriginalCallsites();
 		TestInputArrivalAndOwnership();
 		TestCancellationLimitsAndLateInstallation();
 		TestAuthenticBoundaryContextPolicy();

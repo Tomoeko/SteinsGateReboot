@@ -2,6 +2,7 @@
 
 #include "sgre/audio/buffered_sound_sources.hpp"
 #include "sgre/audio/sound_configuration_loads.hpp"
+#include "sgre/audio/user_audio_settings.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -102,6 +103,8 @@ namespace sgre::audio {
 		[[nodiscard]] bool GetAllPaused() const;
 		// Re-evaluate each live channel from retained factors, including a previous zero master gain.
 		void SetMasterVolume(float linear_volume);
+		// Independent listening controls; original group/mute/voice getters retain their values.
+		void SetUserAudioSettings(const UserAudioSettings& settings);
 		// Native3837a0 replaces one active logical cue gain and commits every real channel matrix.
 		[[nodiscard]] bool SetVoiceVolume(BufferedSoundCueId cue, float linear_volume);
 		// Native380720 copies the actual logical gain; its caller-initialized unity survives an absent ID.

@@ -33,6 +33,9 @@ namespace sgre::platform {
 		std::optional<audio::PcmOutputDeliveryQueue> Deliveries;
 		std::optional<audio::PcmOutputLeveler> Leveler;
 		std::uint64_t DeliverySequence = 0;
+		std::atomic<float> MasterVolume = 1;
+		float CurrentMasterVolume = 1;
+		float MasterVolumeStep = 1.0f / 480.0f;
 		std::atomic<bool> Enabled = false;
 		std::atomic_flag Rendering = ATOMIC_FLAG_INIT;
 		std::atomic<std::uint32_t> ActiveCallbacks = 0;

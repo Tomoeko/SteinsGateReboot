@@ -1,3 +1,4 @@
+#include "sgre/app/display_path.hpp"
 #include "sgre/app/launch_arguments.hpp"
 #include "sgre/app/launch_configuration.hpp"
 #include "sgre/audio/offline_buffered_sound_pool.hpp"
@@ -13,12 +14,15 @@
 #include "sgre/platform/backup_crypto.hpp"
 #include "sgre/platform/checkpoint_preparation.hpp"
 #include "sgre/platform/content_digest.hpp"
+#include "sgre/platform/debug_inspector.hpp"
 #include "sgre/platform/emote_entropy.hpp"
 #include "sgre/platform/host_locale.hpp"
 #include "sgre/platform/host_performance_counter.hpp"
 #include "sgre/platform/host_time.hpp"
 #include "sgre/platform/macos_pcm_output.hpp"
 #include "sgre/platform/motion_seed_source.hpp"
+#include "sgre/platform/scene_jump_preparation.hpp"
+#include "sgre/platform/volume_menu.hpp"
 #include "sgre/render/color_pass.hpp"
 #include "sgre/render/graphics_display_frame.hpp"
 #include "sgre/render/sprite_graphics_targets.hpp"
@@ -54,6 +58,7 @@
 #include "sgre/script/layer_picture_bindings.hpp"
 #include "sgre/script/layer_proxy_bindings.hpp"
 #include "sgre/script/layer_raw_texture_bindings.hpp"
+#include "sgre/script/live_scene_jump.hpp"
 #include "sgre/script/motion_bindings.hpp"
 #include "sgre/script/motion_resource_owner.hpp"
 #include "sgre/script/native_math.hpp"
@@ -317,6 +322,9 @@ namespace sgre::platform {
 				throw std::runtime_error("original startup requires its actual serialized font/cache owner and original archive seed");
 			}
 
+			if (!m_Owners.Headless || !m_Owners.SceneSeek) {
+				m_LiveJump = std::make_unique<script::LiveSceneJump>(m_Vm);
+			}
 			m_RawImages.ConfigureStorageOwners(m_Structs);
 			script::InstallNativePrinting(m_Vm, m_Logs.OutputCallback());
 			m_System.ConfigureLooperTime(m_Owners.Looper);
@@ -381,10 +389,10 @@ namespace sgre::platform {
 			    });
 			m_Sound.ConfigureBufferedPlayback(m_Owners.SoundOutputChannels, script::SoundBufferedDecoderProfile::VerifiedWmaOptions31, script::SoundBufferedPlaybackMode::IncrementalWma);
 			m_Inputs.ConfigureFunctionKeys([this] {
-				return m_Owners.FunctionKeys.Snapshot();
+				return m_Owners.Platform.ToolInputCaptured() ? input::FunctionKeySnapshot{} : m_Owners.FunctionKeys.Snapshot();
 			});
 			m_Inputs.ConfigureKeyboardText([this] {
-				return m_Owners.FunctionKeys.TextSnapshot();
+				return m_Owners.Platform.ToolInputCaptured() ? input::KeyboardTextSnapshot{} : m_Owners.FunctionKeys.TextSnapshot();
 			});
 			PrepareMountInputs();
 			m_System.ConfigureArchiveReadMounts(m_Owners.Mounts, [this](auto prefix, auto index, auto body) {
@@ -601,6 +609,30 @@ namespace sgre::platform {
 			return true;
 		}
 
+		[[nodiscard]] bool SceneEntryReady() const {
+			return !m_Owners.CheckpointJob || (m_CheckpointRecorder && m_CheckpointRecorder->Captures() != 0);
+		}
+
+		[[nodiscard]] bool CanLiveJump() const {
+			return m_LiveJump && m_LiveJump->CanJump();
+		}
+
+		void QueueLiveJump(const save::CachedSceneCheckpoint& checkpoint, const script::OriginalCheckpointLocation& location) {
+			RequireOpen();
+			if (!CanLiveJump()) {
+				throw std::runtime_error("scene jump is waiting for the original scene entry");
+			}
+			m_LiveJump->Queue(checkpoint.Bytes, location, m_Owners.CheckpointIdentity, [this, digest = checkpoint.Digest]() mutable {
+				if (m_CheckpointRecorder && m_CheckpointRecorder->Error().empty()) {
+					m_CheckpointRecorder->SetRestoredPredecessor(std::move(digest));
+				}
+			});
+			if (m_SceneSeek) {
+				m_SceneSeek->Cancel();
+				m_SceneSeek.reset();
+			}
+		}
+
 		void Update() {
 			RequireOpen();
 			if (m_Owners.CheckpointJob) {
@@ -710,6 +742,7 @@ namespace sgre::platform {
 			if (m_Closed) {
 				return;
 			}
+			m_LiveJump.reset();
 			if (m_CheckpointRecorder) {
 				std::cerr << "originalCheckpointRecorder captures=" << m_CheckpointRecorder->Captures() << '\n';
 				m_CheckpointRecorder->Cancel();
@@ -904,6 +937,9 @@ namespace sgre::platform {
 			if (m_SceneSeek) {
 				m_SceneSeek->InstallAvailableHooks();
 			}
+			if (m_LiveJump) {
+				m_LiveJump->InstallAvailableHooks();
+			}
 			if (m_CheckpointRecorder) {
 				m_CheckpointRecorder->InstallAvailableHook();
 			}
@@ -919,17 +955,18 @@ namespace sgre::platform {
 
 		void ReportSceneSeek() {
 			const auto& state = m_SceneSeek->Observation();
-			if (m_ReportedSeekPhase && *m_ReportedSeekPhase == state.Phase && m_ReportedMovieRequests == state.MovieRequests && m_ReportedMovieConfirmations == state.MovieConfirmations) {
+			if (m_ReportedSeekPhase && *m_ReportedSeekPhase == state.Phase && m_ReportedMovieRequests == state.MovieRequests && m_ReportedMovieConfirmations == state.MovieConfirmations && m_ReportedPhoneActions == state.PhoneActions) {
 				return;
 			}
 			m_ReportedSeekPhase = state.Phase;
 			m_ReportedMovieRequests = state.MovieRequests;
 			m_ReportedMovieConfirmations = state.MovieConfirmations;
+			m_ReportedPhoneActions = state.PhoneActions;
 			if (m_SeekReportRows == 256) {
 				return;
 			}
 			++m_SeekReportRows;
-			std::cerr << "originalStatefulSeek phase=" << static_cast<std::uint32_t>(state.Phase) << " storage=" << std::quoted(state.Storage) << " line=" << state.SourceLine << " point=" << state.Point << " snapshots=" << state.Snapshots << " movieRequests=" << state.MovieRequests << " movieConfirmations=" << state.MovieConfirmations << " reason=" << std::quoted(state.Reason) << " source=" << std::quoted(state.Source) << " function=" << std::quoted(state.Function) << " scriptLine=" << state.ScriptLine << '\n';
+			std::cerr << "originalStatefulSeek phase=" << static_cast<std::uint32_t>(state.Phase) << " storage=" << std::quoted(state.Storage) << " line=" << state.SourceLine << " point=" << state.Point << " snapshots=" << state.Snapshots << " movieRequests=" << state.MovieRequests << " movieConfirmations=" << state.MovieConfirmations << " phoneActions=" << state.PhoneActions << " reason=" << std::quoted(state.Reason) << " source=" << std::quoted(state.Source) << " function=" << std::quoted(state.Function) << " scriptLine=" << state.ScriptLine << '\n';
 		}
 
 		void ReportError(std::string_view error) {
@@ -1263,10 +1300,12 @@ namespace sgre::platform {
 		std::unique_ptr<script::OriginalCheckpointRecorder> m_CheckpointRecorder;
 		std::string m_CheckpointError;
 		std::string m_CheckpointRecorderError;
+		std::unique_ptr<script::LiveSceneJump> m_LiveJump;
 		std::unique_ptr<script::OriginalSceneSeek> m_SceneSeek;
 		std::unique_ptr<script::OriginalCalendarRestore> m_CalendarRestore;
 		std::optional<script::OriginalCalendarRestorePhase> m_CalendarReported;
 		std::optional<script::OriginalSceneSeekPhase> m_ReportedSeekPhase;
+		std::size_t m_ReportedPhoneActions = 0;
 		std::size_t m_ReportedMovieRequests = 0;
 		std::size_t m_ReportedMovieConfirmations = 0;
 		std::size_t m_SeekReportRows = 0;
@@ -1443,6 +1482,7 @@ namespace sgre::platform {
 		std::string CheckpointIdentity;
 		std::string CheckpointParent = "original-session-entry";
 		render::SpritePresentationDescription Presentation;
+		std::filesystem::path Executable;
 		std::filesystem::path ConfigurationWorkspace;
 		std::optional<app::LaunchConfiguration> Configuration;
 		bool RememberWindowChanges = true;
@@ -1503,6 +1543,8 @@ namespace sgre::platform {
 					throw std::runtime_error("visible Sound/Movie output currently requires the actual48k stereo mastering configuration");
 				}
 				m_Output = std::make_unique<audio::OfflineBufferedSoundPool>(m_Sound, m_Run.Offline);
+				m_UserAudio = m_Run.Configuration ? m_Run.Configuration->Audio : audio::UserAudioSettings{};
+				m_Sound.BufferedCues().SetUserAudioSettings(m_UserAudio);
 				m_MovieAudio = std::make_unique<media::MovieSilentAudioRegistry>([this] {
 					return ReadMovieClock100ns(m_Counter);
 				},
@@ -1516,6 +1558,7 @@ namespace sgre::platform {
 					// User-authorized macOS level adjustment after the complete Sound+Movie mix.
 					output_description.OutputGain = 2;
 					m_HardwareAudio = std::make_unique<MacPcmOutput>(output_description);
+					m_HardwareAudio->SetMasterVolume(static_cast<float>(m_UserAudio.Master) / 100.0f);
 					m_MovieDelivery = std::make_unique<media::MoviePcmDelivery>(*m_MovieAudio, *m_Output, *m_HardwareAudio);
 				}
 				m_Auxiliary = std::make_unique<core::ApplicationAuxiliaryRegistration>(
@@ -1606,6 +1649,19 @@ namespace sgre::platform {
 
 		void Run() {
 			if (!m_Run.Headless) {
+				m_DebugInspector = std::make_unique<DebugInspector>(m_Surface, scenario::ScenarioSearchLocation{m_Run.Installation, m_Run.ArchiveSeed});
+				m_VolumeMenu = std::make_unique<VolumeMenu>(m_Surface, m_UserAudio, [this] {
+					m_DebugInspector->Hide();
+				});
+				m_Platform.ConfigureToolInputCapture([this] {
+					return (m_DebugInspector && m_DebugInspector->CapturesInput()) || (m_VolumeMenu && m_VolumeMenu->CapturesInput());
+				});
+			}
+			bool loading = !m_Run.Headless && static_cast<bool>(m_Run.CheckpointJob);
+			if (loading) {
+				m_Surface.SetLoadingMessage("Restoring scene…\n" + m_Run.SceneEntry->Storage + ":" + std::to_string(m_Run.SceneEntry->TargetLine));
+			}
+			if (!m_Run.Headless) {
 				m_Surface.ShowWindow();
 				AdvanceHardwareAudio();
 				m_HardwareAudio->Start();
@@ -1619,6 +1675,12 @@ namespace sgre::platform {
 						PollPrivateCommands();
 					}
 					active = m_Display->RunIteration();
+					UpdateDebugInspector();
+					UpdateVolumeMenu();
+					if (loading && m_Driver->SceneEntryReady()) {
+						m_Surface.SetLoadingMessage({});
+						loading = false;
+					}
 					++m_Iterations;
 					if (m_Run.Headless) {
 						CapturePrivateCommand();
@@ -1655,6 +1717,13 @@ namespace sgre::platform {
 				return;
 			}
 			m_Looper.RequireIdleContainingPhase();
+			m_LivePreparation.reset();
+			m_LivePrepared.reset();
+			if (m_DebugInspector) {
+				m_Platform.ConfigureToolInputCapture({});
+				m_VolumeMenu.reset();
+				m_DebugInspector.reset();
+			}
 			if (m_CloseCallbacks) {
 				m_CloseCallbacks->Close();
 				m_CloseCallbacks.reset();
@@ -1756,7 +1825,37 @@ namespace sgre::platform {
 		}
 
 	private:
+		void RememberAudioSettings() {
+			if (m_Run.Headless || !m_Run.Configuration || m_Run.ConfigurationWorkspace.empty() || m_Run.Configuration->Audio == m_UserAudio) {
+				return;
+			}
+			const app::LaunchConfigurationStore store(m_Run.ConfigurationWorkspace);
+			auto configuration = store.LoadOrCreate().Configuration;
+			configuration.Audio = m_UserAudio;
+			configuration.AudioSettingsStored = true;
+			store.Save(configuration);
+			m_Run.Configuration->Audio = m_UserAudio;
+			m_Run.Configuration->AudioSettingsStored = true;
+		}
+
+		void UpdateVolumeMenu() {
+			if (!m_VolumeMenu) {
+				return;
+			}
+			m_VolumeMenu->Update();
+			const auto settings = m_VolumeMenu->Settings();
+			if (settings != m_UserAudio) {
+				m_Sound.BufferedCues().SetUserAudioSettings(settings);
+				m_HardwareAudio->SetMasterVolume(static_cast<float>(settings.Master) / 100.0f);
+				m_UserAudio = settings;
+			}
+			if (m_VolumeMenu->TakeChanges()) {
+				RememberAudioSettings();
+			}
+		}
+
 		void RememberWindowPreferences() {
+			RememberAudioSettings();
 			if (!m_Run.RememberWindowChanges || !m_Run.Configuration || m_Run.ConfigurationWorkspace.empty()) {
 				return;
 			}
@@ -1794,6 +1893,8 @@ namespace sgre::platform {
 					std::cerr << "private stdin Return queued=" << m_Driver->QueuePrivateReturnPulse() << '\n';
 				} else if (command == 'm') {
 					std::cerr << "private stdin mouse queued=" << m_Driver->QueuePrivateMouseMove() << '\n';
+				} else if (command == 'p') {
+					m_Driver->WriteProgress(std::cerr);
 				} else if (command == 'c') {
 					if (m_CaptureRequests < kMaximumCaptureRequests) {
 						if (m_PendingCaptures == 0) {
@@ -2151,6 +2252,47 @@ namespace sgre::platform {
 			m_RetiringHooks = false;
 		}
 
+		void UpdateDebugInspector() {
+			if (!m_DebugInspector) {
+				return;
+			}
+			m_DebugInspector->Update();
+			try {
+				if (auto target = m_DebugInspector->TakeJumpRequest()) {
+					m_LivePrepared.reset();
+					m_LivePreparation.reset();
+					CheckpointPreparationRequest request;
+					request.Executable = m_Run.Executable;
+					request.Installation = m_Run.Installation;
+					request.JobRoot = m_Run.ConfigurationWorkspace / "Files/checkpoints/jobs";
+					request.Target = std::move(*target);
+					m_LivePreparation = std::make_unique<SceneJumpPreparation>(scenario::ScenarioSearchLocation{m_Run.Installation, m_Run.ArchiveSeed}, std::move(request), m_Run.CheckpointCache);
+					m_DebugInspector->SetJumpStatus("Preparing original scene state…");
+				}
+				if (m_LivePreparation) {
+					const auto error = m_LivePreparation->Error();
+					if (!error.empty()) {
+						throw std::runtime_error(error);
+					}
+					if (auto result = m_LivePreparation->TakeResult()) {
+						m_LivePrepared = std::move(result);
+						m_LivePreparation.reset();
+						m_DebugInspector->SetJumpStatus("Scene state ready; waiting for the original scene entry…");
+					}
+				}
+				if (m_LivePrepared && m_Driver->CanLiveJump()) {
+					m_Driver->QueueLiveJump(m_LivePrepared->Checkpoint, m_LivePrepared->Location);
+					m_LivePrepared.reset();
+					m_DebugInspector->SetJumpStatus("Original scene restore requested");
+					m_DebugInspector->Hide();
+				}
+			} catch (const std::exception& error) {
+				m_LivePreparation.reset();
+				m_LivePrepared.reset();
+				m_DebugInspector->SetJumpStatus(app::RedactUserHome(std::string("Jump failed: ") + error.what(), std::filesystem::path(NSHomeDirectory().UTF8String)));
+			}
+		}
+
 		bool InitializeSaveDirectory() {
 			std::lock_guard lock(m_SaveDirectoryMutex);
 			if (m_SaveDirectoryInitialized) {
@@ -2235,6 +2377,11 @@ namespace sgre::platform {
 		// Native2d4840 seeds only at the first actual trial; this owner encloses all driver tasks.
 		scene::EmoteWindRandom m_WindRandom{ReadHostUnixSeconds};
 		std::unique_ptr<OriginalScriptStartup> m_Driver;
+		std::unique_ptr<DebugInspector> m_DebugInspector;
+		std::unique_ptr<VolumeMenu> m_VolumeMenu;
+		audio::UserAudioSettings m_UserAudio;
+		std::unique_ptr<SceneJumpPreparation> m_LivePreparation;
+		std::optional<PreparedSceneJump> m_LivePrepared;
 		std::unique_ptr<core::ApplicationEventCallbacks> m_CloseCallbacks;
 		std::array<scene::ParallelTaskHandle, 3> m_HookClocks;
 		std::array<bool, 3> m_Registered{};
@@ -2429,6 +2576,29 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 			seek.RequestedLine = target.SourceLine;
 			seek.SnapshotLine = target.SnapshotLine;
 			seek.Point = target.Point;
+			seek.Label = target.SceneLabel;
+			if (options.CheckpointWorker) {
+				seek.Navigation = std::make_shared<const sgre::scenario::ScenarioNavigation>(scenarios.ReadNavigation());
+				const sgre::scenario::ScenarioNavigationLocation destination{target.CanonicalStorage, target.SceneLabel, target.SnapshotLine, target.Point, static_cast<std::int32_t>(target.SnapshotIndex)};
+				const auto candidates = seek.Navigation->Predecessors(destination);
+				std::vector<std::string> keys;
+				keys.reserve(candidates.size());
+				for (const auto& candidate : candidates) {
+					keys.push_back(sgre::script::OriginalCheckpointKey({candidate.Storage, candidate.Label, candidate.SourceLine, candidate.Point, candidate.Record}));
+				}
+				if (auto selected = run.CheckpointCache->FindFirst(keys)) {
+					const auto& candidate = candidates[selected->Candidate];
+					sgre::script::ScriptDebugSceneEntry initial;
+					initial.Storage = candidate.Storage;
+					initial.TargetLine = candidate.SourceLine;
+					initial.CheckpointLocation = {candidate.Storage, candidate.Label, candidate.SourceLine, candidate.Point, candidate.Record};
+					initial.CheckpointIdentity = run.CheckpointIdentity;
+					initial.Checkpoint = std::move(selected->Checkpoint.Bytes);
+					run.CheckpointParent = selected->Checkpoint.Digest;
+					seek.InitialState = std::move(initial);
+					std::cerr << "original reconstruction predecessor: storage=" << std::quoted(candidate.Storage) << " line=" << candidate.SourceLine << " point=" << candidate.Point << " digest=" << run.CheckpointParent << '\n';
+				}
+			}
 			run.SceneSeek = std::move(seek);
 		}
 		std::cerr << (run.SceneEntry ? "original direct entry validated: storage=" : "original stateful seek validated: storage=") << std::quoted(target.CanonicalStorage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << " point=" << target.Point << '\n';
@@ -2438,6 +2608,7 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 	run.Presentation.WindowHeightPoints = configuration.WindowHeight;
 	run.Presentation.WindowCentered = configuration.WindowCentered;
 	run.Presentation.Fullscreen = !run.Headless && configuration.Fullscreen;
+	run.Executable = StartupExecutablePath();
 	run.ConfigurationWorkspace = workspace;
 	run.Configuration = loaded.Configuration;
 	run.RememberWindowChanges = !options.Fullscreen && !options.WindowCentered && !options.Resolution && !options.WindowSize;

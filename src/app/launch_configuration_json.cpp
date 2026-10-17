@@ -74,7 +74,7 @@ namespace sgre::app {
 			ConfigFields result;
 			if (!Take('}')) {
 				do {
-					FormatRequire(result.size() < 15, "config contains too many fields");
+					FormatRequire(result.size() < 19, "config contains too many fields");
 					auto key = ReadString();
 					Expect(':');
 					SkipSpace();
@@ -261,10 +261,15 @@ namespace sgre::app {
 	ParsedLaunchConfiguration ParseLaunchConfigurationDocument(std::string_view json) {
 		const auto fields = ConfigJsonReader(json).Read();
 		const auto version = ReadNumber(fields, "version", 1, 2);
-		FormatRequire(fields.size() == (version == 1 ? 11U : 15U), "config schema has missing or unknown fields");
+		auto expected_fields = version == 1 ? 11U : 15U;
+		for (const auto key : {"master_volume", "music_volume", "voice_volume", "effects_volume"}) {
+			expected_fields += fields.contains(key) ? 1U : 0U;
+		}
+		FormatRequire(fields.size() == expected_fields, "config schema has missing or unknown fields");
 		ParsedLaunchConfiguration parsed;
 		parsed.SchemaVersion = version;
 		auto& result = parsed.Configuration;
+		result.AudioSettingsStored = expected_fields != (version == 1 ? 11U : 15U);
 		result.Installation = ReadPath(fields, "installation");
 		result.SpriteShader = ReadPath(fields, "sprite_shader");
 		result.PresentationShader = ReadPath(fields, "presentation_shader");
@@ -284,6 +289,19 @@ namespace sgre::app {
 			result.Fullscreen = ReadBoolean(fields, "fullscreen");
 			result.WindowCentered = ReadBoolean(fields, "window_centered");
 		}
+		if (fields.contains("master_volume")) {
+			result.Audio.Master = ReadNumber(fields, "master_volume", 0, 100);
+		}
+		if (fields.contains("music_volume")) {
+			result.Audio.Music = ReadNumber(fields, "music_volume", 0, 100);
+		}
+		if (fields.contains("voice_volume")) {
+			result.Audio.Voice = ReadNumber(fields, "voice_volume", 0, 100);
+		}
+		if (fields.contains("effects_volume")) {
+			result.Audio.Effects = ReadNumber(fields, "effects_volume", 0, 100);
+		}
+
 		return parsed;
 	}
 
@@ -306,7 +324,11 @@ namespace sgre::app {
 	}
 
 	std::string SerializeLaunchConfiguration(const LaunchConfiguration& configuration) {
-		const auto json = std::string("{\n  \"version\": 2,\n  \"installation\": ") + QuotePath(configuration.Installation) + ",\n  \"sprite_shader\": " + QuotePath(configuration.SpriteShader) + ",\n  \"presentation_shader\": " + QuotePath(configuration.PresentationShader) + ",\n  \"save_directory\": " + QuotePath(configuration.SaveDirectory) + ",\n  \"seed_file\": " + QuotePath(configuration.SeedFile) + ",\n  \"width\": " + std::to_string(configuration.Width) + ",\n  \"height\": " + std::to_string(configuration.Height) + ",\n  \"audio_rate\": " + std::to_string(configuration.AudioSamplesPerSecond) + ",\n  \"audio_channels\": " + std::to_string(configuration.AudioChannels) + ",\n  \"debug_start_in_game\": " + (configuration.DebugStartInGame ? "true" : "false") + ",\n  \"window_width\": " + std::to_string(configuration.WindowWidth) + ",\n  \"window_height\": " + std::to_string(configuration.WindowHeight) + ",\n  \"fullscreen\": " + (configuration.Fullscreen ? "true" : "false") + ",\n  \"window_centered\": " + (configuration.WindowCentered ? "true" : "false") + "\n}\n";
+		auto json = std::string("{\n  \"version\": 2,\n  \"installation\": ") + QuotePath(configuration.Installation) + ",\n  \"sprite_shader\": " + QuotePath(configuration.SpriteShader) + ",\n  \"presentation_shader\": " + QuotePath(configuration.PresentationShader) + ",\n  \"save_directory\": " + QuotePath(configuration.SaveDirectory) + ",\n  \"seed_file\": " + QuotePath(configuration.SeedFile) + ",\n  \"width\": " + std::to_string(configuration.Width) + ",\n  \"height\": " + std::to_string(configuration.Height) + ",\n  \"audio_rate\": " + std::to_string(configuration.AudioSamplesPerSecond) + ",\n  \"audio_channels\": " + std::to_string(configuration.AudioChannels) + ",\n  \"debug_start_in_game\": " + (configuration.DebugStartInGame ? "true" : "false") + ",\n  \"window_width\": " + std::to_string(configuration.WindowWidth) + ",\n  \"window_height\": " + std::to_string(configuration.WindowHeight) + ",\n  \"fullscreen\": " + (configuration.Fullscreen ? "true" : "false") + ",\n  \"window_centered\": " + (configuration.WindowCentered ? "true" : "false");
+		if (configuration.AudioSettingsStored || configuration.Audio != audio::UserAudioSettings{}) {
+			json += ",\n  \"master_volume\": " + std::to_string(configuration.Audio.Master) + ",\n  \"music_volume\": " + std::to_string(configuration.Audio.Music) + ",\n  \"voice_volume\": " + std::to_string(configuration.Audio.Voice) + ",\n  \"effects_volume\": " + std::to_string(configuration.Audio.Effects);
+		}
+		json += "\n}\n";
 		static_cast<void>(ParseLaunchConfiguration(json));
 
 		return json;

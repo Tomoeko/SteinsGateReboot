@@ -61,6 +61,7 @@ namespace sgre::audio {
 		volume *= parameters.ArchiveVolume;
 		volume *= parameters.MasterVolume;
 		volume *= parameters.MuteVolume;
+		volume *= parameters.UserVolume;
 		if (!parameters.UseSourcePan) {
 			mix.Matrix[0] = volume * (parameters.Pan.Destinations[0] * parameters.ResourcePan[0]);
 			mix.Matrix[static_cast<std::size_t>(source_channels) * 2 - 1] = volume * (parameters.Pan.Destinations[1] * parameters.ResourcePan[1]);

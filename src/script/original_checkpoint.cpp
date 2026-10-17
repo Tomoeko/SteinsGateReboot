@@ -479,6 +479,13 @@ namespace sgre::script {
 		m_Implementation->Parent = std::move(digest);
 	}
 
+	void OriginalCheckpointRecorder::SetRestoredPredecessor(std::string digest) {
+		if (m_Implementation->Cancelled || digest.empty() || digest.size() > 4096) {
+			throw std::runtime_error("checkpoint restored predecessor requires its active recorder and bounded provenance");
+		}
+		m_Implementation->Parent = std::move(digest);
+	}
+
 	std::string_view OriginalCheckpointRecorder::Error() const noexcept {
 		return m_Implementation->Failure;
 	}

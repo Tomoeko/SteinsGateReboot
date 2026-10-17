@@ -194,6 +194,12 @@ namespace sgre::platform {
 		});
 	}
 
+	void UpdateMacFunctionModifier(bool& held, std::uint16_t code, bool flags_changed, bool function_flag) noexcept {
+		if (flags_changed && code == kVK_Function) {
+			held = function_flag;
+		}
+	}
+
 	void SampleMacFunctionKeyboard(input::KeyboardSample& sample, const std::array<std::uint16_t, 24>& codes, const MacPhysicalKeyReader& reader) {
 		if (!sample.Available) {
 			return;
@@ -202,7 +208,7 @@ namespace sgre::platform {
 			throw std::runtime_error("macOS focused function keyboard requires its physical key-state reader");
 		}
 
-		const bool function_modifier = reader.Read(reader.Context, kVK_Function);
+		const bool function_modifier = reader.FunctionHeld;
 		auto sampled = sample;
 		for (std::size_t index = 0; index < codes.size(); ++index) {
 			const auto code = codes[index];
@@ -230,7 +236,7 @@ namespace sgre::platform {
 		}
 
 		// The caller supplies its actual focus-gated function/mouse snapshot. Publish only after all reads succeed.
-		const bool function_modifier = reader.Read(reader.Context, kVK_Function);
+		const bool function_modifier = reader.FunctionHeld;
 		auto sampled = sample;
 		if (!function_modifier) {
 			std::fill(sampled.VirtualKeys.begin() + 0x70, sampled.VirtualKeys.begin() + 0x7c, 0);
@@ -318,7 +324,10 @@ namespace sgre::platform {
 		std::array<std::uint16_t, 24> FunctionKeyCodes{kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6, kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12, kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19, kVK_F20, 0xffff, 0xffff, 0xffff, 0xffff};
 		std::uint16_t BreakCode = 0xffff;
 		bool Dispatching = false;
+		bool FunctionHeld = false;
 		bool Closed = false;
+		std::function<bool()> ToolCapture;
+		bool ToolReleasePending = false;
 
 		void RequireLive() const {
 			RequirePumpMainThread();
@@ -387,6 +396,9 @@ namespace sgre::platform {
 			throw std::runtime_error("macOS application dispatch requires its exact nonrecursive event/pacing owners");
 		}
 		state.Pacing = &pacing;
+		if (!state.Window.Application.active || state.Window.Application.keyWindow != state.Window.Window) {
+			state.FunctionHeld = false;
+		}
 		state.Dispatching = true;
 		try {
 			@autoreleasepool {
@@ -404,6 +416,9 @@ namespace sgre::platform {
 							// Windowless OS notifications are not input for an explicitly inactive hidden game.
 							// Consume it within the same queue budget without invoking an AppKit or window handler.
 							continue;
+						}
+						if (event.type == NSEventTypeFlagsChanged && (event.window == state.Window.Window || (event.window == nil && state.Window.Application.active))) {
+							UpdateMacFunctionModifier(state.FunctionHeld, event.keyCode, true, (event.modifierFlags & NSEventModifierFlagFunction) != 0);
 						}
 						if (state.Window.Interactive && (event.type == NSEventTypePeriodic || event.window != state.Window.Window)) {
 							// AppKit owns activation, application/menu, fullscreen and other process-local UI events.
@@ -478,6 +493,39 @@ namespace sgre::platform {
 		}
 	}
 
+	void MacApplicationPump::ConfigureToolInputCapture(std::function<bool()> captured) {
+		RequireLive();
+		m_Implementation->ToolCapture = std::move(captured);
+		m_Implementation->ToolReleasePending = false;
+	}
+
+	bool MacApplicationPump::ToolInputCaptured() const {
+		RequireLive();
+		auto& state = *m_Implementation;
+		if (state.ToolCapture && state.ToolCapture()) {
+			state.ToolReleasePending = true;
+			return true;
+		}
+		if (!state.ToolReleasePending) {
+			return false;
+		}
+		// Poll only during the short release barrier. Closing the panel with Escape
+		// or a held mouse button must not become a new press in the original menu.
+		for (std::uint16_t key = 0; key < 128; ++key) {
+			if (CGEventSourceKeyState(kCGEventSourceStateCombinedSessionState, key)) {
+				return true;
+			}
+		}
+		for (std::uint32_t button = 0; button < 8; ++button) {
+			if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, static_cast<CGMouseButton>(button))) {
+				return true;
+			}
+		}
+		state.ToolReleasePending = false;
+
+		return false;
+	}
+
 	input::KeyboardSample MacApplicationPump::ReadFunctionKeySample() const {
 		RequireLive();
 		const auto& state = *m_Implementation;
@@ -486,12 +534,13 @@ namespace sgre::platform {
 		}
 		input::KeyboardSample sample;
 		// Native048fa3 only samples while GetFocus() is the actual engine window.
-		sample.Available = state.Window.Application.active && state.Window.Application.keyWindow == state.Window.Window && state.Window.Window.keyWindow;
+		sample.Available = state.Window.Application.active && state.Window.Application.keyWindow == state.Window.Window && state.Window.Window.keyWindow && !ToolInputCaptured();
 		if (!sample.Available) {
 			return sample;
 		}
 		MacPhysicalKeyReader reader;
 		reader.Read = ReadSessionPhysicalKey;
+		reader.FunctionHeld = state.FunctionHeld;
 		SampleMacFunctionKeyboard(sample, state.FunctionKeyCodes, reader);
 		sample.VirtualKeys[1] = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonLeft) ? 0x80 : 0;
 		sample.VirtualKeys[2] = CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, kCGMouseButtonRight) ? 0x80 : 0;
@@ -521,6 +570,7 @@ namespace sgre::platform {
 		if (keyboard.Available) {
 			MacPhysicalKeyReader reader;
 			reader.Read = ReadSessionPhysicalKey;
+			reader.FunctionHeld = state.FunctionHeld;
 			SampleMacPhysicalKeyboard(keyboard, actual_mappings, state.BreakCode != 0xffff, reader);
 			for (std::uint32_t button = 0; button != 8; ++button) {
 				if (CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState, static_cast<CGMouseButton>(button))) {
@@ -560,6 +610,12 @@ namespace sgre::platform {
 		const auto bounds = [view convertRectToBacking:view.bounds];
 		const auto geometry = state.Window.Geometry();
 		sample.Client = {0, 0, NativeInputPixel(geometry.SourceWidthPixels), NativeInputPixel(geometry.SourceHeightPixels)};
+		if (ToolInputCaptured()) {
+			sample.Buttons = 0;
+			sample.WheelTicks = 0;
+			sample.EnterTracking = false;
+			return sample;
+		}
 		// A hidden window cannot own WindowFromPoint. Do not activate it or capture the pointer.
 		if (!window.visible || window.miniaturized || !geometry.DrawableAvailable) {
 			if (state.Window.Interactive) {

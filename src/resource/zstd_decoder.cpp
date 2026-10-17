@@ -68,6 +68,9 @@ namespace sgre::resource {
 	class ForwardBits {
 	public:
 		explicit ForwardBits(std::span<const std::uint8_t> bytes) : m_Bytes(bytes) {
+			if (bytes.size() > std::numeric_limits<std::size_t>::max() / 8) {
+				Fail("FSE probability description exceeds addressable bit extent");
+			}
 		}
 
 		std::uint32_t Read(unsigned count) {
@@ -82,13 +85,14 @@ namespace sgre::resource {
 				Fail("truncated FSE probability description");
 			}
 
-			std::uint32_t result = 0;
-			for (unsigned index = 0; index < count; ++index) {
-				const auto position = m_Position + index;
-				result |= static_cast<std::uint32_t>((m_Bytes[position / 8] >> (position % 8)) & 1) << index;
+			if (count == 0) {
+				return 0;
 			}
+			const auto shift = static_cast<unsigned>(m_Position % 8);
+			const auto byte_count = static_cast<std::size_t>((shift + count + 7) / 8);
+			const auto word = ReadLittleEndian(m_Bytes.subspan(m_Position / 8, byte_count));
 
-			return result;
+			return static_cast<std::uint32_t>(word >> shift) & ((std::uint32_t{1} << count) - 1);
 		}
 
 		std::size_t BytesConsumed() const {
@@ -128,11 +132,15 @@ namespace sgre::resource {
 
 			const auto available = static_cast<unsigned>(std::min<std::size_t>(count, m_Remaining));
 			const auto first = m_Remaining - available;
-			std::uint32_t result = 0;
-			for (unsigned index = 0; index < available; ++index) {
-				const auto position = first + index;
-				result |= static_cast<std::uint32_t>((m_Bytes[position / 8] >> (position % 8)) & 1) << index;
+			if (available == 0) {
+				return 0;
 			}
+			const auto shift = static_cast<unsigned>(first % 8);
+			const auto byte_count = static_cast<std::size_t>((shift + available + 7) / 8);
+			// Load only the containing bytes. Preserve little-endian bit order without
+			// unaligned host loads or a per-bit loop in every entropy symbol.
+			const auto word = ReadLittleEndian(m_Bytes.subspan(first / 8, byte_count));
+			const auto result = static_cast<std::uint32_t>(word >> shift) & ((std::uint32_t{1} << available) - 1);
 
 			// Huffman table lookup can look beyond the beginning, with zero low-bit padding.
 			return result << (count - available);

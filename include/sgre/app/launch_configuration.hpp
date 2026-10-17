@@ -1,5 +1,7 @@
 #pragma once
 
+#include "sgre/audio/user_audio_settings.hpp"
+
 #include <cstdint>
 #include <filesystem>
 #include <optional>
@@ -26,6 +28,9 @@ namespace sgre::app {
 		std::uint32_t WindowHeight = 720;
 		bool Fullscreen = false;
 		bool WindowCentered = true;
+		audio::UserAudioSettings Audio;
+		// Optional volume keys are published only after an explicit audio edit.
+		bool AudioSettingsStored = false;
 	};
 
 	class LaunchConfigurationFormatError final : public std::runtime_error {

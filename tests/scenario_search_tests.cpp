@@ -169,6 +169,19 @@ static void TestOriginalSnapshotSelection() {
 	}
 }
 
+static void TestSharedSceneBoundary() {
+	auto document = Document();
+	Member(Scenes(document)[0], "lines") = Value(sgre::resource::PsbArray{Snapshot(4, 10), Number(1), Snapshot(7, 30), Number(2)});
+	sgre::scenario::ScenarioSearchRequest request;
+	request.Query = "delta";
+	const auto found = sgre::scenario::SearchScenarioDocument(document, request);
+	Require(found.Matches.size() == 1, "boundary text disappeared from catalog search");
+	const auto& match = found.Matches.front();
+	Require(match.SourceLine == 30 && match.JumpLine == 29 && match.JumpTarget == "fixture.ks:29" && match.SceneLabel == "*opening", "boundary search selected the next scene or changed original provenance");
+	const auto jump = sgre::scenario::ValidateScenarioJump(document, match.Storage, match.JumpLine);
+	Require(jump.SceneLabel == match.SceneLabel && jump.Point == 7 && jump.SnapshotLine == 30, "boundary search target cannot restore its containing scene");
+}
+
 static void TestTextReferencesAndSchemaFailures() {
 	sgre::scenario::ScenarioSearchRequest request;
 	{
@@ -354,11 +367,12 @@ int main() {
 		TestMultilingualOwnedResults();
 		TestBrowseLimitAndCancellation();
 		TestOriginalSnapshotSelection();
+		TestSharedSceneBoundary();
 		TestTextReferencesAndSchemaFailures();
 		TestBoundedWorkAndResults();
 		TestReadOnlyConfigurationResolution();
 		TestSingleVariantOriginalFallback();
-		std::cout << "7 scenario search groups passed\n";
+		std::cout << "8 scenario search groups passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

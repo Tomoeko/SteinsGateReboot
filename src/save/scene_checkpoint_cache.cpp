@@ -10,6 +10,7 @@
 #include <random>
 #include <stdexcept>
 #include <thread>
+#include <unordered_map>
 #include <utility>
 
 namespace sgre::save {
@@ -210,6 +211,44 @@ namespace sgre::save {
 		}
 
 		return result;
+	}
+
+	std::optional<SceneCheckpointSelection> SceneCheckpointCache::FindFirst(std::span<const std::string> keys) const {
+		if (keys.size() > 100000) {
+			throw std::runtime_error("scene checkpoint candidate count exceeds its bound");
+		}
+		const auto& state = *m_Implementation;
+		std::unordered_map<std::string, std::size_t> addresses;
+		for (std::size_t index = 0; index < keys.size(); ++index) {
+			addresses.try_emplace(state.Address(keys[index]), index);
+		}
+		if (keys.empty() || !std::filesystem::exists(state.Directory)) {
+			return {};
+		}
+		std::optional<std::size_t> selected;
+		std::size_t count = 0;
+		for (const auto& entry : std::filesystem::directory_iterator(state.Directory)) {
+			if (++count > kMaximumCacheEntries) {
+				throw std::runtime_error("scene checkpoint cache entry count exceeds its bound");
+			}
+			const auto name = entry.path().filename().string();
+			if (name.size() != 134 || name[64] != '-' || !name.ends_with(".sgcp") || !entry.is_regular_file()) {
+				continue;
+			}
+			const auto found = addresses.find(name.substr(0, 64));
+			if (found != addresses.end() && (!selected || found->second < *selected)) {
+				selected = found->second;
+			}
+		}
+		if (!selected) {
+			return {};
+		}
+		auto checkpoint = Find(keys[*selected]);
+		if (!checkpoint) {
+			throw std::runtime_error("selected scene checkpoint disappeared during startup lookup");
+		}
+
+		return SceneCheckpointSelection{*selected, std::move(*checkpoint)};
 	}
 
 	std::string SceneCheckpointCache::Submit(std::string_view key, std::vector<std::uint8_t> bytes) {

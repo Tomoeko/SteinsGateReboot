@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <memory>
 #include <string>
+#include <string_view>
 
 namespace sgre::render {
 
@@ -65,6 +66,9 @@ namespace sgre::render {
 		~SpritePassPresentation();
 		// Requires an interactive description and a bound actual event-pump borrower. Idempotent.
 		void ShowWindow();
+		// Authored launch status only. Empty text removes it; hidden observations
+		// never create status controls or show/activate a window.
+		void SetLoadingMessage(std::string_view message);
 		SpritePassPresentation(const SpritePassPresentation&) = delete;
 		SpritePassPresentation& operator=(const SpritePassPresentation&) = delete;
 		SpritePassPresentation(SpritePassPresentation&&) = delete;
@@ -95,6 +99,7 @@ namespace sgre::render {
 		void RequireSynchronization(const PresentationSynchronization& synchronization) const;
 		void ReleaseSynchronization(const PresentationSynchronization& synchronization) const;
 		friend class SpritePassApplicationPumpBridge;
+		friend class SpritePassDebugInspectorBridge;
 #if defined(SGRE_SPRITE_PRESENTATION_FIXTURE)
 		friend class SpritePassPresentationFixtureBridge;
 #endif

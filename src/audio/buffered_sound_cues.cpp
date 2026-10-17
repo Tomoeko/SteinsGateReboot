@@ -74,6 +74,7 @@ namespace sgre::audio {
 		std::map<std::string, float, std::less<>> GroupVolumes;
 		std::size_t OwnedGroupBytes = 0;
 		std::uint32_t LastId = 0;
+		std::optional<UserAudioSettings> UserSettings;
 		bool AllPaused = false;
 		bool Closing = false;
 		bool Closed = false;
@@ -402,6 +403,7 @@ namespace sgre::audio {
 					auto parameters = actual_parameters;
 					parameters.ResourceVolume = definition.Volume;
 					parameters.GroupVolume = GroupVolume(prepared.Group);
+					parameters.UserVolume = UserSettings ? UserAudioGroupGain(*UserSettings, prepared.Group) : 1.0f;
 					parameters.ResourcePitchOctaves = definition.PitchOctaves;
 					parameters.ResourcePan = definition.Channels[index].Pan;
 					channel.Parameters = parameters;
@@ -497,6 +499,28 @@ namespace sgre::audio {
 		const auto found = owner.Ids.find(cue.Value);
 
 		return found == owner.Ids.end() ? 1.0f : found->second->VoiceVolume;
+	}
+
+	void BufferedSoundCues::SetUserAudioSettings(const UserAudioSettings& settings) {
+		auto& owner = *m_Implementation;
+		owner.RequireOwner();
+		ValidateUserAudioSettings(settings);
+		if (owner.UserSettings == settings) {
+			return;
+		}
+		owner.UserSettings = settings;
+		for (const auto& cue : owner.Active) {
+			for (auto& channel : cue->Channels) {
+				if (!channel.Mix) {
+					continue;
+				}
+
+				channel.Parameters.UserVolume = UserAudioGroupGain(settings, cue->Group);
+				channel.Mix = EvaluateSoundMix(channel.Parameters, channel.Mix->SourceChannels, channel.Mix->DestinationChannels, channel.DisableRateConversion);
+				owner.Sources.ApplyOutputMix(channel.Source, *channel.Mix);
+			}
+		}
+		owner.Sources.Commit();
 	}
 
 	void BufferedSoundCues::SetMasterVolume(float linear_volume) {

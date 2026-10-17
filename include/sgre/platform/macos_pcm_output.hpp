@@ -53,6 +53,8 @@ namespace sgre::platform {
 		audio::PcmOutputSubmission Submit(std::span<const float> interleaved);
 		// Start requires a real prefilled target. Construction/Submit never start the device.
 		void Start();
+		// Authored post-limiter master control, covering both game Sound and Movie audio.
+		void SetMasterVolume(float linear_volume);
 		void FinishInput();
 		// This observes the software ring, not final DAC/device latency or native XAudio2 drain parity.
 		[[nodiscard]] MacPcmOutputSnapshot Snapshot();

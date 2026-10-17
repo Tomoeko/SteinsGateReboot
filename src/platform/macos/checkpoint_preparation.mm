@@ -92,6 +92,13 @@ namespace sgre::platform {
 			const auto result = waitpid(Child, &status, WNOHANG);
 			if (result == Child) {
 				Child = 0;
+				if (WIFEXITED(status)) {
+					ExitStatus = "exit " + std::to_string(WEXITSTATUS(status));
+				} else if (WIFSIGNALED(status)) {
+					ExitStatus = "signal " + std::to_string(WTERMSIG(status));
+				} else {
+					ExitStatus = "unknown exit status";
+				}
 				return true;
 			}
 			if (result < 0 && errno == ECHILD) {
@@ -143,7 +150,9 @@ namespace sgre::platform {
 				throw std::runtime_error("jump reconstruction requires an earlier route or phone choice; play that route to record its original state");
 			}
 			if (Progress.find("checkpoint recording stopped:") != std::string::npos || Progress.find("original startup failed:") != std::string::npos) {
-				throw std::runtime_error("original checkpoint reconstruction failed; retained worker.log contains the original diagnostic");
+				const auto marker = Progress.find("original startup failed:");
+				const auto message = marker == std::string::npos ? std::string("checkpoint recording stopped") : Progress.substr(marker, Progress.find('\n', marker) - marker).substr(0, 1024);
+				throw std::runtime_error("reconstruction for " + Request.Target + " failed: " + message);
 			}
 			if (Progress.size() > 131072) {
 				Progress.erase(0, Progress.size() - 65536);
@@ -161,7 +170,14 @@ namespace sgre::platform {
 						break;
 					}
 					if (Reaped()) {
-						throw std::runtime_error("original checkpoint worker exited before recording the requested state");
+						// A final publication may race the preceding directory scan. The
+						// child has now flushed and retired, so validate the cache once more.
+						if (auto result = Cache->Find(Request.Key)) {
+							prepared = std::move(result);
+							break;
+						}
+						ReadProgress();
+						throw std::runtime_error("checkpoint worker for " + Request.Target + " ended with " + ExitStatus + " before recording the requested state");
 					}
 					ReadProgress();
 					if (std::chrono::steady_clock::now() - started > std::chrono::minutes(15)) {
@@ -190,6 +206,7 @@ namespace sgre::platform {
 		mutable std::mutex Mutex;
 		std::optional<save::CachedSceneCheckpoint> Prepared;
 		std::string Failure;
+		std::string ExitStatus;
 		std::string Progress;
 		std::streamoff LogOffset = 0;
 		pid_t Child = 0;

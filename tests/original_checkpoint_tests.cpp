@@ -173,14 +173,25 @@ static void TestRecorderOrdinaryCallsAndCancellation() {
 	const auto completed = vm.ResumeInContext(context, std::int32_t{37});
 	Require(completed.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(completed.Value) == 37 && producer_calls == 1 && recorder.Captures() == 1 && !captured.empty(), "ordinary yielding check result/capture was lost");
 	static_cast<void>(sgre::script::RestoreOriginalCheckpoint(vm, captured, Location(), "resource-identity"));
+	bool rejected_late_entry = false;
+	try {
+		recorder.SetEntryPredecessor("wrong-late-entry");
+	} catch (const std::runtime_error&) {
+		rejected_late_entry = true;
+	}
+	Require(rejected_late_entry, "launch-only predecessor accepted a later branch mutation");
+	recorder.SetRestoredPredecessor("restored-branch-digest");
+	static_cast<void>(vm.InvokeInContext(context, method, std::array<SquirrelValue, 1>{player}));
+	static_cast<void>(vm.ResumeInContext(context, std::int32_t{37}));
+	Require(recorder.Captures() == 2 && std::string_view(reinterpret_cast<const char*>(captured.data()), captured.size()).find("restored-branch-digest") != std::string_view::npos, "restored branch failed to preserve the new checkpoint predecessor");
 	fail_producer = true;
 	static_cast<void>(vm.InvokeInContext(context, method, std::array<SquirrelValue, 1>{player}));
 	const auto failed_capture = vm.ResumeInContext(context, std::int32_t{37});
-	Require(failed_capture.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(failed_capture.Value) == 37 && producer_calls == 2 && recorder.Captures() == 1 && recorder.Error().find("fixture optional capture failure") != std::string_view::npos, "optional capture failure leaked into gameplay or disappeared");
+	Require(failed_capture.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(failed_capture.Value) == 37 && producer_calls == 3 && recorder.Captures() == 2 && recorder.Error().find("fixture optional capture failure") != std::string_view::npos, "optional capture failure leaked into gameplay or disappeared");
 	recorder.Cancel();
 	static_cast<void>(vm.InvokeInContext(context, method, std::array<SquirrelValue, 1>{player}));
 	const auto cancelled = vm.ResumeInContext(context, std::int32_t{37});
-	Require(cancelled.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(cancelled.Value) == 37 && original_calls == 3 && producer_calls == 2 && recorder.Captures() == 1, "cancelled recorder changed ordinary gameplay calls");
+	Require(cancelled.State == sgre::script::SquirrelRunState::Completed && std::get<std::int32_t>(cancelled.Value) == 37 && original_calls == 4 && producer_calls == 3 && recorder.Captures() == 2, "cancelled recorder changed ordinary gameplay calls");
 	vm.ReleaseContext(context);
 }
 

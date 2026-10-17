@@ -10,8 +10,12 @@ namespace sgre::platform {
 	struct MacPhysicalKeyReader {
 		// Synchronous non-owning OS boundary; Context encloses this one sample only.
 		void* Context = nullptr;
+		// Established only by a flags-changed event for the Fn physical key itself.
+		bool FunctionHeld = false;
 		bool (*Read)(void*, std::uint16_t) = nullptr;
 	};
+
+	void UpdateMacFunctionModifier(bool& held, std::uint16_t code, bool flags_changed, bool function_flag) noexcept;
 
 	// Available must already come from the actual owned-window focus check. This helper never changes focus.
 	// macOS F1-F12 require the physical Fn key, independently of AppKit's function-key character flag.

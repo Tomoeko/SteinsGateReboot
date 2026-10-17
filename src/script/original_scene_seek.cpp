@@ -1,6 +1,7 @@
 #include "sgre/script/original_scene_seek.hpp"
 
 #include <array>
+#include <limits>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -297,6 +298,123 @@ namespace sgre::script {
 			}
 		}
 
+		void ObserveNumpad(const SquirrelValue& function) {
+			if (!Holding()) {
+				return;
+			}
+			NumpadFunction = Vm.BorrowObjectIdentity(function);
+			NumpadLayer.reset();
+			NumpadNumbers.reset();
+			NumpadPolls = 0;
+			AwaitingNumpadLayer = true;
+		}
+
+		[[nodiscard]] std::optional<bool> MailInput(const SquirrelValue& player) {
+			if (!Holding() || !Target.Navigation || !PlayerContext || Vm.CurrentContext() != *PlayerContext) {
+				return {};
+			}
+			const bool down = Vm.NativeCallerMatches("rsc_project/script/phone.nut", "waitMailView", 68);
+			const bool accept = Vm.NativeCallerMatches("rsc_project/script/phone.nut", "waitMailView", 94);
+			if (!down && !accept) {
+				return {};
+			}
+			const auto phone = Vm.GetSlot(Vm.GetSlot(player, std::string("autoPhoneInfo")), std::string("func"));
+			if (Vm.Type(phone) != SquirrelValueType::Instance) {
+				throw std::runtime_error("original mail seek input requires its actual phone function receiver");
+			}
+			const auto scroll = CallSeekMethod(Vm, Vm.ReadSlot(phone, std::string("getVariable")), std::array<SquirrelValue, 2>{phone, Vm.CreateString("isScrollDownEnabled")});
+			if (!std::holds_alternative<bool>(scroll) && !std::holds_alternative<std::int32_t>(scroll) && !std::holds_alternative<float>(scroll)) {
+				throw std::runtime_error("original mail seek requires its actual scroll-readiness value");
+			}
+			const bool can_scroll = std::holds_alternative<bool>(scroll) ? std::get<bool>(scroll) : std::holds_alternative<std::int32_t>(scroll) ? std::get<std::int32_t>(scroll) != 0
+			                                                                                                                                     : std::get<float>(scroll) != 0;
+			const bool pressed = down ? can_scroll : !can_scroll;
+			if (pressed) {
+				if (State.PhoneActions >= Limits.MaximumSnapshots) {
+					Block("original mail navigation exceeded the bounded seek work limit");
+					return {};
+				}
+				++State.PhoneActions;
+			}
+
+			return pressed;
+		}
+
+		void ObserveNumpadLayer(const SquirrelValue& layer, const SquirrelValue& delegate) {
+			if (!Holding() || !AwaitingNumpadLayer) {
+				return;
+			}
+			if (!Player || Vm.Type(delegate) != SquirrelValueType::Instance || Vm.BorrowObjectIdentity(delegate) != *Player) {
+				Block("original numpad layer has an unexpected player delegate; route input required");
+				return;
+			}
+			NumpadLayer = Vm.BorrowObjectIdentity(layer);
+			AwaitingNumpadLayer = false;
+		}
+
+		void AdvanceNumpad(const SquirrelValue& layer, const SquirrelValue& panel) {
+			if (!Holding() || !NumpadLayer || Vm.BorrowObjectIdentity(layer) != *NumpadLayer || !NumpadFunction || !Player || !Target.Navigation) {
+				return;
+			}
+			const auto function = Vm.ResolveObjectIdentity(*NumpadFunction);
+			const auto player = Vm.ResolveObjectIdentity(*Player);
+			if (!function || !player) {
+				Block("original numpad owner retired before completing its route input");
+				return;
+			}
+			if (!NumpadNumbers) {
+				const auto scene = StringText(Vm.GetSlot(*player, std::string("curSceneName")));
+				const auto split = scene.find('*');
+				if (split == std::string::npos) {
+					throw std::runtime_error("original numpad requires its complete current storage/label identity");
+				}
+				NumpadNumbers = Target.Navigation->PhoneNumbers(scene.substr(0, split), scene.substr(split), Target.Storage, Target.Label);
+				if (!NumpadNumbers || NumpadNumbers->size() != static_cast<std::size_t>(SeekInteger(Vm, *function, "digits"))) {
+					Block("original numpad has no unique resource-defined input toward the requested scene; select a recorded route state");
+					return;
+				}
+			}
+			const auto numbers = StringText(Vm.GetSlot(*function, std::string("numbers")));
+			if (!NumpadNumbers->starts_with(numbers)) {
+				Block("original numpad input differs from the requested route; automatic seek released");
+				return;
+			}
+			if (numbers.size() == NumpadNumbers->size()) {
+				NumpadLayer.reset();
+				NumpadFunction.reset();
+				return;
+			}
+			if (++NumpadPolls > Limits.MaximumConfirmationPolls) {
+				Block("original numpad button readiness exceeded its bounded wait");
+				return;
+			}
+			const auto characters = StringText(Vm.GetSlot(*function, std::string("padchars")));
+			const auto digit = characters.find((*NumpadNumbers)[numbers.size()]);
+			if (digit == std::string::npos || digit > static_cast<std::size_t>(std::numeric_limits<std::int32_t>::max())) {
+				throw std::runtime_error("original numpad has no button for its resource-defined input");
+			}
+			const auto name = CallSeekMethod(Vm, Vm.GetSlot(*function, std::string("getKeyName")), std::array<SquirrelValue, 2>{*function, static_cast<std::int32_t>(digit)});
+			const auto focus = Vm.GetSlot(panel, std::string("_mainFocus"));
+			if (Vm.Type(focus) != SquirrelValueType::Instance) {
+				return;
+			}
+			const auto parts = Vm.GetSlot(focus, std::string("_motionPartsMap"));
+			if (!Vm.HasSlot(parts, name)) {
+				return;
+			}
+			const auto button = Vm.GetSlot(parts, name);
+			const auto ready = CallSeekMethod(Vm, Vm.GetSlot(button, std::string("getPressEnable")), std::array<SquirrelValue, 1>{button});
+			if (!std::holds_alternative<bool>(ready)) {
+				throw std::runtime_error("original numpad button readiness is not boolean");
+			}
+			if (std::get<bool>(ready)) {
+				// Stay inside workSync's original panel callback. A post-Update press can
+				// invalidate the motion ancestry already prepared for the pending Draw.
+				static_cast<void>(CallSeekMethod(Vm, Vm.GetSlot(focus, std::string("_work")), std::array<SquirrelValue, 2>{focus, name}));
+				++State.PhoneActions;
+			}
+		}
+
 		void Block(std::string reason) {
 			Releasing = false;
 			State.Phase = OriginalSceneSeekPhase::Blocked;
@@ -321,6 +439,13 @@ namespace sgre::script {
 		std::string MovieScene;
 		std::size_t ConfirmationPolls = 0;
 		std::optional<SquirrelObjectIdentity> MovieDialog;
+		bool NumpadLayerInstalled = false;
+		bool NumpadFunctionInstalled = false;
+		bool AwaitingNumpadLayer = false;
+		std::optional<SquirrelObjectIdentity> NumpadLayer;
+		std::optional<SquirrelObjectIdentity> NumpadFunction;
+		std::optional<std::string> NumpadNumbers;
+		std::size_t NumpadPolls = 0;
 	};
 
 	OriginalSceneSeek::OriginalSceneSeek(SquirrelVm& vm, OriginalSceneSeekTarget target, OriginalSceneSeekLimits limits)
@@ -340,6 +465,63 @@ namespace sgre::script {
 			return;
 		}
 		const auto root = state.Vm.RootTable();
+		if (state.Target.Navigation && !state.NumpadLayerInstalled && state.Vm.HasSlot(root, std::string("MotionPanelLayer"))) {
+			const auto layer = state.Vm.GetSlot(root, std::string("MotionPanelLayer"));
+			const auto original_delegate = state.Vm.GetSlot(layer, std::string("setDelegate"));
+			const std::weak_ptr<Implementation> weak = m_Implementation;
+			const auto delegate_hook = state.Vm.CreateNativeClosureWithCaptures("seek.MotionPanelLayer.setDelegate", [weak](SquirrelVm& vm, std::span<const SquirrelValue> arguments) {
+				if (arguments.size() != 3) {
+					throw std::runtime_error("original seek numpad delegate requires its layer and player");
+				}
+				const auto receiver = arguments[0];
+				const auto delegate = arguments[1];
+				const auto result = CallSeekMethod(vm, vm.NativeStackValue(-1), std::array<SquirrelValue, 2>{receiver, delegate});
+				if (const auto owner = weak.lock()) {
+					owner->ObserveNumpadLayer(receiver, delegate);
+				}
+
+				return SquirrelNativeResult::ReturnValue(result);
+			},
+			    std::array<SquirrelValue, 1>{original_delegate});
+			state.Vm.NewSlot(layer, std::string("setDelegate"), delegate_hook);
+			const auto original_update = state.Vm.GetSlot(layer, std::string("onMotionUpdate"));
+			const auto update_hook = state.Vm.CreateNativeClosureWithCaptures("seek.MotionPanelLayer.onMotionUpdate", [weak](SquirrelVm& vm, std::span<const SquirrelValue> arguments) {
+				if (arguments.size() != 3) {
+					throw std::runtime_error("original seek numpad update requires its layer and panel");
+				}
+				const auto receiver = arguments[0];
+				const auto panel = arguments[1];
+				const auto result = CallSeekMethod(vm, vm.NativeStackValue(-1), std::array<SquirrelValue, 2>{receiver, panel});
+				if (const auto owner = weak.lock()) {
+					owner->AdvanceNumpad(receiver, panel);
+				}
+
+				return SquirrelNativeResult::ReturnValue(result);
+			},
+			    std::array<SquirrelValue, 1>{original_update});
+			state.Vm.NewSlot(layer, std::string("onMotionUpdate"), update_hook);
+			state.NumpadLayerInstalled = true;
+		}
+		if (state.Target.Navigation && !state.NumpadFunctionInstalled && state.Vm.HasSlot(root, std::string("PhoneNumpadFunction"))) {
+			const auto function = state.Vm.GetSlot(root, std::string("PhoneNumpadFunction"));
+			const auto original = state.Vm.GetSlot(function, std::string("getNumpadMotionInfo"));
+			const std::weak_ptr<Implementation> weak = m_Implementation;
+			const auto hook = state.Vm.CreateNativeClosureWithCaptures("seek.PhoneNumpadFunction.getNumpadMotionInfo", [weak](SquirrelVm& vm, std::span<const SquirrelValue> arguments) {
+				if (arguments.size() != 2) {
+					throw std::runtime_error("original seek numpad metadata requires its actual function receiver");
+				}
+				const auto receiver = arguments[0];
+				const auto result = CallSeekMethod(vm, vm.NativeStackValue(-1), std::array<SquirrelValue, 1>{receiver});
+				if (const auto owner = weak.lock()) {
+					owner->ObserveNumpad(receiver);
+				}
+
+				return SquirrelNativeResult::ReturnValue(result);
+			},
+			    std::array<SquirrelValue, 1>{original});
+			state.Vm.NewSlot(function, std::string("getNumpadMotionInfo"), hook);
+			state.NumpadFunctionInstalled = true;
+		}
 		if (!state.MovieInstalled && state.Vm.HasSlot(root, std::string("MovieSkipConfirmDialog"))) {
 			const auto movie = state.Vm.GetSlot(root, std::string("MovieSkipConfirmDialog"));
 			const auto original = state.Vm.GetSlot(movie, std::string("onMotionUpdate"));
@@ -389,7 +571,8 @@ namespace sgre::script {
 					owner->RequireAction();
 					const auto current = CallSeekMethod(vm, vm.NativeStackValue(-2), arguments.first(1));
 					const std::array<SquirrelValue, 2> start_arguments{arguments.front(), current};
-					const auto start = CallSeekMethod(vm, vm.GetSlot(arguments.front(), std::string("getStartScene")), start_arguments);
+					const auto& initial = owner->Target.InitialState;
+					const auto start = initial ? RestoreOriginalCheckpoint(vm, initial->Checkpoint, initial->CheckpointLocation, initial->CheckpointIdentity) : CallSeekMethod(vm, vm.GetSlot(arguments.front(), std::string("getStartScene")), start_arguments);
 					if (vm.Type(start) != SquirrelValueType::Table) {
 						throw std::runtime_error("original stateful entry requires the actual derived new-game scene table");
 					}
@@ -479,6 +662,11 @@ namespace sgre::script {
 				}
 				const auto* name = TryStringText(arguments[1]);
 				const auto owner = weak.lock();
+				if (owner && owner->Holding() && owner->Player && *owner->Player == vm.BorrowObjectIdentity(arguments.front())) {
+					if (const auto pressed = owner->MailInput(arguments.front())) {
+						return SquirrelNativeResult::ReturnValue(*pressed);
+					}
+				}
 				if (owner && owner->Holding() && owner->Player && *owner->Player == vm.BorrowObjectIdentity(arguments.front()) && name) {
 					if (*name == "force_skip_all") {
 						return SquirrelNativeResult::ReturnValue(true);

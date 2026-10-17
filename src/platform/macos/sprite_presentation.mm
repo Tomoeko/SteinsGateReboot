@@ -2,6 +2,7 @@
 
 #include "sgre/render/presentation_synchronization.hpp"
 
+#include "debug_inspector_bridge.hpp"
 #include "metal_support.hpp"
 #include "presentation_system_boundary.hpp"
 #include "sprite_application_pump_bridge.hpp"
@@ -149,6 +150,9 @@ namespace sgre::render {
 		NSMenu* PreviousWindowsMenu = nil;
 		NSMenu* WindowsMenu = nil;
 		NSMenu* MainMenu = nil;
+		NSView* LoadingOverlay = nil;
+		NSTextField* LoadingText = nil;
+		NSProgressIndicator* LoadingSpinner = nil;
 		bool Interactive = false;
 		std::uint32_t MaximumDrawableDimension = 0;
 		mutable SpritePresentationGeometry LastGeometry;
@@ -543,6 +547,63 @@ namespace sgre::render {
 	}
 
 	SpritePassPresentation::~SpritePassPresentation() = default;
+
+	NSView* SpritePassDebugInspectorBridge::ParentView(SpritePassPresentation& presentation) {
+		RequirePresentationMainThread();
+		if (!presentation.m_Implementation->Description.VisibleWindow) {
+			throw std::runtime_error("debug inspector requires the actual interactive presentation");
+		}
+
+		return presentation.m_Implementation->Window.View;
+	}
+
+	void SpritePassPresentation::SetLoadingMessage(std::string_view message) {
+		RequirePresentationMainThread();
+		auto& state = *m_Implementation;
+		if (message.size() > 4096 || message.find('\0') != std::string_view::npos) {
+			throw std::runtime_error("presentation loading message exceeds its UTF-8 text boundary");
+		}
+		if (!state.Description.VisibleWindow) {
+			return;
+		}
+		state.Boundary.Invoke(PresentationSystemOperation::Policy, [&] {
+			auto& window = state.Window;
+			if (message.empty()) {
+				[window.LoadingSpinner stopAnimation:nil];
+				[window.LoadingOverlay removeFromSuperview];
+				window.LoadingOverlay = nil;
+				window.LoadingText = nil;
+				window.LoadingSpinner = nil;
+				return;
+			}
+			NSString* text = [[NSString alloc] initWithBytes:message.data() length:message.size() encoding:NSUTF8StringEncoding];
+			if (text == nil) {
+				throw std::runtime_error("presentation loading message is not UTF-8");
+			}
+			if (window.LoadingOverlay == nil) {
+				window.LoadingOverlay = [[NSView alloc] initWithFrame:window.View.bounds];
+				window.LoadingOverlay.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+				window.LoadingOverlay.wantsLayer = YES;
+				window.LoadingOverlay.layer.backgroundColor = [NSColor colorWithCalibratedWhite:0.06 alpha:1.0].CGColor;
+				window.LoadingText = [NSTextField labelWithString:text];
+				window.LoadingText.textColor = NSColor.whiteColor;
+				window.LoadingText.font = [NSFont systemFontOfSize:16];
+				window.LoadingText.alignment = NSTextAlignmentCenter;
+				window.LoadingText.maximumNumberOfLines = 3;
+				window.LoadingText.translatesAutoresizingMaskIntoConstraints = NO;
+				window.LoadingSpinner = [[NSProgressIndicator alloc] initWithFrame:NSZeroRect];
+				window.LoadingSpinner.style = NSProgressIndicatorStyleSpinning;
+				window.LoadingSpinner.indeterminate = YES;
+				window.LoadingSpinner.translatesAutoresizingMaskIntoConstraints = NO;
+				[window.LoadingOverlay addSubview:window.LoadingText];
+				[window.LoadingOverlay addSubview:window.LoadingSpinner];
+				[NSLayoutConstraint activateConstraints:@[ [window.LoadingText.centerXAnchor constraintEqualToAnchor:window.LoadingOverlay.centerXAnchor], [window.LoadingText.centerYAnchor constraintEqualToAnchor:window.LoadingOverlay.centerYAnchor], [window.LoadingText.widthAnchor constraintLessThanOrEqualToAnchor:window.LoadingOverlay.widthAnchor constant:-48], [window.LoadingSpinner.centerXAnchor constraintEqualToAnchor:window.LoadingOverlay.centerXAnchor], [window.LoadingSpinner.bottomAnchor constraintEqualToAnchor:window.LoadingText.topAnchor constant:-16], [window.LoadingSpinner.widthAnchor constraintEqualToConstant:24], [window.LoadingSpinner.heightAnchor constraintEqualToConstant:24] ]];
+				[window.View addSubview:window.LoadingOverlay];
+				[window.LoadingSpinner startAnimation:nil];
+			}
+			window.LoadingText.stringValue = text;
+		});
+	}
 
 	void SpritePassPresentation::ShowWindow() {
 		RequirePresentationMainThread();

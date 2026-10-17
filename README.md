@@ -38,7 +38,7 @@ Use `--skip-startup` to enter gameplay directly, `--normal-start` for ordinary s
 
 Jumps restore the most recently recorded complete state, including the phone and route flags. Missing checkpoints are reconstructed in the background without showing startup movies. Checkpoints stay in ignored `Files/checkpoints/`.
 
-Windowed mode is the default, centered and resizable with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default.
+Windowed mode is the default, centered and resizable with aspect ratio preserved. Configure `fullscreen`, `window_centered`, `window_width` and `window_height` in `Files/config.json`. Voice, music, effects and movie audio are enabled by default. Press **Esc** for the translucent volume menu; press it again to close. Changed volumes are remembered in `Files/config.json`.
 
 Use `--res 720|1080|1440|2160|4k` (`--resolution` also works) for rendering and matching window dimensions. `--windowed [SIZE]` selects windowed mode with an optional separate window size, for example `--windowed 720 --res 1440`. These overrides do not change `config.json`.
 
@@ -52,6 +52,8 @@ Files/build/recovery/sgre-inspect --gui
 ```
 
 The macOS inspector browses scenario text, translations and archive entries. Jumps restore the requested original scene snapshot.
+
+Press **Cmd+Shift+I** in the game to search and jump from a draggable, resizable inspector panel. Use its close button to return to the game.
 
 ## Checks
 

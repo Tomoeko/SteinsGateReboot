@@ -127,12 +127,35 @@ static void TestAuthoredMasteringAtFinalCallback() {
 	    "callback must silence invalid samples and report failure without throwing across the OS boundary");
 }
 
+static void TestUserMasterRamp() {
+	sgre::platform::PcmDeviceCallbackState state(CallbackDescription());
+	state.Enabled.store(true);
+	state.MasterVolumeStep = 0.25f;
+	state.MasterVolume.store(0);
+	std::array<float, 16> input;
+	input.fill(0.5f);
+	Require(state.Ring.Write(input) == sgre::audio::PcmOutputRingStatus::Ready, "master fixture could not fill the real ring");
+	std::array<float, 16> samples{};
+	auto output = Output(samples);
+	AudioUnitRenderActionFlags flags = 0;
+	Require(sgre::platform::RenderPcmDeviceOutput(&state, &flags, nullptr, 0, 8, &output) == noErr, "master mute callback failed");
+	Require(samples[0] == 0.375f && samples[2] == 0.25f && samples[4] == 0.125f && samples[6] == 0 && samples[15] == 0, "master did not ramp both game and movie mix smoothly to silence");
+	for (std::size_t index = 0; index < samples.size(); index += 2) {
+		Require(samples[index] == samples[index + 1], "master changed stereo balance");
+	}
+	state.MasterVolume.store(1);
+	Require(state.Ring.Write(input) == sgre::audio::PcmOutputRingStatus::Ready, "unmute fixture could not fill the real ring");
+	Require(sgre::platform::RenderPcmDeviceOutput(&state, &flags, nullptr, 0, 8, &output) == noErr && samples[0] == 0.125f && samples[6] == 0.5f && samples[15] == 0.5f, "master did not restore gain after mute");
+	Require(state.CopiedFrames.load() == 16 && state.SilentFrames.load() == 0, "user master changed source or delivery timing");
+}
+
 int main() {
 	try {
 		TestDefaultTargetRepeatedMaximumPulls();
 		TestActualCallbackPcmAndStarvation();
 		TestInvalidAndConcurrentCallback();
 		TestAuthoredMasteringAtFinalCallback();
+		TestUserMasterRamp();
 		std::cout << "production AudioUnit callback CPU contract passed; no AudioUnit/device was created or started\n";
 		return 0;
 	} catch (const std::exception& error) {

@@ -40,6 +40,8 @@ namespace sgre::script {
 		void InstallAvailableHook();
 		void Cancel() noexcept;
 		void SetEntryPredecessor(std::string digest);
+		// Called at the consuming restore boundary, before the next authentic capture.
+		void SetRestoredPredecessor(std::string digest);
 		[[nodiscard]] std::size_t Captures() const noexcept;
 		[[nodiscard]] std::string_view Error() const noexcept;
 

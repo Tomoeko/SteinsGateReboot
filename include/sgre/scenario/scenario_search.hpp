@@ -1,6 +1,7 @@
 #pragma once
 
 #include "sgre/resource/psb.hpp"
+#include "sgre/scenario/scenario_navigation.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -102,6 +103,7 @@ namespace sgre::scenario {
 		[[nodiscard]] std::span<const ScenarioArchiveEntry> Entries() const noexcept;
 		[[nodiscard]] ScenarioSearchResults Search(const ScenarioSearchRequest& request);
 		[[nodiscard]] ScenarioJumpPoint ValidateJump(std::string_view storage, std::int32_t target_line);
+		[[nodiscard]] ScenarioNavigation ReadNavigation();
 
 	private:
 		class Implementation;

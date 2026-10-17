@@ -32,10 +32,13 @@ static int FixtureChild(int argc, char** argv) {
 		std::cout << "originalStatefulSeek phase=4\n"
 		          << std::flush;
 	}
-	if (target == "ready.ks:1") {
+	if (target == "ready.ks:1" || target == "readyexit.ks:1") {
 		sgre::save::SceneCheckpointCache cache(argv[1], std::string(64, 'a'), sgre::platform::ContentSha256);
 		static_cast<void>(cache.Submit("fixture-key", {1, 2, 3}));
 		cache.Flush();
+		if (target == "readyexit.ks:1") {
+			return 0;
+		}
 	}
 	std::this_thread::sleep_for(std::chrono::seconds(20));
 
@@ -76,7 +79,7 @@ static void TestPreparation(const std::filesystem::path& executable, const std::
 			}
 			std::this_thread::sleep_for(std::chrono::milliseconds(10));
 		}
-		if (target == "ready.ks:1") {
+		if (target == "ready.ks:1" || target == "readyexit.ks:1") {
 			const auto result = preparation.Result();
 			Require(result && result->Bytes == std::vector<std::uint8_t>{1, 2, 3} && preparation.Error().empty(), "background preparation failed to publish the complete checkpoint");
 			Require(kill(ReadChild(request.JobRoot), 0) != 0, "checkpoint was published while its worker remained alive");
@@ -95,7 +98,7 @@ int main(int argc, char** argv) {
 		}
 		const auto root = std::filesystem::current_path() / ("checkpoint-preparation-fixture-" + std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
 		Require(std::filesystem::create_directory(root), "fixture namespace already exists");
-		for (const auto* target : {"ready.ks:1", "exit.ks:1", "choice.ks:1", "cancel.ks:1"}) {
+		for (const auto* target : {"ready.ks:1", "readyexit.ks:1", "exit.ks:1", "choice.ks:1", "cancel.ks:1"}) {
 			TestPreparation(std::filesystem::canonical(argv[0]), root, target);
 		}
 		std::filesystem::remove_all(root);

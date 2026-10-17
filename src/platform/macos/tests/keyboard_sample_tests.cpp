@@ -33,6 +33,7 @@ static void RequireError(Operation operation, std::string_view expected) {
 
 struct KeyState {
 	std::array<bool, 128> Down{};
+	bool PhysicalFn = false;
 	std::size_t Reads = 0;
 	std::size_t FailAt = 0;
 };
@@ -52,6 +53,7 @@ static bool ReadPreparedKey(void* context, std::uint16_t code) {
 static Reader BorrowReader(KeyState& state) {
 	Reader reader;
 	reader.Context = &state;
+	reader.FunctionHeld = state.PhysicalFn;
 	reader.Read = ReadPreparedKey;
 
 	return reader;
@@ -184,6 +186,7 @@ static void TestPreservedSnapshotAndUnsupportedDomains() {
 	sample.VirtualKeys[0x70] = 0x80;
 	sample.VirtualKeys[2] = 0x80;
 	state.Down[0x3f] = true;
+	state.PhysicalFn = true;
 	Mappings mappings;
 	sgre::platform::SampleMacPhysicalKeyboard(sample, mappings, false, BorrowReader(state));
 	Require(sample.Available && sample.BackPulse && sample.VirtualKeys[0x70] == 0x80 && sample.VirtualKeys[2] == 0x80, "focus/function/mouse snapshot was replaced");
@@ -217,6 +220,20 @@ static void TestPreservedSnapshotAndUnsupportedDomains() {
 	Require(state.Reads == 0 && !sample.Available && mappings.Convert(sample).LogicalButtons == 0, "unfocused helper sampled or published keyboard input");
 }
 
+static void TestModifierProvenance() {
+	bool held = false;
+	sgre::platform::UpdateMacFunctionModifier(held, 0x76, false, true);
+	Require(!held, "bare F4 function flag established physical Fn");
+	sgre::platform::UpdateMacFunctionModifier(held, 0x38, true, true);
+	Require(!held, "another modifier established physical Fn");
+	sgre::platform::UpdateMacFunctionModifier(held, 0x3f, true, true);
+	Require(held, "physical Fn press was lost");
+	sgre::platform::UpdateMacFunctionModifier(held, 0x76, false, false);
+	Require(held, "ordinary function key changed held Fn");
+	sgre::platform::UpdateMacFunctionModifier(held, 0x3f, true, false);
+	Require(!held, "physical Fn release was lost");
+}
+
 static void TestFunctionKeysRequirePhysicalFn() {
 	const std::array<std::uint16_t, 24> codes{0x7a, 0x78, 0x63, 0x76, 0x60, 0x61, 0x62, 0x64, 0x65, 0x6d, 0x67, 0x6f, 0x69, 0x6b, 0x71, 0x6a, 0x40, 0x4f, 0x50, 0x5a, 0xffff, 0xffff, 0xffff, 0xffff};
 	const std::array<std::uint8_t, 12> scans{0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x44, 0x57, 0x58};
@@ -224,6 +241,7 @@ static void TestFunctionKeysRequirePhysicalFn() {
 	for (std::size_t index = 0; index < scans.size(); ++index) {
 		KeyState state;
 		state.Down[codes[index]] = true;
+		state.Down[0x3f] = true; // A synthesized session Fn state must not authorize an F key.
 		state.Down[0x7b] = true;
 		Sample sample;
 		sample.Available = true;
@@ -235,11 +253,13 @@ static void TestFunctionKeysRequirePhysicalFn() {
 
 		state.Reads = 0;
 		state.Down[0x3f] = true;
+		state.PhysicalFn = true;
 		sgre::platform::SampleMacFunctionKeyboard(sample, codes, BorrowReader(state));
 		sgre::platform::SampleMacPhysicalKeyboard(sample, mappings, false, BorrowReader(state));
 		Require(sample.VirtualKeys[0x70 + index] == 0x80 && sample.ScanKeys[scans[index]] == 0x80, "physical Fn plus each F1-F12 must reach both original input paths");
 		state.Reads = 0;
 		state.Down[0x3f] = false;
+		state.PhysicalFn = false;
 		sgre::platform::SampleMacFunctionKeyboard(sample, codes, BorrowReader(state));
 		sgre::platform::SampleMacPhysicalKeyboard(sample, mappings, false, BorrowReader(state));
 		Require(sample.VirtualKeys[0x70 + index] == 0 && sample.ScanKeys[scans[index]] == 0, "releasing Fn while an F key remains held must release its game state");
@@ -253,6 +273,7 @@ static void TestFunctionKeysRequirePhysicalFn() {
 	Require(sample.VirtualKeys[0x7c] == 0x80, "the requested Fn policy covers F1-F12 without changing F13-F24");
 	state = {};
 	state.Down[0x3f] = true;
+	state.PhysicalFn = true;
 	state.FailAt = 4;
 	const auto before = sample;
 	RequireError([&] {
@@ -299,6 +320,7 @@ int main() {
 		TestAllScriptBindingsFocused();
 		TestInsertDeleteKeypadAndControls();
 		TestPreservedSnapshotAndUnsupportedDomains();
+		TestModifierProvenance();
 		TestFunctionKeysRequirePhysicalFn();
 		TestReaderFailureAndSynchronousBorrow();
 		std::cout << "29 supplied-script bindings, independent focused vectors, controls, unsupported domains and synchronous reader ownership passed\n";

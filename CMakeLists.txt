@@ -24,6 +24,7 @@ add_library(sgre_resource
 	src/audio/sound_configuration_loads.cpp
 	src/audio/sound_resource_control.cpp
 	src/audio/sound_playback.cpp
+	src/audio/user_audio_settings.cpp
 	src/audio/buffered_sound_source_data.cpp
 	src/audio/buffered_sound_sources.cpp
 	src/audio/buffered_sound_cues.cpp
@@ -65,6 +66,8 @@ add_library(sgre_resource
 	src/input/mouse.cpp
 	src/io/file_reader.cpp
 	src/scenario/scenario_search.cpp
+	src/scenario/scenario_navigation.cpp
+	src/debug/inspector_panel.cpp
 	src/scenario/calendar_restore.cpp
 	src/io/file_read_serial.cpp
 	src/io/raw_read_destination.cpp
@@ -312,6 +315,7 @@ add_library(sgre_resource
 	src/save/scene_checkpoint_cache.cpp
 	src/script/original_calendar_restore.cpp
 	src/script/original_scene_seek.cpp
+	src/script/live_scene_jump.cpp
 	src/script/driver_phases.cpp
 	src/script/native_float.cpp
 	src/script/native_math.cpp
@@ -583,7 +587,8 @@ if(SGRE_BUILD_GAME)
 		message(FATAL_ERROR "sgre-game currently requires the macOS media and renderer boundaries")
 	endif()
 
-	add_executable(sgre-game src/platform/macos/original_script_startup.mm src/platform/macos/content_digest.mm src/platform/macos/checkpoint_preparation.mm)
+	add_executable(sgre-game src/platform/macos/original_script_startup.mm src/platform/macos/content_digest.mm src/platform/macos/checkpoint_preparation.mm src/platform/macos/debug_inspector.mm
+		src/platform/macos/volume_menu.mm src/platform/macos/scene_jump_preparation.cpp)
 	target_link_libraries(sgre-game PRIVATE sgre_resource sgre_platform_render sgre_platform_save sgre_platform_media)
 	target_compile_options(sgre-game PRIVATE -fobjc-arc -Wall -Wextra -Wpedantic -Wconversion -Wsign-conversion -Wshadow -Werror)
 	set_target_properties(sgre-game PROPERTIES CXX_EXTENSIONS OFF OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
@@ -634,7 +639,10 @@ if(SGRE_BUILD_TESTS)
 		original_checkpoint
 		original_calendar_restore
 		original_scene_seek
+		live_scene_jump
 		scenario_search
+		scenario_navigation
+		inspector_panel
 		resource_cache
 		resource_receiving_observation
 		squirrel_vm
@@ -1947,6 +1955,22 @@ if(SGRE_BUILD_TESTS)
 		set_target_properties(application_pump_tests PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
 		add_test(NAME macos_application_pump_prefix COMMAND application_pump_tests "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_pass.metal" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_presentation.metal")
 		set_tests_properties(macos_application_pump_prefix PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1" TIMEOUT 60 RUN_SERIAL TRUE)
+
+		add_executable(debug_inspector_tests tests/debug_inspector_tests.mm src/platform/macos/debug_inspector.mm)
+		target_include_directories(debug_inspector_tests PRIVATE include src/platform/macos)
+		target_link_libraries(debug_inspector_tests PRIVATE sgre_resource sgre_platform_render)
+		target_compile_options(debug_inspector_tests PRIVATE -fobjc-arc -Werror)
+		set_target_properties(debug_inspector_tests PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+		add_test(NAME macos_debug_inspector COMMAND debug_inspector_tests "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_pass.metal" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_presentation.metal")
+		set_tests_properties(macos_debug_inspector PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1" TIMEOUT 30 RUN_SERIAL TRUE)
+
+		add_executable(volume_menu_tests tests/volume_menu_tests.mm src/platform/macos/volume_menu.mm)
+		target_include_directories(volume_menu_tests PRIVATE include src/platform/macos)
+		target_link_libraries(volume_menu_tests PRIVATE sgre_resource sgre_platform_render)
+		target_compile_options(volume_menu_tests PRIVATE -fobjc-arc -Werror)
+		set_target_properties(volume_menu_tests PROPERTIES OBJCXX_STANDARD 20 OBJCXX_STANDARD_REQUIRED ON OBJCXX_EXTENSIONS OFF)
+		add_test(NAME macos_volume_menu COMMAND volume_menu_tests "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_pass.metal" "${CMAKE_CURRENT_SOURCE_DIR}/shaders/metal/sprite_presentation.metal")
+		set_tests_properties(macos_volume_menu PROPERTIES ENVIRONMENT "MTL_DEBUG_LAYER=1" TIMEOUT 30 RUN_SERIAL TRUE)
 
 		add_executable(keyboard_sample_tests src/platform/macos/tests/keyboard_sample_tests.cpp)
 		target_include_directories(keyboard_sample_tests PRIVATE src/platform/macos)

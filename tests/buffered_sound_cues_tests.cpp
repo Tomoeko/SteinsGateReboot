@@ -512,6 +512,36 @@ static void TestUniquenessAndOrderedArchiveLookup(const std::filesystem::path& d
 	Require(!runtime.Cache.Contains(secondary_handle), "second archive must retire after its last actual queued source/cue borrower");
 }
 
+static void TestUserListeningControls(const std::filesystem::path& directory) {
+	const std::array<CueVector, 1> vectors{CueVector{}};
+	ActualCueRuntime runtime(directory, vectors);
+	sgre::audio::UserAudioSettings settings;
+	settings.Music = 20;
+	settings.Voice = 90;
+	settings.Effects = 60;
+	runtime.Cues.SetUserAudioSettings(settings);
+	sgre::audio::BufferedSoundCueRequest request;
+	request.ArchiveName = "common";
+	request.CueName = "cue";
+	request.Group = "bgm";
+	sgre::audio::SoundMixParameters parameters;
+	parameters.UseSourcePan = true;
+	const auto prepared = runtime.Cues.Prepare(request, parameters, 2);
+	Require(prepared.Cue.has_value(), "listening fixture could not prepare its real cue");
+	const auto id = *prepared.Cue;
+	const auto baseline = runtime.Cues.InspectChannel(id, 0).Mix->Matrix[0] / 0.2f;
+	Require(baseline > 0 && runtime.Cues.GroupVolume("bgm") == 1 && runtime.Cues.VoiceVolume(id) == 1, "user music level overwrote original script gains");
+	runtime.Cues.SetGroupVolume("bgm", 0.5f);
+	settings.Music = 0;
+	runtime.Cues.SetUserAudioSettings(settings);
+	Require(runtime.Cues.InspectChannel(id, 0).Mix->Matrix[0] == 0, "user mute failed on a running source");
+	Require(runtime.Cues.SetVoiceVolume(id, 0.5f), "original voice gain update failed");
+	settings.Music = 100;
+	runtime.Cues.SetUserAudioSettings(settings);
+	Require(runtime.Cues.InspectChannel(id, 0).Mix->Matrix[0] == baseline * 0.25f && runtime.Cues.GroupVolume("bgm") == 0.5f && runtime.Cues.VoiceVolume(id) == 0.5f, "unmuting lost original script fade factors");
+	Require(sgre::audio::UserAudioGroupGain(settings, "voice") == 0.9f && sgre::audio::UserAudioGroupGain(settings, "se") == 0.6f, "voice and sound-effect controls were crossed");
+}
+
 static void TestExplicitMixAndReadinessBoundaries(const std::filesystem::path& directory) {
 	CueVector pitched;
 	pitched.Name = "other";
@@ -568,7 +598,8 @@ int main(int argc, char** argv) {
 		TestRejectedAllocationRetainsEarlierEvictions(directory);
 		TestUniquenessAndOrderedArchiveLookup(directory);
 		TestExplicitMixAndReadinessBoundaries(directory);
-		std::cout << "buffered sound cues: 6 actual resource/source fixture groups passed\n";
+		TestUserListeningControls(directory);
+		std::cout << "buffered sound cues: 7 actual resource/source fixture groups passed\n";
 
 		return 0;
 	} catch (const std::exception& error) {

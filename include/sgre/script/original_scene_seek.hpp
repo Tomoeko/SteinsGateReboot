@@ -1,10 +1,13 @@
 #pragma once
 
+#include "sgre/scenario/scenario_navigation.hpp"
+#include "sgre/script/debug_scene_entry.hpp"
 #include "sgre/script/squirrel_vm.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace sgre::script {
@@ -14,6 +17,9 @@ namespace sgre::script {
 		std::int32_t RequestedLine = 0;
 		std::int32_t SnapshotLine = 0;
 		std::int32_t Point = 0;
+		std::string Label{};
+		std::shared_ptr<const scenario::ScenarioNavigation> Navigation{};
+		std::optional<ScriptDebugSceneEntry> InitialState{};
 	};
 
 	enum class OriginalSceneSeekPhase {
@@ -38,6 +44,7 @@ namespace sgre::script {
 		std::size_t Snapshots = 0;
 		std::size_t MovieRequests = 0;
 		std::size_t MovieConfirmations = 0;
+		std::size_t PhoneActions = 0;
 	};
 
 	struct OriginalSceneSeekLimits {
@@ -59,7 +66,8 @@ namespace sgre::script {
 		// Call after original module publication, before MyApplication/MyPlayer derive or lock.
 		void InstallAvailableHooks();
 		// Call at the idle script Update boundary. Reports yielded original choice/phone frames;
-		// it never chooses a branch, resumes a VM context, or dispatches a subset of scenario tags.
+		// Resource-derived phone input uses the original panel callback and buttons.
+		// Other choices release the seek; this never dispatches a subset of scenario tags.
 		void Poll();
 		// Release the owned action immediately; original checkSkipStop consumes release normally.
 		// No VM call is made, including during shutdown. Arrival invokes the original release method.

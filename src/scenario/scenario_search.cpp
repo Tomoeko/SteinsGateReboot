@@ -263,7 +263,8 @@ namespace sgre::scenario {
 		const auto language = std::find(metadata.Languages.begin(), metadata.Languages.end(), request.Language);
 		Require(language != metadata.Languages.end(), "scenario language is not declared by this resource: " + request.Language);
 		const auto language_index = static_cast<std::size_t>(language - metadata.Languages.begin());
-		for (const auto& scene : metadata.Scenes) {
+		for (std::size_t scene_index = 0; scene_index < metadata.Scenes.size(); ++scene_index) {
+			const auto& scene = metadata.Scenes[scene_index];
 			const auto* value = scene.Value->Find("texts");
 			const resource::PsbArray empty;
 			const auto& texts = value == nullptr ? empty : Array(value, "scenario scene texts is not an array");
@@ -307,9 +308,14 @@ namespace sgre::scenario {
 					result.Truncated = true;
 					return false;
 				}
-				const auto jump = JumpPoint(metadata, metadata.Storage, *current_line);
-				Require(jump.SceneLabel == scene.Label, "scenario text source line resolves outside its original selected scene");
-				const auto jump_line = std::to_string(*current_line);
+				// Boundary snapshots can share the next scene's firstLine; select through the containing scene's interval.
+				auto target_line = std::max(*current_line, scene.FirstLine);
+				if (scene_index + 1 < metadata.Scenes.size()) {
+					target_line = std::min(target_line, metadata.Scenes[scene_index + 1].FirstLine - 1);
+				}
+				const auto jump = JumpPoint(metadata, metadata.Storage, target_line);
+				Require(jump.SceneLabel == scene.Label, "scenario text containing scene has no selectable source-line interval");
+				const auto jump_line = std::to_string(target_line);
 				for (const auto field : std::array<std::string_view, 6>{metadata.Storage, scene.Label, character, original_text, translated_text, request.Language}) {
 					Consume(budget.ResultBytes, field.size(), budget.Limits.MaxResultBytes, "scenario search exceeded its owned result byte limit");
 				}
@@ -324,7 +330,7 @@ namespace sgre::scenario {
 				match.Translation = translated_text;
 				match.Language = request.Language;
 				match.TextId = text_index + 1;
-				match.JumpLine = *current_line;
+				match.JumpLine = target_line;
 				match.SnapshotLine = jump.SnapshotLine;
 				match.JumpTarget = match.Storage + ":" + jump_line;
 				result.Matches.push_back(std::move(match));
@@ -476,6 +482,21 @@ namespace sgre::scenario {
 		Require(Text(document.Root.Find("name"), 4096, "scenario entry lacks its actual storage identity") == key, "scenario index key differs from its parsed storage identity");
 
 		return ValidateScenarioJump(document, storage, target_line, state.Limits);
+	}
+
+	ScenarioNavigation ScenarioSearchCatalog::ReadNavigation() {
+		auto& state = *m_Implementation;
+		SearchBudget budget{state.Limits};
+		ScenarioNavigation result;
+		for (const auto& entry : state.Entries) {
+			try {
+				result.AddDocument(state.Read(entry.Name, budget));
+			} catch (const std::exception& error) {
+				throw std::runtime_error("scenario navigation entry " + entry.Name + ": " + error.what());
+			}
+		}
+
+		return result;
 	}
 
 } // namespace sgre::scenario

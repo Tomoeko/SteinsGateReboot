@@ -47,6 +47,7 @@ namespace sgre::platform {
 	public:
 		explicit Implementation(MacPcmOutputDescription description) : Description(ValidatePcmOutputDescription(description)), Callback(PcmDeviceRingDescription(Description), Description.DeliveryMode == MacPcmDeliveryMode::CallbackEvents, Description.DeliveryCapacity) {
 			try {
+				Callback.MasterVolumeStep = 100.0f / static_cast<float>(Description.SamplesPerSecond);
 				if (Description.OutputGain != 1) {
 					Callback.Leveler.emplace(Description.SamplesPerSecond, Description.Channels, Description.OutputGain);
 				}
@@ -308,6 +309,18 @@ namespace sgre::platform {
 		const auto buffered = owner.Callback.Ring.BufferedFrames();
 		return owner.InputFinished || buffered >= owner.Description.TargetBufferedFrames ? 0 : owner.Description.TargetBufferedFrames - buffered;
 	}
+	void MacPcmOutput::SetMasterVolume(float linear_volume) {
+		auto& owner = *m_Implementation;
+		owner.RequireOwner();
+		if (!std::isfinite(linear_volume) || linear_volume < 0 || linear_volume > 1) {
+			throw std::runtime_error("user master volume must be finite and within 0..1");
+		}
+		owner.Callback.MasterVolume.store(linear_volume, std::memory_order_relaxed);
+		if (!owner.Callback.Enabled.load(std::memory_order_acquire)) {
+			owner.Callback.CurrentMasterVolume = linear_volume;
+		}
+	}
+
 	audio::PcmOutputSubmission MacPcmOutput::Submit(std::span<const float> interleaved) {
 		auto& owner = *m_Implementation;
 		owner.RequireHealthy();

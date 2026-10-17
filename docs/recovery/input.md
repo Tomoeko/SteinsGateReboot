@@ -34,15 +34,8 @@ The macOS boundary owns window-scoped tracking and read-only focused CoreGraphic
 
 Controller axes/buttons, vibration, aligned touch/angle queries, focused keyboard-layout translation and native ANSI text input remain open. Native `getWMChar`/`getDownKey` have distinct event-pending and VSync-published state: `0x1400487b0` appends only the low byte of the native WM_CHAR operand, while `0x140048ef0` publishes and clears it. The original creates an ANSI window, so Cocoa UTF-8 is not assumed equivalent. Native close-triggered BackPulse is also distinct from a generic close request. Preserve the hidden, silent, nonactivating policy during platform observations.
 
-The user-requested macOS policy requires physical Fn for F1–F12. The platform
-samples SDK `kVK_Function` separately and gates both the function-key snapshot
-and InputHub scan/virtual projection. Releasing Fn releases those game keys
-even while an F key remains held. Mouse, navigation, F13–F24 and the portable
-native input algorithms retain their existing behavior. AppKit's
-[function modifier](https://developer.apple.com/documentation/appkit/nsevent/modifierflags-swift.struct/function?language=objc)
-also identifies navigation and F-key events; it is not used as physical Fn
-evidence. The existing focused
-[CoreGraphics key-state query](https://developer.apple.com/documentation/coregraphics/cgeventsource/keystate%28_%3Akey%3A%29?language=objc)
-supplies that separate state. Independent sanitizer fixtures exercise all
-twelve bare/modified keys, Fn release, unrelated keys, focus loss and atomic
-publication after reader failure without creating a window or reading hardware.
+The user-requested macOS policy requires physical Fn for F1–F12 in both function shortcuts and InputHub scan/virtual keys. The platform retains Fn only from a [flags-changed event](https://developer.apple.com/documentation/appkit/nsresponder/flagschanged(with:)) whose physical code is SDK `kVK_Function`. It reads that event's function bit for press/release and clears retained state on focus loss. Ordinary F-key characters, their function modifier, and combined-session `CGEventSourceKeyState(kVK_Function)` do not establish a physical Fn press: the latter reproduced the user's unwanted bare-F4 activation. Focused CoreGraphics sampling still supplies the other physical key positions. F13–F24, ordinary navigation and portable native input algorithms retain their existing behavior.
+
+Independent fixtures exercise all twelve bare/modified keys, a synthesized session Fn state without a physical Fn event, actual modifier transitions, Fn release while an F key stays held, unrelated keys, focus loss and atomic publication after reader failure. They create no window and read no hardware. Physical keyboard delivery remains an end-user acceptance check.
+
+The original F4 target is `override.openTips`, which calls `openMenuPanel` with `motion/tips.psb`, character `Tips`, motion `show`, and class `TipsFunc`. Supplied `tips` script SHA-256 `b027a6565be1dad5542531fca606e6c866be6d435476011ae4d28421697c6bfc` builds acquired/unread/read/new/all lists and publishes them through its `cbTipsOnStart`, `initClips`, `cbTipsOnStop`, `tipsTabFocusChange`, and `updateList` callbacks. Hidden/silent current-host captures retain those actual callback entries, switch tabs through original R1 inputs, render the All list and preserve locked `???` entries. Fresh saved progress has no unread acquisitions, so its original Unread tab is empty. No replacement list or synthesized unlock flags are used. Exact persistent system-progress reconstruction across cold jumps remains a separate recovery check.

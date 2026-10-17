@@ -50,6 +50,11 @@ int main() {
 			Require(selected_first && selected_first->Bytes == std::vector<std::uint8_t>{1, 2, 3} && selected_first->Variants == 2, "original route variant was overwritten");
 			Require(selected_second && selected_second->Bytes == std::vector<std::uint8_t>{4, 5, 6} && selected_second->Variants == 2, "second route variant was lost");
 			Require(cache.Find("different scene")->Digest == other, "cache mixed different scene addresses");
+			const auto preferred = cache.FindFirst(std::array<std::string, 4>{"missing scene", "first scene", "different scene", "first scene"});
+			Require(preferred && preferred->Candidate == 1 && preferred->Checkpoint.Variants == 2, "cache ignored caller predecessor priority or duplicate candidate order");
+			const auto opposite = cache.FindFirst(std::array<std::string, 2>{"different scene", "first scene"});
+			Require(opposite && opposite->Candidate == 0 && opposite->Checkpoint.Digest == other, "cache substituted newest unrelated state for the first available predecessor");
+			Require(!cache.FindFirst({}) && !cache.FindFirst(std::array<std::string, 1>{"absent"}), "empty or absent predecessor set fabricated a state");
 			Require(cache.Error().empty(), "background writer failed");
 		}
 		{

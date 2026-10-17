@@ -138,6 +138,25 @@ static void JsonTests(const Fixture& fixture) {
 	});
 }
 
+static void UserVolumeTests(const Fixture& fixture) {
+	auto settings = fixture.Configuration();
+	Require(sgre::app::SerializeLaunchConfiguration(settings).find("music_volume") == std::string::npos, "unmodified config published volume defaults before an audio edit");
+	settings.AudioSettingsStored = true;
+	const auto json = sgre::app::SerializeLaunchConfiguration(settings);
+	const auto parsed = sgre::app::ParseLaunchConfiguration(json);
+	Require(parsed.Audio.Music == 55 && parsed.Audio.Voice == 100 && parsed.Audio.Effects == 80 && parsed.Audio.Master == 100, "listening defaults lost the authored music/voice balance");
+	const auto legacy = Replace(Replace(Replace(Replace(json, ",\n  \"master_volume\": 100", ""), ",\n  \"music_volume\": 55", ""), ",\n  \"voice_volume\": 100", ""), ",\n  \"effects_volume\": 80", "");
+	Require(sgre::app::ParseLaunchConfiguration(legacy).Audio == parsed.Audio, "existing config required a rewrite to enable audio defaults");
+	settings.Audio.Master = 0;
+	settings.Audio.Music = 23;
+	settings.Audio.Voice = 89;
+	settings.Audio.Effects = 41;
+	Require(sgre::app::ParseLaunchConfiguration(sgre::app::SerializeLaunchConfiguration(settings)).Audio == settings.Audio, "changed volume settings did not round trip");
+	Reject([&] {
+		static_cast<void>(sgre::app::ParseLaunchConfiguration(Replace(json, "\"music_volume\": 55", "\"music_volume\": 101")));
+	});
+}
+
 static void StoreTests(const Fixture& fixture) {
 	sgre::app::LaunchConfigurationStore store(fixture.Root);
 	Require(store.ConfigurationPath() == fixture.Root / "Files/config.json", "store changed its ignored config location");
@@ -158,6 +177,7 @@ static void StoreTests(const Fixture& fixture) {
 	configuration.WindowHeight = 1000;
 	configuration.Fullscreen = true;
 	configuration.WindowCentered = false;
+	configuration.AudioSettingsStored = true;
 	store.Save(configuration);
 	const auto before = Read(store.ConfigurationPath());
 	const sgre::app::LaunchConfigurationStore restarted(fixture.Root);
@@ -171,6 +191,14 @@ static void StoreTests(const Fixture& fixture) {
 	static_cast<void>(restarted.LoadOrCreate());
 	store.Save(configuration);
 	Require(std::filesystem::last_write_time(store.ConfigurationPath()) == old_stamp && std::filesystem::last_write_time(managed) == old_stamp, "unchanged startup and shutdown preferences must not rewrite primary or last-good config");
+	const auto legacy = Replace(Replace(Replace(Replace(before, ",\n  \"master_volume\": 100", ""), ",\n  \"music_volume\": 55", ""), ",\n  \"voice_volume\": 100", ""), ",\n  \"effects_volume\": 80", "");
+	Write(store.ConfigurationPath(), legacy);
+	std::filesystem::last_write_time(store.ConfigurationPath(), old_stamp);
+	const auto legacy_reused = restarted.LoadOrCreate();
+	store.Save(legacy_reused.Configuration);
+	Require(Read(store.ConfigurationPath()) == legacy && std::filesystem::last_write_time(store.ConfigurationPath()) == old_stamp && std::filesystem::last_write_time(managed) == old_stamp, "optional audio defaults rewrote an existing config without a user edit");
+	Write(store.ConfigurationPath(), before);
+	std::filesystem::last_write_time(store.ConfigurationPath(), old_stamp);
 	std::filesystem::rename(managed, managed + ".held");
 	static_cast<void>(restarted.LoadOrCreate());
 	store.Save(configuration);
@@ -613,6 +641,7 @@ int main(int argument_count, char** arguments) {
 		Require(argument_count == 2 || argument_count == 3, "supply ignored fixture parent and optional original installation for real seed/automatic repair checks");
 		Fixture fixture(std::filesystem::canonical(arguments[1]));
 		JsonTests(fixture);
+		UserVolumeTests(fixture);
 		ResolutionPreferenceTests(fixture);
 		WindowSchemaAndMigrationTests(std::filesystem::canonical(arguments[1]));
 		LaunchArgumentTests(fixture);

@@ -34,6 +34,8 @@ namespace sgre::audio {
 		float ArchiveVolume = 1.0f;
 		float MasterVolume = 1.0f;
 		float MuteVolume = 1.0f;
+		// Separate authored listening factor; original script factors remain observable.
+		float UserVolume = 1.0f;
 		float VoicePitchOctaves = 0.0f;
 		float ResourcePitchOctaves = 0.0f;
 		SoundPan Pan;

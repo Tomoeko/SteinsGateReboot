@@ -7,6 +7,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 
 namespace sgre::render {
@@ -43,6 +44,9 @@ namespace sgre::platform {
 		// Each actual Input wrapper samples its own cursor from the last Hub button/wheel output.
 		[[nodiscard]] input::MouseSample ReadMouseFrame() const;
 		[[nodiscard]] std::size_t ObservedControllerCount() const;
+		// Tool capture is sampled after OS dispatch; release held input before returning it to gameplay.
+		void ConfigureToolInputCapture(std::function<bool()> captured);
+		[[nodiscard]] bool ToolInputCaptured() const;
 		void Close();
 
 	private:

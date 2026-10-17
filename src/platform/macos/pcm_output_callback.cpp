@@ -8,6 +8,7 @@
 
 namespace sgre::platform {
 	static_assert(std::atomic<std::uint32_t>::is_always_lock_free);
+	static_assert(std::atomic<float>::is_always_lock_free);
 	static_assert(std::atomic<PcmDeviceCallbackFailure>::is_always_lock_free);
 
 	static OSStatus FailPcmDeviceCallback(PcmDeviceCallbackState& state, PcmDeviceCallbackFailure failure) noexcept {
@@ -54,6 +55,13 @@ namespace sgre::platform {
 			*flags |= kAudioUnitRenderAction_OutputIsSilence;
 			state.Rendering.clear(std::memory_order_release);
 			return finish(FailPcmDeviceCallback(state, PcmDeviceCallbackFailure::InvalidSamples));
+		}
+		const auto master = state.MasterVolume.load(std::memory_order_relaxed);
+		for (std::size_t frame = 0; frame < frames; ++frame) {
+			state.CurrentMasterVolume += std::clamp(master - state.CurrentMasterVolume, -state.MasterVolumeStep, state.MasterVolumeStep);
+			for (std::size_t channel = 0; channel < description.Channels; ++channel) {
+				samples[frame * description.Channels + channel] *= state.CurrentMasterVolume;
+			}
 		}
 		OSStatus status = noErr;
 		const auto requested = state.RequestedFrames.load(std::memory_order_relaxed);
