@@ -3654,7 +3654,7 @@ namespace sgre::script {
 
 			if (!frame.Registers.Empty() && EqualValues(frame.Registers[0], value)) {
 				if (Type(Active().RootTable) != SquirrelValueType::Table) {
-					throw VmSafetyFailure("Squirrel root lookup requires a nonnull table");
+					throw VmSafetyFailure(std::string("Squirrel root lookup requires a nonnull table; source=") + std::string(LiteralText(Function(frame).SourceName)) + " function=" + std::string(LiteralText(Function(frame).Name)) + " nextPC=" + std::to_string(frame.Instruction) + "; " + MissingIndexError(key));
 				}
 
 				return FindRawSlot(Active().RootTable, key);
