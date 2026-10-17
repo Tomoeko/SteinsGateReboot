@@ -104,6 +104,12 @@ static void TestSystemExitRequest() {
 	},
 	    "actual containing application close owner");
 	RequireFinish(!events.State().ClosePending, "unconfigured System.exit must not mutate another owner");
+	const auto unconfigured_request = vm.GetSlot(vm.RootTable(), std::string("reqExitGame"));
+	RequireFinishError([&] {
+		static_cast<void>(vm.Invoke(unconfigured_request, arguments));
+	},
+	    "live serialized containing application close owner");
+	RequireFinish(!events.State().ClosePending, "unconfigured reqExitGame mutated another owner");
 	system.ConfigureApplicationClose(events);
 	RequireFinishError([&] {
 		system.ConfigureApplicationClose(events);
@@ -111,6 +117,14 @@ static void TestSystemExitRequest() {
 	    "one live containing event owner");
 	const auto result = vm.Invoke(exit, arguments);
 	RequireFinish(result.State == sgre::script::SquirrelRunState::Completed && std::holds_alternative<std::monostate>(result.Value) && events.State().ClosePending && events.State().CloseCode == 1 && !events.State().Quit, "System.exit must publish actual WM_CLOSE reason1 and no result, not terminate");
+	events.ClearClose();
+	const auto request = vm.GetSlot(vm.RootTable(), std::string("reqExitGame"));
+	const auto requested = vm.Invoke(request, arguments);
+	RequireFinish(requested.State == sgre::script::SquirrelRunState::Completed && std::holds_alternative<std::monostate>(requested.Value) && events.State().ClosePending && events.State().CloseCode == 2 && !events.State().Quit, "reqExitGame did not publish original menu close reason2 through the configured owner");
+	events.ClearClose();
+	events.RequestClose(0);
+	static_cast<void>(vm.Invoke(request, arguments));
+	RequireFinish(events.State().CloseCode == 0, "reqExitGame overwrote the original sticky zero reason");
 	const auto terminate = vm.GetSlot(system.SystemClass(), std::string("terminate"));
 	RequireFinishError([&] {
 		static_cast<void>(vm.Invoke(terminate, arguments));

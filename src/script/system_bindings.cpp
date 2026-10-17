@@ -158,6 +158,16 @@ namespace sgre::script {
 		},
 		    disk_captures);
 		vm.NewSlot(vm.RootTable(), std::string("isExistFile"), disk_exists);
+		vm.NewSlot(vm.RootTable(), std::string("reqExitGame"), vm.CreateNativeClosure("reqExitGame", [weak](SquirrelVm& active, std::span<const SquirrelValue>) {
+			const auto owner = weak.lock();
+			if (!owner || &owner->Vm != &active || std::this_thread::get_id() != owner->OwnerThread || active.IsClosed() || owner->ApplicationEvents == nullptr) {
+				throw std::runtime_error("reqExitGame requires its live serialized containing application close owner");
+			}
+			// Bootstrap 0x140047dc8 captures 0x14004cfb0, requesting reason 2 at 0x1404e0ae0.
+			owner->ApplicationEvents->RequestClose(2);
+
+			return SquirrelNativeResult::NoValues();
+		}));
 		method("exit", [](Implementation& owner, auto) {
 			if (owner.ApplicationEvents == nullptr) {
 				throw std::runtime_error("System.exit requires its actual containing application close owner");

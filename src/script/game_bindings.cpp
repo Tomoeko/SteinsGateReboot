@@ -1,15 +1,45 @@
 #include "sgre/script/game_bindings.hpp"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
+#include <utility>
 
 namespace sgre::script {
 	void InstallGameResourceProfile(SquirrelVm& vm) {
 		// Game bootstrap 0455c0 identifies supplied resources, independent of the rewrite's host backend.
 		const auto root = vm.RootTable();
+		// Native 0x140043980 stringifies slot 2 once; 0x14004a050 counts LF bytes before the first NUL.
+		vm.NewSlot(root, std::string("countCR"), vm.CreateNativeClosure("countCR", [](SquirrelVm& active, std::span<const SquirrelValue> arguments) {
+			if (arguments.size() < 2) {
+				throw std::runtime_error("countCR requires its original text operand");
+			}
+			const auto text = active.ToString(arguments[1]);
+			const auto prefix = std::string_view(text).substr(0, text.find('\0'));
+			const auto count = std::count(prefix.begin(), prefix.end(), '\n');
+			if (count > std::numeric_limits<std::int32_t>::max()) {
+				throw std::runtime_error("countCR result exceeds its native signed integer range");
+			}
+
+			return SquirrelNativeResult::ReturnValue(static_cast<std::int32_t>(count));
+		}));
+		// The paired 0x14004cc10 helper removes LF only; carriage returns and UTF-8 bytes remain exact.
+		vm.NewSlot(root, std::string("removeCR"), vm.CreateNativeClosure("removeCR", [](SquirrelVm& active, std::span<const SquirrelValue> arguments) {
+			if (arguments.size() < 2) {
+				throw std::runtime_error("removeCR requires its original text operand");
+			}
+			auto text = active.ToString(arguments[1]);
+			text.resize(std::string_view(text).substr(0, text.find('\0')).size());
+			std::erase(text, '\n');
+
+			return SquirrelNativeResult::ReturnValue(std::move(text));
+		}));
 		// Native043850 ignores failed scalar conversion and extra operands; 049da0 keeps unordered NaN.
 		vm.NewSlot(root, std::string("calcPitch"), vm.CreateNativeClosure("calcPitch", [](SquirrelVm&, std::span<const SquirrelValue> arguments) {
 			float value = 0;

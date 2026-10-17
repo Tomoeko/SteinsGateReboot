@@ -12,6 +12,7 @@
 #include <cmath>
 #include <cstdint>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -70,6 +71,31 @@ static void TestOriginalPitchAndLooseWrapper() {
 	Require(std::get<float>(Call(vm, "calcPitch", {false})) == 0, "native sq_getfloat accepts boolean zero");
 	Require(std::get<float>(Call(vm, "calcPitch", {true})) < -6, "native sq_getfloat converts true to1 rather than rejecting it");
 	Require(std::isinf(std::get<float>(Call(vm, "calcPitch", {std::numeric_limits<float>::denorm_min()}))), "positive ratio underflow retains log0 rather than nonpositive-input fallback");
+}
+
+static void TestOriginalLineHelpers() {
+	sgre::script::SquirrelVm vm;
+	sgre::script::InstallGameResourceProfile(vm);
+	const std::array<std::string, 6> inputs{"", "alpha", "\r", "a\r\nb\nc", "日本語\ntext\r\n", std::string("a\nb\0c\n", 7)};
+	const std::array<std::int32_t, 6> counts{0, 0, 0, 2, 2, 1};
+	const std::array<std::string, 6> removed{"", "alpha", "\r", "a\rbc", "日本語text\r", "ab"};
+	for (std::size_t index = 0; index < inputs.size(); ++index) {
+		Require(std::get<std::int32_t>(Call(vm, "countCR", {inputs[index], std::int32_t{17}})) == counts[index], "countCR changed native LF-only/C-string semantics");
+		Require(sgre::script::StringText(Call(vm, "removeCR", {inputs[index]})) == removed[index], "removeCR changed carriage returns or bytes beyond its C-string prefix");
+	}
+	std::size_t stringifications = 0;
+	const auto type = vm.CreateClass();
+	vm.NewSlot(type, std::string("_tostring"), vm.CreateNativeClosure("line fixture", [&](auto&, auto) {
+		++stringifications;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("a\nb\0c\n", 7));
+	}));
+	const auto instance = vm.CreateInstance(type);
+	Require(std::get<std::int32_t>(Call(vm, "countCR", {instance})) == 1 && stringifications == 1, "countCR did not stringify its actual operand exactly once");
+	Require(sgre::script::StringText(Call(vm, "removeCR", {instance})) == "ab" && stringifications == 2, "removeCR repeated conversion or lost its C-string boundary");
+	RequireFailure([&] {
+		static_cast<void>(Call(vm, "countCR"));
+	},
+	    "original text operand");
 }
 
 static void TestActualSnapshotMappingAndFocus() {
@@ -253,9 +279,59 @@ static void TestActualAltEnterOwnerAndRootBinding() {
 	    "live nonrecursive");
 }
 
-int main() {
+static std::uint32_t ReadLineVectorWord(std::istream& input) {
+	std::array<unsigned char, 4> bytes{};
+	input.read(reinterpret_cast<char*>(bytes.data()), 4);
+	Require(static_cast<bool>(input), "native line fixture word is truncated");
+	std::uint32_t result = 0;
+	for (std::uint32_t index = 0; index < 4; ++index) {
+		result |= static_cast<std::uint32_t>(bytes[index]) << (index * 8);
+	}
+
+	return result;
+}
+
+static std::string ReadLineVectorText(std::istream& input, std::uint32_t size) {
+	Require(size <= 4096, "native line fixture text exceeds its bound");
+	std::string result(size, '\0');
+	input.read(result.data(), static_cast<std::streamsize>(size));
+	Require(static_cast<bool>(input), "native line fixture text is truncated");
+
+	return result;
+}
+
+static void TestNativeLineVectors(const char* filename) {
+	std::ifstream input(filename, std::ios::binary);
+	std::array<char, 8> signature{};
+	input.read(signature.data(), 8);
+	Require(input && std::string_view(signature.data(), signature.size()) == "SGRELF01", "native line fixture signature is invalid");
+	const auto count = ReadLineVectorWord(input);
+	Require(count > 0 && count <= 4096, "native line fixture count exceeds its bound");
+	sgre::script::SquirrelVm vm;
+	sgre::script::InstallGameResourceProfile(vm);
+	for (std::uint32_t index = 0; index < count; ++index) {
+		const auto input_size = ReadLineVectorWord(input);
+		const auto output_size = ReadLineVectorWord(input);
+		const auto line_count = ReadLineVectorWord(input);
+		Require(line_count <= input_size, "native line fixture count exceeds input length");
+		const auto text = ReadLineVectorText(input, input_size);
+		const auto expected = ReadLineVectorText(input, output_size);
+		Require(std::get<std::int32_t>(Call(vm, "countCR", {text})) == static_cast<std::int32_t>(line_count), "countCR differs from unchanged original instructions");
+		const auto actual = Call(vm, "removeCR", {text});
+		Require(sgre::script::StringText(actual) == expected, "removeCR differs from unchanged original instructions");
+	}
+	Require(input.get() == std::char_traits<char>::eof(), "native line fixture contains trailing bytes");
+	std::cout << count << " original line-helper vectors passed\n";
+}
+
+int main(int argc, char** argv) {
 	try {
+		Require(argc == 1 || argc == 2, "bootstrap fixture accepts one optional native line vector file");
 		TestOriginalPitchAndLooseWrapper();
+		TestOriginalLineHelpers();
+		if (argc == 2) {
+			TestNativeLineVectors(argv[1]);
+		}
 		TestActualSnapshotMappingAndFocus();
 		TestConnectedVmProviderAndRetirement();
 		TestOriginalAltEnterFrames();
