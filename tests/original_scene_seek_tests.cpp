@@ -918,11 +918,350 @@ static void TestOriginalYieldingSkipRelease(const sgre::script::BytecodeProgram&
 	}
 }
 
+static SquirrelValue SuspendBeforePhoneMethod(SquirrelVm& vm, const SquirrelValue& original, const char* key, std::size_t parameters) {
+	vm.NewSlot(vm.RootTable(), std::string(key), original);
+	sgre::script::BytecodeProgram program;
+	auto& function = program.MainFunction;
+	function.SourceName = std::string("prepared-yielding-phone.nut");
+	function.Name = std::string(key);
+	function.Parameters = {std::string("this")};
+	if (parameters == 2) {
+		function.Parameters.emplace_back(std::string("name"));
+	}
+	function.StackSize = 5;
+	function.Literals = {std::string("preparedPhoneControlWait"), std::string(key)};
+	const auto operation = [](std::uint8_t code, std::uint8_t destination, std::int32_t operand = 0, std::uint8_t argument2 = 0, std::uint8_t argument3 = 0) {
+		auto instruction = Operation(code, destination, operand);
+		instruction.Argument2 = argument2;
+		instruction.Argument3 = argument3;
+		return instruction;
+	};
+	function.Instructions = {operation(21, 2), operation(9, 2, 0, 2), operation(10, 3, 0), operation(6, 255, 2, 3, 1), operation(21, 2), operation(9, 2, 1, 2), operation(10, 3, 0)};
+	if (parameters == 2) {
+		function.Instructions.push_back(operation(10, 4, 1));
+	}
+	function.Instructions.push_back(operation(6, 2, 2, 3, static_cast<std::uint8_t>(parameters)));
+	function.Instructions.push_back(operation(19, 1, 2));
+
+	return vm.CreateClosure(std::move(program));
+}
+
+static void TestActivePhoneCallUsesOriginalReadyControls(bool dual, bool ambiguous, bool enabled, bool yielding = false, bool failing = false, bool jumping = false) {
+	SeekFixture fixture;
+	auto& vm = fixture.Vm;
+	vm.NewSlot(fixture.Player, std::string("app"), SquirrelValue{});
+	vm.NewSlot(fixture.Player, std::string("checkCommandAction"), vm.CreateNativeClosure("prepared-original-list-matcher", [](SquirrelVm& active, auto arguments) {
+		Require(sgre::script::StringText(arguments[1]) == "phone" && active.Type(arguments[2]) == sgre::script::SquirrelValueType::Array, "phone input must delegate original list matching without changing its operands");
+		return sgre::script::SquirrelNativeResult::ReturnValue(sgre::script::StringText(active.GetSlot(arguments[2], std::int32_t{0})) == "phone");
+	}));
+	const auto contact = [&](const char* id) {
+		const auto type = vm.CreateClass();
+		vm.NewSlot(type, std::string("_get"), vm.CreateNativeClosureWithCaptures("prepared-resource-contact-property", [](SquirrelVm& active, auto arguments) {
+			Require(sgre::script::StringText(arguments[1]) == "id", "contact metadata must use its actual requested property");
+			return sgre::script::SquirrelNativeResult::ReturnValue(active.NativeStackValue(-1));
+		},
+		                                          std::array<SquirrelValue, 1>{vm.CreateString(id)}));
+		return vm.CreateInstance(type);
+	};
+	const auto app_class = vm.CreateClass();
+	const auto contacts = vm.CreateArray(std::array<SquirrelValue, 2>{contact("unrelated"), contact("active-contact")});
+	const auto route = vm.CreateTable();
+	vm.NewSlot(route, std::string("call"), vm.CreateString("*call"));
+	if (dual) {
+		vm.NewSlot(route, std::string("mail"), vm.CreateString("*other"));
+	}
+	vm.NewSlot(app_class, std::string("getPhoneTriggerEnabled"), vm.CreateNativeClosure("prepared-original-active-phone-flag", [enabled](SquirrelVm&, auto) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{enabled ? 1 : 0});
+	}));
+	vm.NewSlot(app_class, std::string("getContacts"), vm.CreateNativeClosureWithCaptures("prepared-original-contact-inventory", [](SquirrelVm& active, auto) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(active.NativeStackValue(-1));
+	},
+	                                                      std::array<SquirrelValue, 1>{contacts}));
+	vm.NewSlot(app_class, std::string("getActiveTrigger"), vm.CreateNativeClosureWithCaptures("prepared-original-contact-trigger", [ambiguous](SquirrelVm& active, auto arguments) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(sgre::script::StringText(arguments[1]) == "active-contact" || ambiguous ? active.NativeStackValue(-1) : SquirrelValue{});
+	},
+	                                                           std::array<SquirrelValue, 1>{route}));
+	vm.NewSlot(app_class, std::string("player"), SquirrelValue{});
+	const auto app = vm.CreateInstance(app_class);
+	const auto app_root = vm.Retain(app);
+
+	const auto jump_class = vm.CreateClass();
+	vm.NewSlot(jump_class, std::string("target"), vm.CreateString("*call"));
+	const auto jump_event = vm.CreateInstance(jump_class);
+	const auto jump_root = vm.Retain(jump_event);
+	vm.NewSlot(vm.RootTable(), std::string("PhoneJumpException"), jump_class);
+
+	std::size_t original_updates = 0;
+	std::size_t suspensions = 0;
+	vm.NewSlot(vm.RootTable(), std::string("preparedPhoneControlWait"), vm.CreateNativeClosure("prepared-actual-phone-transition-wait", [&](SquirrelVm& active, auto) {
+		Reject([&] {
+			static_cast<void>(active.FindContextFrame(active.CurrentContext(), "prepared-yielding-phone.nut", "none"));
+		},
+		    "serialized endpoint");
+		++suspensions;
+		return active.RequestNativeSuspension();
+	}));
+	const auto update = [&](const SquirrelValue& receiver) {
+		auto result = vm.Invoke(vm.GetSlot(receiver, std::string("onPhoneMain")), std::array<SquirrelValue, 1>{receiver});
+		std::size_t resumes = 0;
+		while (result.State == sgre::script::SquirrelRunState::Suspended && resumes++ < 2) {
+			result = vm.Resume();
+		}
+		Require(result.State == sgre::script::SquirrelRunState::Completed, "phone callback must preserve its containing coroutine through original update and button transition waits");
+		return result.Value;
+	};
+	std::int32_t phone_state = 1;
+	bool ready = false;
+	bool locked = false;
+	std::vector<std::string> pressed;
+	std::vector<std::string> focused;
+	SquirrelValue seek_player;
+	const auto button_class = vm.CreateClass();
+	vm.NewSlot(button_class, std::string("getPressEnable"), vm.CreateNativeClosure("prepared-original-button-readiness", [&](SquirrelVm&, auto) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(ready);
+	}));
+	const auto button = vm.CreateInstance(button_class);
+	const auto button_root = vm.Retain(button);
+	const auto layer_class = vm.CreateClass();
+	vm.NewSlot(layer_class, std::string("delegate"), SquirrelValue{});
+	vm.NewSlot(layer_class, std::string("getDelegate"), vm.CreateNativeClosure("prepared-original-layer-delegate", [](SquirrelVm& active, auto arguments) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(active.GetSlot(arguments[0], std::string("delegate")));
+	}));
+	const auto layer = vm.CreateInstance(layer_class);
+	const auto layer_root = vm.Retain(layer);
+	const auto panel_class = vm.CreateClass();
+	vm.NewSlot(panel_class, std::string("_owner"), layer);
+	vm.NewSlot(panel_class, std::string("getMotionLock"), vm.CreateNativeClosure("prepared-original-panel-lock", [&](SquirrelVm&, auto) {
+		return sgre::script::SquirrelNativeResult::ReturnValue(locked);
+	}));
+	vm.NewSlot(panel_class, std::string("getButton"), vm.CreateNativeClosureWithCaptures("prepared-original-button-lookup", [](SquirrelVm& active, auto arguments) {
+		const auto name = sgre::script::StringText(arguments[1]);
+		Require(name == "poweron/ok" || name == "root/contacts" || name == "row/two" || (name == "dialog/sel1" || name == "dialog/sel2"), "phone seek chose a button outside the original available controls");
+		return sgre::script::SquirrelNativeResult::ReturnValue(active.NativeStackValue(-1));
+	},
+	                                                      std::array<SquirrelValue, 1>{button}));
+	vm.NewSlot(panel_class, std::string("setMotionFocus"), vm.CreateNativeClosure("prepared-original-focus-update", [&](SquirrelVm&, auto arguments) {
+		focused.emplace_back(sgre::script::StringText(arguments[1]));
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	vm.NewSlot(panel_class, std::string("pressButton"), vm.CreateNativeClosure("prepared-original-button-dispatch", [&](SquirrelVm& active, auto arguments) {
+		pressed.emplace_back(sgre::script::StringText(arguments[1]));
+		if (failing) {
+			throw std::runtime_error("prepared original phone expression failed");
+		}
+		if (pressed.back() == "poweron/ok") {
+			phone_state = 2;
+		}
+		if (pressed.back() == "root/contacts") {
+			phone_state = 3;
+		}
+		if (pressed.back().starts_with("dialog/")) {
+			if (jumping) {
+				throw sgre::script::SquirrelVmException(jump_event, "prepared original typed phone transfer");
+			}
+			active.AssignSlot(seek_player, std::string("curSceneName"), active.CreateString("fixture.ks*call"));
+			const auto transferred = active.InvokeInContext(active.CurrentContext(), active.GetSlot(seek_player, std::string("checkSaveMode")), std::array<SquirrelValue, 1>{seek_player});
+			Require(transferred.State == sgre::script::SquirrelRunState::Completed, "original button fixture must deliver its real reentrant snapshot before returning");
+		}
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	if (yielding) {
+		vm.NewSlot(panel_class, std::string("pressButton"), SuspendBeforePhoneMethod(vm, vm.GetSlot(panel_class, std::string("pressButton")), "preparedPhonePressBody", 2));
+	}
+	const auto panel = vm.CreateInstance(panel_class);
+	const auto panel_root = vm.Retain(panel);
+	const auto phone_class = vm.CreateClass();
+	const auto dialog_class = vm.CreateClass();
+	vm.NewSlot(phone_class, std::string("isAuto"), false);
+	for (const auto& type : {phone_class, dialog_class}) {
+		vm.NewSlot(type, std::string("onPhoneMain"), vm.CreateNativeClosure("prepared-original-phone-update", [&](SquirrelVm&, auto) {
+			++original_updates;
+			return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{23});
+		}));
+		if (yielding) {
+			vm.NewSlot(type, std::string("onPhoneMain"), SuspendBeforePhoneMethod(vm, vm.GetSlot(type, std::string("onPhoneMain")), type == phone_class ? "preparedPhoneUpdateBody" : "preparedDialogUpdateBody", 1));
+		}
+		const auto get_panel = vm.CreateNativeClosureWithCaptures("prepared-original-owned-panel", [](SquirrelVm& active, auto) {
+			return sgre::script::SquirrelNativeResult::ReturnValue(active.NativeStackValue(-1));
+		},
+		    std::array<SquirrelValue, 1>{panel});
+		vm.NewSlot(type, std::string("_get"), vm.CreateNativeClosureWithCaptures("prepared-original-function-proxy", [](SquirrelVm& active, auto arguments) {
+			Require(sgre::script::StringText(arguments[1]) == "getPanel", "function proxy must receive the exact original delegated method lookup");
+			return sgre::script::SquirrelNativeResult::ReturnValue(active.NativeStackValue(-1));
+		},
+		                                          std::array<SquirrelValue, 1>{get_panel}));
+	}
+	for (const auto& [method, state] : std::array<std::pair<const char*, std::int32_t>, 3>{{{"getIsPowerOn", 1}, {"getIsRoot", 2}, {"getIsContacts", 3}}}) {
+		vm.NewSlot(phone_class, std::string(method), vm.CreateNativeClosure("prepared-original-phone-state", [&, state](SquirrelVm&, auto) {
+			return sgre::script::SquirrelNativeResult::ReturnValue(phone_state == state);
+		}));
+	}
+	const auto list = vm.CreateTable();
+	vm.NewSlot(list, std::string("infos"), contacts);
+	vm.NewSlot(list, std::string("panelNames"), vm.CreateArray(std::array<SquirrelValue, 2>{vm.CreateString("row/one"), vm.CreateString("row/two")}));
+	vm.NewSlot(phone_class, std::string("sl"), list);
+	vm.NewSlot(dialog_class, std::string("state"), std::int32_t{5});
+	vm.NewSlot(vm.RootTable(), std::string("PhoneFunction"), phone_class);
+	vm.NewSlot(vm.RootTable(), std::string("PhoneDialogFunction"), dialog_class);
+
+	auto graph = std::make_shared<sgre::scenario::ScenarioNavigation>();
+	sgre::resource::PsbDocument document;
+	const auto value = [](auto data) {
+		sgre::resource::PsbValue result;
+		result.Data = std::move(data);
+		return result;
+	};
+	const auto exit = value(sgre::resource::PsbObject{{"type", value(std::int64_t{0})}, {"storage", value(std::string("fixture.ks"))}, {"target", value(std::string("*goal"))}});
+	const auto call_scene = value(sgre::resource::PsbObject{{"label", value(std::string("*call"))}, {"lines", value(sgre::resource::PsbArray{})}, {"nexts", value(sgre::resource::PsbArray{exit})}});
+	const auto goal_scene = value(sgre::resource::PsbObject{{"label", value(std::string("*goal"))}, {"lines", value(sgre::resource::PsbArray{})}});
+	document.Root = value(sgre::resource::PsbObject{{"name", value(std::string("fixture.ks"))}, {"scenes", value(sgre::resource::PsbArray{call_scene, goal_scene})}});
+	graph->AddDocument(document);
+	auto target = Target();
+	target.Label = "*goal";
+	target.Navigation = graph;
+	sgre::script::OriginalSceneSeek seek(vm, target);
+	const auto player = fixture.Start(seek);
+	seek_player = player;
+	const auto player_root = vm.Retain(player);
+	vm.AssignSlot(player, std::string("app"), app);
+	vm.AssignSlot(app, std::string("player"), player);
+	vm.NewSlot(vm.RootTable(), std::string("app"), app);
+	static_cast<void>(Call(vm, player, "checkSaveMode"));
+	const auto context = vm.CreateContext();
+	static_cast<void>(vm.InvokeInContext(context, vm.GetSlot(player, std::string("onSceneStart")), std::array<SquirrelValue, 2>{player, SquirrelValue{}}));
+	vm.NewSlot(vm.RootTable(), std::string("preparedPhonePause"), vm.CreateNativeClosure("prepared-phone-input-wait", [](SquirrelVm& active, auto) {
+		return active.RequestNativeSuspension();
+	}));
+	sgre::script::BytecodeProgram pause;
+	pause.MainFunction.Parameters = {std::string("this")};
+	pause.MainFunction.StackSize = 3;
+	pause.MainFunction.Literals = {std::string("preparedPhonePause")};
+	auto prepare = Operation(8, 1);
+	prepare.Argument2 = 0;
+	prepare.Argument3 = 2;
+	auto invoke = Operation(6, 1, 1);
+	invoke.Argument2 = 2;
+	invoke.Argument3 = 1;
+	pause.MainFunction.Instructions = {prepare, invoke, Operation(19, 255)};
+	for (std::size_t depth = 0; depth < 40; ++depth) {
+		sgre::script::SquirrelFunction outer;
+		outer.SourceName = std::string("prepared-deep-phone.nut");
+		outer.Name = std::string("outer-") + std::to_string(depth);
+		outer.Parameters = {std::string("this")};
+		outer.StackSize = 3;
+		outer.Functions.push_back(std::move(pause.MainFunction));
+		auto move = Operation(10, 2, 0);
+		auto call = Operation(6, 1, 1);
+		call.Argument2 = 2;
+		call.Argument3 = 1;
+		outer.Instructions = {Operation(48, 1, 0), move, call, Operation(19, 255)};
+		pause.MainFunction = std::move(outer);
+	}
+	const auto waiting = vm.InvokeInContext(context, vm.CreateClosureInContext(context, std::move(pause)), std::array<SquirrelValue, 1>{vm.RootTable()});
+	Require(waiting.State == sgre::script::SquirrelRunState::Suspended, "phone fixture must retain a real suspended player context");
+	Reject([&] {
+		static_cast<void>(vm.FindContextFrame(context, std::string(4097, 'x'), "none"));
+	},
+	    "bounded names");
+	const auto observed = vm.ObserveContext(context, 1, 0);
+	const auto references_before_lookup = vm.RetainedReferenceCount(player);
+	const auto outer = vm.FindContextFrame(context, "prepared-deep-phone.nut", "outer-39");
+	Require(observed.FrameCount > sgre::script::kSquirrelObservationFrames && observed.FramesTruncated && outer && outer->FrameIndex == 0 && outer->NextInstruction == 3 && vm.RetainedReferenceCount(player) == references_before_lookup && vm.ContextState(context) == sgre::script::SquirrelContextState::Suspended && !vm.FindContextFrame(context, "missing.nut", "none"), "complete readonly flow lookup must find an outer frame beyond the copied diagnostic window without fabricating missing matches");
+	seek.Poll();
+	if (!enabled) {
+		Require(seek.Observation().Phase == sgre::script::OriginalSceneSeekPhase::Progressing && !std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{vm.CreateString("phone")})), "disabled integer phone flag must leave original input and progression untouched");
+		vm.ResetContext(context);
+		vm.ReleaseContext(context);
+		return;
+	}
+	if (ambiguous) {
+		Require(seek.Observation().Phase == sgre::script::OriginalSceneSeekPhase::Blocked && pressed.empty(), "ambiguous active calls must release traversal without choosing a route or pressing a control");
+		vm.ResetContext(context);
+		vm.ReleaseContext(context);
+		return;
+	}
+	const auto phone_actions = vm.CreateArray(std::array<SquirrelValue, 2>{vm.CreateString("phone"), vm.CreateString("phone-alternate")});
+	Require(std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{phone_actions})), "active original contact/target failed to request its declared action list");
+	Require(std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{vm.CreateString("phone")})) && !std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{vm.CreateString("force_skip_all")})), "phone request must remain available until original UI entry while skip input releases through its original consumer");
+	const auto phone = vm.CreateInstance(phone_class);
+	const auto phone_root = vm.Retain(phone);
+	const auto foreign_player = vm.CreateInstance(fixture.Player);
+	vm.AssignSlot(layer, std::string("delegate"), foreign_player);
+	static_cast<void>(update(phone));
+	Require(pressed.empty(), "a different player's phone must never receive authored traversal input");
+	const auto wrapper = vm.CreateInstance(layer_class);
+	const auto wrapper_root = vm.Retain(wrapper);
+	vm.AssignSlot(wrapper, std::string("delegate"), wrapper);
+	vm.AssignSlot(layer, std::string("delegate"), wrapper);
+	static_cast<void>(update(phone));
+	Require(pressed.empty(), "cyclic owner delegates must be bounded without granting another phone input ownership");
+	vm.AssignSlot(wrapper, std::string("delegate"), dual ? app : player);
+	Require(std::get<std::int32_t>(update(phone)) == 23 && pressed.empty(), "not-ready control must retain original callback/result without an authored press");
+	Require(!std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{vm.CreateString("phone")})), "actual phone UI entry must release its requested open input");
+	ready = true;
+	vm.AssignSlot(phone, std::string("isAuto"), true);
+	static_cast<void>(update(phone));
+	Require(pressed.empty(), "automatic phone owners must never receive interactive traversal input");
+	vm.AssignSlot(phone, std::string("isAuto"), false);
+	locked = true;
+	static_cast<void>(update(phone));
+	Require(pressed.empty(), "locked original motion must retain its readiness gate");
+	locked = false;
+	if (failing) {
+		Reject([&] {
+			static_cast<void>(update(phone));
+		},
+		    "prepared original phone expression failed");
+		Require(seek.Observation().Phase == sgre::script::OriginalSceneSeekPhase::Failed && pressed.size() == 1 && std::get<std::int32_t>(update(phone)) == 23 && pressed.size() == 1, "original phone failure must propagate once and release authored traversal while ordinary callbacks remain available");
+		vm.ResetContext(context);
+		vm.ReleaseContext(context);
+		return;
+	}
+	for (std::size_t step = 0; step < 3; ++step) {
+		static_cast<void>(update(phone));
+	}
+	Require(pressed == std::vector<std::string>{"poweron/ok", "root/contacts", "row/two"}, "phone traversal must use actual active contact identity and original list metadata");
+	Require(focused == std::vector<std::string>{"root/contacts", "row/two"}, "contact selection must pass through the original focus owner");
+	const auto dialog = vm.CreateInstance(dialog_class);
+	const auto dialog_root = vm.Retain(dialog);
+	static_cast<void>(update(dialog));
+	Require(pressed.size() == 3, "phone traversal must not accept an unrelated dialog state");
+	vm.AssignSlot(dialog, std::string("state"), std::int32_t{dual ? 14 : 13});
+	if (jumping) {
+		bool transferred = false;
+		try {
+			static_cast<void>(update(dialog));
+		} catch (const sgre::script::SquirrelVmException& error) {
+			transferred = error.ThrownValue() == jump_event;
+		}
+		Require(transferred && seek.Observation().Phase == sgre::script::OriginalSceneSeekPhase::Progressing, "the containing original handler must receive the identical typed phone transfer without the seek reporting an error");
+		vm.AssignSlot(player, std::string("curSceneName"), vm.CreateString("fixture.ks*call"));
+		static_cast<void>(Call(vm, player, "checkSaveMode"));
+	} else {
+		static_cast<void>(update(dialog));
+	}
+	static_cast<void>(update(dialog));
+	Require(pressed.size() == 4 && pressed.back() == (dual ? "dialog/sel2" : "dialog/sel1") && seek.Observation().PhoneActions == 5, "call confirmation must use its original ready button once");
+	Require(std::get<bool>(Call(vm, player, "checkInputAction", std::array<SquirrelValue, 1>{vm.CreateString("force_skip_all")})), "actual scene transfer must release the phone route and restore sequential skip input");
+	seek.Cancel();
+	static_cast<void>(update(phone));
+	Require(pressed.size() == 4 && original_updates == 12 && suspensions == (yielding ? 16 : 0), "cancelled seek must preserve ordinary callback results and every admitted original coroutine wait");
+	vm.ResetContext(context);
+	vm.ReleaseContext(context);
+}
+
 int main(int argc, char** argv) {
 	try {
 		Require(argc == 1 || argc == 4, "usage: original_scene_seek_tests [envplayer-bytecode util-bytecode init-bytecode]");
 		TestFirstEntryFailureLatchesAndPreservesException();
 		TestPanelUpdatePreservesOriginalArguments();
+		TestActivePhoneCallUsesOriginalReadyControls(false, false, true);
+		TestActivePhoneCallUsesOriginalReadyControls(true, false, true);
+		TestActivePhoneCallUsesOriginalReadyControls(false, true, true);
+		TestActivePhoneCallUsesOriginalReadyControls(false, false, false);
+		TestActivePhoneCallUsesOriginalReadyControls(true, false, true, true);
+		TestActivePhoneCallUsesOriginalReadyControls(false, false, true, true, true);
+		TestActivePhoneCallUsesOriginalReadyControls(true, false, true, true, false, true);
 		TestCurrentSceneArgumentPropagation();
 		TestCheckpointPredecessorEntry();
 		TestMailInputAtOriginalCallsites();

@@ -212,6 +212,12 @@ namespace sgre::script {
 		SquirrelContextHandle Context;
 	};
 
+	struct SquirrelFrameLocation {
+		std::size_t FrameIndex = 0;
+		std::size_t NextInstruction = 0;
+		std::uint32_t SourceLine = 0;
+	};
+
 	inline constexpr std::size_t kSquirrelObservationFrames = 32;
 	inline constexpr std::size_t kSquirrelObservationRegisters = 16;
 	inline constexpr std::size_t kSquirrelObservationTextBytes = 128;
@@ -386,6 +392,8 @@ namespace sgre::script {
 		// Native-callback-only exact caller metadata; bounded current frames, no copies, calls or retention.
 		[[nodiscard]] bool NativeCallerMatches(std::string_view source, std::string_view function, std::size_t next_instruction, std::size_t max_frames = kSquirrelObservationFrames) const;
 		// Serialized endpoint inspection performs no call, context selection, resume, or VM retention.
+		// Exact readonly search over the current VM-bounded stack, including frames outside the copied diagnostic window.
+		[[nodiscard]] std::optional<SquirrelFrameLocation> FindContextFrame(SquirrelContextHandle context, std::string_view source, std::string_view function) const;
 		[[nodiscard]] SquirrelContextObservation ObserveContext(SquirrelContextHandle context, std::size_t max_frames = kSquirrelObservationFrames, std::size_t max_registers = 8) const;
 		[[nodiscard]] SquirrelRunResult InvokeInContext(SquirrelContextHandle context, const SquirrelValue& callable, std::span<const SquirrelValue> arguments, std::uint64_t instruction_budget = 1000000, bool raise_error = true);
 		// Matches retval=false: preserves native temporary/error/suspension state while discarding facade output.

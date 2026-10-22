@@ -8854,6 +8854,34 @@ namespace sgre::script {
 		return false;
 	}
 
+	std::optional<SquirrelFrameLocation> SquirrelVm::FindContextFrame(SquirrelContextHandle context, std::string_view source, std::string_view name) const {
+		const auto& owner = *m_Implementation;
+		if (owner.m_Closed || owner.m_Running || owner.m_Closing || owner.m_Collecting || owner.m_DrainingReleases || owner.m_RetiringHostRoots || source.size() > 4096 || name.size() > 4096) {
+			throw std::runtime_error("Squirrel frame lookup requires its live serialized endpoint and bounded names");
+		}
+		const auto& state = owner.Context(context);
+		for (std::size_t index = 0; index < state.Frames.size(); ++index) {
+			const auto& frame = state.Frames[index];
+			const auto& function = owner.Function(frame);
+			if (LiteralText(function.SourceName) != source || LiteralText(function.Name) != name) {
+				continue;
+			}
+			SquirrelFrameLocation result;
+			result.FrameIndex = index;
+			result.NextInstruction = frame.Instruction;
+			if (frame.Instruction != 0) {
+				for (const auto& line : function.LineInformation) {
+					if (line.Instruction <= frame.Instruction - 1) {
+						result.SourceLine = line.Line;
+					}
+				}
+			}
+			return result;
+		}
+
+		return {};
+	}
+
 	SquirrelContextObservation SquirrelVm::ObserveContext(SquirrelContextHandle context, std::size_t max_frames, std::size_t max_registers) const {
 		const auto& owner = *m_Implementation;
 		if (owner.m_Closed || owner.m_Running || owner.m_Closing || owner.m_Collecting || owner.m_DrainingReleases || owner.m_RetiringHostRoots || max_frames == 0 || max_frames > kSquirrelObservationFrames || max_registers > kSquirrelObservationRegisters) {

@@ -63,6 +63,91 @@ namespace sgre::script {
 		return program;
 	}
 
+	static BytecodeProgram PhoneHookFactory() {
+		// Keep both the original update and its button expression in script frames:
+		// phone transitions legitimately suspend while their original animation runs.
+		BytecodeProgram program;
+		auto& factory = program.MainFunction;
+		factory.Name = std::string("seek phone hook factory");
+		factory.SourceName = std::string("sgre/original-scene-seek");
+		factory.Parameters = {std::string("this"), std::string("original"), std::string("prepare"), std::string("finish"), std::string("failure")};
+		factory.StackSize = 6;
+		factory.Instructions = {SeekInstruction(48, 5, 0), SeekInstruction(19, 1, 5)};
+		SquirrelFunction hook;
+		hook.Name = std::string("seek.phone.onPhoneMain");
+		hook.SourceName = factory.SourceName;
+		hook.Parameters = {std::string("this")};
+		hook.StackSize = 7;
+		hook.Literals = {std::string("focus"), std::string("panel"), std::string("setMotionFocus"), std::string("name"), std::string("pressButton")};
+		for (std::int32_t index = 0; index < 4; ++index) {
+			SquirrelOuterBinding binding;
+			binding.Type = 0;
+			binding.Source = index + 1;
+			binding.Name = factory.Parameters[static_cast<std::size_t>(index + 1)];
+			hook.OuterBindings.push_back(std::move(binding));
+		}
+
+		auto& code = hook.Instructions;
+		code.push_back(SeekInstruction(56, 6, 22));
+		code.push_back(SeekInstruction(27, 3, 0));
+		code.push_back(SeekInstruction(10, 4, 0));
+		code.push_back(SeekInstruction(6, 1, 3, 4, 1));
+
+		code.push_back(SeekInstruction(27, 3, 1));
+		code.push_back(SeekInstruction(10, 4, 0));
+		code.push_back(SeekInstruction(6, 2, 3, 4, 1));
+		code.push_back(SeekInstruction(26, 2, 13));
+		code.push_back(SeekInstruction(9, 6, 0, 2));
+		code.push_back(SeekInstruction(26, 6, 4));
+
+		code.push_back(SeekInstruction(9, 4, 1, 2));
+		code.push_back(SeekInstruction(8, 3, 2, 4, 4));
+		code.push_back(SeekInstruction(9, 5, 3, 2));
+		code.push_back(SeekInstruction(6, 255, 3, 4, 2));
+
+		code.push_back(SeekInstruction(9, 4, 1, 2));
+		code.push_back(SeekInstruction(8, 3, 4, 4, 4));
+		code.push_back(SeekInstruction(9, 5, 3, 2));
+		code.push_back(SeekInstruction(6, 255, 3, 4, 2));
+		code.push_back(SeekInstruction(27, 3, 2));
+		code.push_back(SeekInstruction(10, 4, 0));
+		code.push_back(SeekInstruction(6, 255, 3, 4, 1));
+
+		code.push_back(SeekInstruction(57, 1));
+		code.push_back(SeekInstruction(19, 1, 1));
+		code.push_back(SeekInstruction(27, 3, 3));
+		code.push_back(SeekInstruction(10, 4, 0));
+		code.push_back(SeekInstruction(10, 5, 6));
+		code.push_back(SeekInstruction(6, 255, 3, 4, 2));
+		code.push_back(SeekInstruction(58, 6));
+		factory.Functions.push_back(std::move(hook));
+
+		return program;
+	}
+
+	static void InstallScriptPhoneHook(SquirrelVm& vm, const SquirrelValue& type, const SquirrelValue& prepare, const SquirrelValue& finish, const SquirrelValue& failure) {
+		const auto context = vm.CreateContext();
+		try {
+			const auto factory = vm.CreateClosureInContext(context, PhoneHookFactory());
+			const std::array<SquirrelValue, 5> arguments{vm.RootTable(), vm.GetSlot(type, std::string("onPhoneMain")), prepare, finish, failure};
+			const auto result = vm.InvokeInContext(context, factory, arguments, 256, false);
+			if (result.State != SquirrelRunState::Completed || vm.Type(result.Value) != SquirrelValueType::Closure) {
+				throw std::runtime_error("original phone seek factory did not publish its captured script closure");
+			}
+
+			const auto pin = vm.Retain(result.Value);
+			vm.NewSlot(type, std::string("onPhoneMain"), result.Value);
+			vm.ReleaseContext(context);
+		} catch (...) {
+			try {
+				vm.ReleaseContext(context);
+			} catch (...) {
+				// Preserve the first setup failure while retiring its private context.
+			}
+			throw;
+		}
+	}
+
 	static void InstallScriptSnapshotHook(SquirrelVm& vm, const SquirrelValue& player, const SquirrelValue& original, const SquirrelValue& validate, const SquirrelValue& predicate, const SquirrelValue& finish, const SquirrelValue& failure) {
 		const auto context = vm.CreateContext();
 		try {
@@ -98,6 +183,19 @@ namespace sgre::script {
 
 	class OriginalSceneSeek::Implementation {
 	public:
+		struct PhoneCallRoute {
+			std::string Chara;
+			std::string Label;
+			std::string Storage;
+			bool Requested = false;
+			bool Opened = false;
+			std::size_t RequestPolls = 0;
+			bool ContactPressed = false;
+			bool DialogPressed = false;
+			std::size_t Polls = 0;
+			std::array<std::optional<SquirrelObjectIdentity>, 2> PendingControls{};
+		};
+
 		Implementation(SquirrelVm& vm, OriginalSceneSeekTarget target, OriginalSceneSeekLimits limits)
 		    : Vm(vm), Target(std::move(target)), Limits(limits) {
 			if (Vm.IsClosed() || Target.Storage.empty() || Target.Storage.size() > 4096 || Target.Storage.find('\0') != std::string::npos || Target.RequestedLine < 0 || Target.SnapshotLine < Target.RequestedLine || Target.Point < 0 || Limits.MaximumPolls == 0 || Limits.MaximumPolls > 1000000 || Limits.MaximumSnapshots == 0 || Limits.MaximumSnapshots > 10000000 || Limits.MaximumMovieRequests == 0 || Limits.MaximumMovieRequests > 10000 || Limits.MaximumConfirmationPolls == 0 || Limits.MaximumConfirmationPolls > 100000) {
@@ -155,6 +253,9 @@ namespace sgre::script {
 			}
 			// Original getStorage(4129) returns the prefix before the first '*'.
 			State.Storage.assign(name.substr(0, name.find('*')));
+			if (PhoneCall && PhoneCall->Requested && name == PhoneCall->Storage + PhoneCall->Label) {
+				PhoneCall.reset();
+			}
 			State.SourceLine = SeekInteger(Vm, player, "curLine");
 			State.Point = SeekInteger(Vm, player, "curPoint");
 			if (State.Storage != Target.Storage || State.Point != Target.Point || State.SourceLine != Target.SnapshotLine) {
@@ -415,12 +516,238 @@ namespace sgre::script {
 			}
 		}
 
+		[[nodiscard]] bool PhoneQuery(const SquirrelValue& player, const SquirrelValue& action) {
+			if (!PhoneCall || PhoneCall->Opened) {
+				return false;
+			}
+			if (const auto* name = TryStringText(action)) {
+				return *name == "phone";
+			}
+			if (Vm.Type(action) != SquirrelValueType::Array || Vm.Length(action) > 4096) {
+				return false;
+			}
+			// The command executor passes its whole action list, while UI availability
+			// queries pass one name. Delegate list matching to the original command policy.
+			const auto matches = CallSeekMethod(Vm, Vm.GetSlot(player, std::string("checkCommandAction")), std::array<SquirrelValue, 3>{player, Vm.CreateString("phone"), action});
+			if (!std::holds_alternative<bool>(matches)) {
+				throw std::runtime_error("original phone seek requires a boolean command-action match");
+			}
+
+			return std::get<bool>(matches);
+		}
+
+		void FindPhoneCall() {
+			if (!Holding() || !Target.Navigation || !PhoneHooks[0] || !PhoneHooks[1] || !Player || PhoneCall || State.Storage.empty()) {
+				return;
+			}
+			const auto player = Vm.ResolveObjectIdentity(*Player);
+			if (!player) {
+				return;
+			}
+			const auto app = Vm.GetSlot(Vm.RootTableInContext(*PlayerContext), std::string("app"));
+			if (Vm.Type(app) != SquirrelValueType::Instance || !Vm.HasSlot(app, std::string("player")) || Vm.GetSlot(app, std::string("player")) != *player) {
+				Block("original phone route query requires its current application/player owner");
+				return;
+			}
+			if (!Vm.HasSlot(app, std::string("getActiveTrigger"))) {
+				return;
+			}
+			const auto enabled = CallSeekMethod(Vm, Vm.GetSlot(app, std::string("getPhoneTriggerEnabled")), std::array<SquirrelValue, 1>{app});
+			if (!std::holds_alternative<bool>(enabled) && !std::holds_alternative<std::int32_t>(enabled)) {
+				throw std::runtime_error("original phone seek requires its actual integer/boolean trigger flag");
+			}
+			const bool is_enabled = std::holds_alternative<bool>(enabled) ? std::get<bool>(enabled) : std::get<std::int32_t>(enabled) != 0;
+			if (!is_enabled) {
+				return;
+			}
+			const auto contacts = CallSeekMethod(Vm, Vm.GetSlot(app, std::string("getContacts")), std::array<SquirrelValue, 1>{app});
+			if (Vm.Type(contacts) != SquirrelValueType::Array || Vm.Length(contacts) > 4096) {
+				throw std::runtime_error("original phone seek requires a bounded actual contact array");
+			}
+			std::optional<PhoneCallRoute> selected;
+			for (std::size_t index = 0; index < Vm.Length(contacts); ++index) {
+				const auto contact = Vm.GetSlot(contacts, static_cast<std::int32_t>(index));
+				// Contact records may be original PSB-backed objects rather than plain tables.
+				const auto id = Vm.ReadSlot(contact, std::string("id"));
+				const auto active = CallSeekMethod(Vm, Vm.GetSlot(app, std::string("getActiveTrigger")), std::array<SquirrelValue, 2>{app, id});
+				if (Vm.Type(active) != SquirrelValueType::Table || !Vm.HasSlot(active, std::string("call"))) {
+					continue;
+				}
+				const auto label = StringText(Vm.GetSlot(active, std::string("call")));
+				if (!Target.Navigation->Reaches(State.Storage, label, Target.Storage, Target.Label)) {
+					continue;
+				}
+				const auto chara = StringText(id);
+				if (chara.empty() || chara.size() > 4096 || label.size() > 4096) {
+					throw std::runtime_error("original phone seek route identity exceeds its bound");
+				}
+				if (selected && (selected->Chara != chara || selected->Label != label)) {
+					Block("original phone has multiple active calls toward the requested scene; genuine route input required");
+					return;
+				}
+				selected = PhoneCallRoute{chara, label, State.Storage};
+			}
+			PhoneCall = std::move(selected);
+		}
+
+		[[nodiscard]] bool PhoneState(const SquirrelValue& function, std::string_view getter) {
+			const auto result = CallSeekMethod(Vm, Vm.ReadSlot(function, std::string(getter)), std::array<SquirrelValue, 1>{function});
+			if (!std::holds_alternative<bool>(result)) {
+				throw std::runtime_error("original phone seek requires a boolean UI state predicate");
+			}
+
+			return std::get<bool>(result);
+		}
+
+		[[nodiscard]] SquirrelValue PreparePhoneButton(const SquirrelValue& function, const SquirrelValue& name, bool focus, bool dialog) {
+			const auto panel = CallSeekMethod(Vm, Vm.ReadSlot(function, std::string("getPanel")), std::array<SquirrelValue, 1>{function});
+			if (Vm.Type(panel) != SquirrelValueType::Instance || PhoneState(panel, "getMotionLock")) {
+				return {};
+			}
+			const auto button = CallSeekMethod(Vm, Vm.GetSlot(panel, std::string("getButton")), std::array<SquirrelValue, 2>{panel, name});
+			if (Vm.Type(button) != SquirrelValueType::Instance || !PhoneState(button, "getPressEnable")) {
+				return {};
+			}
+			const auto action = Vm.CreateTable();
+			Vm.NewSlot(action, std::string("panel"), panel);
+			Vm.NewSlot(action, std::string("name"), name);
+			Vm.NewSlot(action, std::string("focus"), focus);
+			PhoneCall->PendingControls[dialog ? 1 : 0] = Vm.BorrowObjectIdentity(function);
+			++State.PhoneActions;
+
+			return action;
+		}
+
+		void FinishPhoneControl(const SquirrelValue& function, bool dialog) {
+			if (!PhoneCall) {
+				return;
+			}
+			auto& pending = PhoneCall->PendingControls[dialog ? 1 : 0];
+			if (!pending || *pending != Vm.BorrowObjectIdentity(function)) {
+				throw std::runtime_error("original phone seek control returned through a different callback owner");
+			}
+			pending.reset();
+		}
+
+		void ObservePhoneFailure(const SquirrelValue& error) noexcept {
+			if (!Holding()) {
+				return;
+			}
+			try {
+				// The original phone transfers control by throwing this exact typed event.
+				// Its containing original handler must receive and consume the same value.
+				const auto root = PlayerContext ? Vm.RootTableInContext(*PlayerContext) : SquirrelValue{};
+				if (PhoneCall && PhoneCall->Requested && PlayerContext && Vm.Type(error) == SquirrelValueType::Instance && Vm.HasSlot(root, std::string("PhoneJumpException")) && Vm.IsInstanceOf(error, Vm.GetSlot(root, std::string("PhoneJumpException"))) && Vm.HasSlot(error, std::string("target")) && StringText(Vm.GetSlot(error, std::string("target"))) == PhoneCall->Label) {
+					return;
+				}
+				State.Phase = OriginalSceneSeekPhase::Failed;
+				State.Reason = "original phone seek callback failed; original exception propagated";
+			} catch (...) {
+				State.Phase = OriginalSceneSeekPhase::Failed;
+			}
+		}
+
+		[[nodiscard]] bool PhonePanelBelongsToPlayer(const SquirrelValue& panel) {
+			const auto app = Vm.GetSlot(Vm.RootTableInContext(*PlayerContext), std::string("app"));
+			const auto player = Vm.ResolveObjectIdentity(*Player);
+			if (!player || Vm.Type(app) != SquirrelValueType::Instance || !Vm.HasSlot(app, std::string("player")) || Vm.GetSlot(app, std::string("player")) != *player) {
+				return false;
+			}
+			// Original panel ownership can forward through more than one Object delegate.
+			// Follow only actual Object delegates, with a finite guard for malformed cycles.
+			auto owner = Vm.GetSlot(panel, std::string("_owner"));
+			constexpr std::size_t kMaximumOwnerDelegates = 16;
+			for (std::size_t depth = 0; depth < kMaximumOwnerDelegates; ++depth) {
+				if (owner == *player || owner == app) {
+					return true;
+				}
+				if (Vm.Type(owner) != SquirrelValueType::Instance || !Vm.HasSlot(owner, std::string("getDelegate"))) {
+					return false;
+				}
+				owner = CallSeekMethod(Vm, Vm.GetSlot(owner, std::string("getDelegate")), std::array<SquirrelValue, 1>{owner});
+			}
+
+			return false;
+		}
+
+		[[nodiscard]] SquirrelValue PreparePhoneControl(const SquirrelValue& function, bool dialog) {
+			if (!Holding() || !PhoneCall || !PhoneCall->Requested || !Player) {
+				return {};
+			}
+			if (PhoneCall->PendingControls[dialog ? 1 : 0] || (dialog && (!PhoneCall->ContactPressed || PhoneCall->DialogPressed))) {
+				return {};
+			}
+			if (!dialog) {
+				const auto automatic = Vm.ReadSlot(function, std::string("isAuto"));
+				if (!std::holds_alternative<bool>(automatic)) {
+					throw std::runtime_error("original phone seek requires its actual automatic-mode flag");
+				}
+				if (std::get<bool>(automatic)) {
+					return {};
+				}
+			}
+			if (++PhoneCall->Polls > Limits.MaximumConfirmationPolls) {
+				Block("original phone call controls exceeded their bounded readiness wait; genuine input required");
+				return {};
+			}
+			const auto panel = CallSeekMethod(Vm, Vm.ReadSlot(function, std::string("getPanel")), std::array<SquirrelValue, 1>{function});
+			if (Vm.Type(panel) != SquirrelValueType::Instance || !Vm.HasSlot(panel, std::string("_owner"))) {
+				return {};
+			}
+			if (!PhonePanelBelongsToPlayer(panel)) {
+				return {};
+			}
+			PhoneCall->Opened = true;
+			if (dialog) {
+				const auto state = SeekInteger(Vm, function, "state");
+				// Original onContactsOk selects state13 for call-only, state14 for mail/call.
+				if (state == 13 || state == 14) {
+					const auto action = PreparePhoneButton(function, Vm.CreateString(state == 13 ? "dialog/sel1" : "dialog/sel2"), true, true);
+					PhoneCall->DialogPressed = Vm.Type(action) != SquirrelValueType::Null;
+					return action;
+				}
+				return {};
+			}
+			if (PhoneCall->ContactPressed) {
+				return {};
+			}
+			if (PhoneState(function, "getIsPowerOn")) {
+				return PreparePhoneButton(function, Vm.CreateString("poweron/ok"), false, false);
+			} else if (PhoneState(function, "getIsRoot")) {
+				return PreparePhoneButton(function, Vm.CreateString("root/contacts"), true, false);
+			} else if (PhoneState(function, "getIsContacts")) {
+				const auto list = Vm.ReadSlot(function, std::string("sl"));
+				const auto infos = Vm.GetSlot(list, std::string("infos"));
+				const auto names = Vm.GetSlot(list, std::string("panelNames"));
+				if (Vm.Type(infos) != SquirrelValueType::Array || Vm.Type(names) != SquirrelValueType::Array || Vm.Length(infos) > 4096) {
+					throw std::runtime_error("original phone seek requires actual bounded contact list metadata");
+				}
+				for (std::size_t index = 0; index < Vm.Length(infos); ++index) {
+					const auto info = Vm.GetSlot(infos, static_cast<std::int32_t>(index));
+					if (StringText(Vm.ReadSlot(info, std::string("id"))) == PhoneCall->Chara) {
+						if (index >= Vm.Length(names)) {
+							Block("original phone call contact requires scrolling; genuine route input required");
+							return {};
+						}
+						const auto action = PreparePhoneButton(function, Vm.GetSlot(names, static_cast<std::int32_t>(index)), true, false);
+						PhoneCall->ContactPressed = Vm.Type(action) != SquirrelValueType::Null;
+						return action;
+					}
+				}
+				Block("original phone call contact is absent from its actual list; genuine input required");
+			}
+
+			return {};
+		}
+
 		void Block(std::string reason) {
 			Releasing = false;
 			State.Phase = OriginalSceneSeekPhase::Blocked;
 			State.Reason = std::move(reason);
 		}
 
+		std::optional<PhoneCallRoute> PhoneCall;
+		std::array<bool, 2> PhoneHooks{};
 		SquirrelVm& Vm;
 		OriginalSceneSeekTarget Target;
 		OriginalSceneSeekLimits Limits;
@@ -465,6 +792,44 @@ namespace sgre::script {
 			return;
 		}
 		const auto root = state.Vm.RootTable();
+		const std::array<std::string_view, 2> phone_classes{"PhoneFunction", "PhoneDialogFunction"};
+		for (std::size_t index = 0; state.Target.Navigation && index < phone_classes.size(); ++index) {
+			if (state.PhoneHooks[index] || !state.Vm.HasSlot(root, std::string(phone_classes[index]))) {
+				continue;
+			}
+			const auto type = state.Vm.GetSlot(root, std::string(phone_classes[index]));
+			const std::weak_ptr<Implementation> weak = m_Implementation;
+			const auto prepare = state.Vm.CreateNativeClosure("seek.phone.prepare", [weak, dialog = index == 1](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				if (arguments.size() != 1) {
+					throw std::runtime_error("original phone seek preparation requires its function receiver");
+				}
+				if (const auto owner = weak.lock()) {
+					return SquirrelNativeResult::ReturnValue(owner->PreparePhoneControl(arguments[0], dialog));
+				}
+
+				return SquirrelNativeResult::NoValues();
+			});
+			const auto finish = state.Vm.CreateNativeClosure("seek.phone.finish", [weak, dialog = index == 1](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				if (arguments.size() != 1) {
+					throw std::runtime_error("original phone seek completion requires its function receiver");
+				}
+				if (const auto owner = weak.lock()) {
+					owner->FinishPhoneControl(arguments[0], dialog);
+				}
+
+				return SquirrelNativeResult::NoValues();
+			});
+			const auto failure = state.Vm.CreateNativeClosure("seek.phone.failure", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				if (const auto owner = weak.lock(); owner && arguments.size() == 2) {
+					owner->ObservePhoneFailure(arguments[1]);
+				}
+
+				return SquirrelNativeResult::NoValues();
+			});
+			InstallScriptPhoneHook(state.Vm, type, prepare, finish, failure);
+			state.PhoneHooks[index] = true;
+		}
+
 		if (state.Target.Navigation && !state.NumpadLayerInstalled && state.Vm.HasSlot(root, std::string("MotionPanelLayer"))) {
 			const auto layer = state.Vm.GetSlot(root, std::string("MotionPanelLayer"));
 			const auto original_delegate = state.Vm.GetSlot(layer, std::string("setDelegate"));
@@ -669,11 +1034,20 @@ namespace sgre::script {
 						return SquirrelNativeResult::ReturnValue(*pressed);
 					}
 				}
-				if (owner && owner->Holding() && owner->Player && *owner->Player == vm.BorrowObjectIdentity(arguments.front()) && name) {
-					if (*name == "force_skip_all") {
+				if (owner && owner->Holding() && owner->Player && *owner->Player == vm.BorrowObjectIdentity(arguments.front())) {
+					const auto receiver = arguments[0];
+					const auto action = arguments[1];
+					if (owner->PhoneQuery(receiver, action)) {
+						if (!owner->PhoneCall->Requested) {
+							owner->PhoneCall->Requested = true;
+							++owner->State.PhoneActions;
+						}
 						return SquirrelNativeResult::ReturnValue(true);
 					}
-					if (*name == "cancel" && owner->OriginalMovieCancelCall() && owner->RequestMovieCancel(arguments.front())) {
+					if (name && *name == "force_skip_all") {
+						return SquirrelNativeResult::ReturnValue(!owner->PhoneCall || !owner->PhoneCall->Requested);
+					}
+					if (name && *name == "cancel" && owner->OriginalMovieCancelCall() && owner->RequestMovieCancel(arguments.front())) {
 						return SquirrelNativeResult::ReturnValue(true);
 					}
 				}
@@ -703,37 +1077,37 @@ namespace sgre::script {
 			state.Block("original seek player retired before the requested snapshot");
 			return;
 		}
-		const auto observed = state.Vm.ObserveContext(*state.PlayerContext, kSquirrelObservationFrames, 0);
+		const auto observed = state.Vm.ObserveContext(*state.PlayerContext, 1, 0);
 		if (observed.State == SquirrelContextState::Idle && observed.FrameCount == 0) {
-			return;
-		}
-		if (observed.FramesTruncated) {
-			state.Block("original scene seek context exceeds its bounded observation depth");
 			return;
 		}
 		if (observed.State != SquirrelContextState::Suspended) {
 			return;
 		}
-		if (state.MoviePending) {
-			bool movie_wait = false;
-			for (const auto& frame : observed.Frames) {
-				movie_wait = movie_wait || (frame.Source == "rsc_project/script/override.nut" && frame.Function == "tag_waitmovie");
-			}
-			if (!movie_wait) {
-				state.MoviePending = false;
-				state.MovieDialog.reset();
-			}
+		if (state.MoviePending && !state.Vm.FindContextFrame(*state.PlayerContext, "rsc_project/script/override.nut", "tag_waitmovie")) {
+			state.MoviePending = false;
+			state.MovieDialog.reset();
 		}
-		for (const auto& frame : observed.Frames) {
-			const bool choice = frame.Source == "advengine/script/envplayer.nut" && frame.Function == "doSelect";
-			const bool phone = frame.Source == "rsc_project/script/override.nut" && frame.Function == "openUserInteractionPhone";
-			if (choice || phone) {
-				state.State.Source = frame.Source;
-				state.State.Function = frame.Function;
-				state.State.ScriptLine = frame.SourceLine;
-				state.Block(choice ? "original selection requires genuine route input; automatic seek released" : "original phone interaction requires genuine input; automatic seek released");
-				return;
-			}
+		state.FindPhoneCall();
+		if (!state.Holding()) {
+			return;
+		}
+		if (state.PhoneCall && state.PhoneCall->Requested && !state.PhoneCall->Opened && ++state.PhoneCall->RequestPolls > state.Limits.MaximumConfirmationPolls) {
+			state.Block("original phone open input exceeded its bounded readiness wait; genuine route input required");
+			return;
+		}
+		const auto choice = state.Vm.FindContextFrame(*state.PlayerContext, "advengine/script/envplayer.nut", "doSelect");
+		auto phone = state.Vm.FindContextFrame(*state.PlayerContext, "rsc_project/script/override.nut", "openUserInteractionPhone");
+		if (phone && state.PhoneCall && state.PhoneCall->Requested) {
+			state.PhoneCall->Opened = true;
+			phone.reset();
+		}
+		if (choice || phone) {
+			const bool selected_choice = choice && (!phone || choice->FrameIndex < phone->FrameIndex);
+			state.State.Source = selected_choice ? "advengine/script/envplayer.nut" : "rsc_project/script/override.nut";
+			state.State.Function = selected_choice ? "doSelect" : "openUserInteractionPhone";
+			state.State.ScriptLine = selected_choice ? choice->SourceLine : phone->SourceLine;
+			state.Block(selected_choice ? "original selection requires genuine route input; automatic seek released" : "original phone interaction requires genuine input; automatic seek released");
 		}
 	}
 
