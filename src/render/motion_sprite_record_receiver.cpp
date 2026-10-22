@@ -12,14 +12,17 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -168,6 +171,36 @@ namespace sgre::render {
 		accumulated.MinimumY = std::min(accumulated.MinimumY, bounds.MinimumY);
 		accumulated.MaximumX = std::max(accumulated.MaximumX, bounds.MaximumX);
 		accumulated.MaximumY = std::max(accumulated.MaximumY, bounds.MaximumY);
+	}
+
+	static bool PacketOutsideClipVolume(const scene::MotionPreparedFrame& frame, const scene::MotionBatchSubmission& packet) {
+		scene::MotionShaderTransform transform;
+		transform.Graphics.Rows = frame.View.Coefficients;
+		transform.Current.Rows = frame.Model.Coefficients;
+		const auto matrix = scene::PrepareMotionShaderMatrix(transform);
+		std::array<bool, 4> outside{true, true, true, true};
+		for (const auto& position : packet.Positions) {
+			for (std::size_t axis = 0; axis < 2; ++axis) {
+				const auto row = axis * 4;
+				const double first = static_cast<double>(position.X) * matrix[row];
+				const double second = static_cast<double>(position.Y) * matrix[row + 1];
+				const double translation = matrix[row + 3];
+				const auto magnitude = std::abs(first) + std::abs(second) + std::abs(translation);
+				if (!std::isfinite(magnitude) || magnitude > std::numeric_limits<float>::max() / 8.0) {
+					return false;
+				}
+				// VS1/VS4 dot (x,y,1) with these exact registers; W is the appended 1.
+				// Enclose float multiply/add or contracted dot rounding before clipping.
+				const double error = 8.0 * std::numeric_limits<float>::epsilon() * magnitude + 8.0 * std::numeric_limits<float>::min();
+				const double value = (first + second) + translation;
+				outside[axis * 2] = outside[axis * 2] && value + error < -1;
+				outside[axis * 2 + 1] = outside[axis * 2 + 1] && value - error > 1;
+			}
+		}
+
+		return !packet.Positions.empty() && std::any_of(outside.begin(), outside.end(), [](bool value) {
+			return value;
+		});
 	}
 
 	class MotionSpriteRecordReceiver::Implementation {
@@ -600,6 +633,7 @@ namespace sgre::render {
 			if (pipeline_index >= binding.PipelineCount) {
 				throw std::runtime_error("live copied motion packet requires its actual RGBA source");
 			}
+			const bool clipped_without_copy = UsingPreparedFrame && (BlendMode & 0xf00) == 0x100 && !ActualCopySelected && PacketOutsideClipVolume(*Frame, packet);
 			for (std::size_t index = 0; index < packet.Positions.size(); ++index) {
 				auto& vertex = Vertices[index];
 				vertex.Position = packet.Positions[index];
@@ -619,6 +653,9 @@ namespace sgre::render {
 			},
 			    InputProducer);
 			++InputCount;
+			if (clipped_without_copy) {
+				return;
+			}
 			Records.Append(binding.External ? binding.Native.Texture : binding.Texture.Backend, binding.Pipelines[pipeline_index], *inputs, packet.Key);
 		}
 
@@ -795,8 +832,11 @@ namespace sgre::render {
 						if (!texture || value->Mode != scene::MotionBatchMode::IndexedTriangleStrip || value->Positions.size() < 3 || value->Positions.size() != value->Uvs.size() || value->Positions.size() != value->Colors.size() || value->Positions.size() > Vertices.size() || value->Indices.size() < 3 || value->Indices.size() > MaximumIndices || ++packets > Inputs.size() - InputCount) {
 							throw std::runtime_error("prepared motion packet exceeds the actual geometry/input capacity");
 						}
-						if (PacketPipelineIndex(blend, value->Key) >= ResolveBinding(*texture).PipelineCount || ((blend & 0xf00) == 0x100 && !selected)) {
-							throw std::runtime_error("prepared copied motion packet lacks its actual RGBA source or prior nonempty copy");
+						if (PacketPipelineIndex(blend, value->Key) >= ResolveBinding(*texture).PipelineCount) {
+							throw std::runtime_error("prepared copied motion packet lacks its actual RGBA source; blend=" + std::to_string(blend) + " key=" + std::to_string(value->Key) + " texture=" + std::to_string(*texture));
+						}
+						if ((blend & 0xf00) == 0x100 && !selected && !PacketOutsideClipVolume(frame, *value)) {
+							throw std::runtime_error("prepared visible copied motion packet lacks its prior nonempty copy; blend=" + std::to_string(blend) + " key=" + std::to_string(value->Key) + " texture=" + std::to_string(*texture));
 						}
 					}
 				};

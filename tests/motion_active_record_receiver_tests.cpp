@@ -10,6 +10,7 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -426,17 +427,61 @@ static void TestActualOccurrences(const std::filesystem::path& shader) {
 	receiver.ReleaseFrameInputs();
 	heap.End();
 	cleanup.HeapBegun = false;
+	// Empty-copy admission depends on real transformed vertices, not the cached copy bounds.
+	const std::array clipped_quads{Quad(20, -4, 24, 4), Quad(-24, -4, -20, 4), Quad(-4, 20, 4, 24), Quad(-4, -24, 4, -20)};
+	for (const auto& positions : clipped_quads) {
+		empty_copy.Positions[0] = positions;
+		empty_copy.Geometry[0].Calculated = false;
+		empty_copy.Geometry[0].CachedBounds = {};
+		heap.Begin();
+		cleanup.HeapBegun = true;
+		records.BeginFrame({}, sgre::render::SpritePassLoadAction::Clear);
+		receiver.DrawActualFrame(empty_copy.Frame, std::array{rgba}, empty_copy.Scratch);
+		Require(records.IsActive() && records.RecordDepth() == 0 && statistics.Current().DrawOperations == 0, "fully clipped copied geometry must leave its real frame balanced without a fabricated destination");
+		const auto empty_pixels = renderer->Capture(records.EndFrame());
+		Require(std::all_of(empty_pixels.Rgba.begin(), empty_pixels.Rgba.end(), [](auto value) {
+			return value == 0;
+		}),
+		    "fully clipped copied geometry changed the clear target");
+		receiver.ReleaseFrameInputs();
+		heap.End();
+		cleanup.HeapBegun = false;
+	}
+
+	empty_copy.Positions[0] = clipped_quads[0];
+	empty_copy.Geometry[0].Calculated = false;
+	empty_copy.Geometry[0].CachedBounds = {};
+	empty_copy.Commands[0].PixelUvs.X = std::numeric_limits<float>::quiet_NaN();
 	heap.Begin();
 	cleanup.HeapBegun = true;
 	records.BeginFrame({}, sgre::render::SpritePassLoadAction::Clear);
 	RequireFailure([&] {
 		receiver.DrawActualFrame(empty_copy.Frame, std::array{rgba}, empty_copy.Scratch);
 	},
-	    "prior nonempty copy");
-	Require(!records.IsActive(), "an empty region cannot reuse copied bytes from a discarded outer command buffer");
+	    "finite");
+	Require(!records.IsActive(), "clipped geometry must retain original finite-coordinate validation and abort receiving");
 	receiver.ReleaseFrameInputs();
 	heap.End();
 	cleanup.HeapBegun = false;
+	empty_copy.Commands[0].PixelUvs.X = 0;
+
+	const auto near_edge = std::nextafter(4.0f, std::numeric_limits<float>::infinity());
+	for (const auto& positions : std::array{Quad(-4, -4, 4, 4), Quad(near_edge, -4, near_edge + 1, 4)}) {
+		empty_copy.Positions[0] = positions;
+		empty_copy.Geometry[0].Calculated = true;
+		empty_copy.Geometry[0].CachedBounds = {20, 20, 24, 24};
+		heap.Begin();
+		cleanup.HeapBegun = true;
+		records.BeginFrame({}, sgre::render::SpritePassLoadAction::Clear);
+		RequireFailure([&] {
+			receiver.DrawActualFrame(empty_copy.Frame, std::array{rgba}, empty_copy.Scratch);
+		},
+		    "prior nonempty copy");
+		Require(!records.IsActive(), "visible or rounding-ambiguous geometry must not bypass missing copied-owner admission");
+		receiver.ReleaseFrameInputs();
+		heap.End();
+		cleanup.HeapBegun = false;
+	}
 	heap.Begin();
 	cleanup.HeapBegun = true;
 	records.BeginFrame({}, sgre::render::SpritePassLoadAction::Clear);
