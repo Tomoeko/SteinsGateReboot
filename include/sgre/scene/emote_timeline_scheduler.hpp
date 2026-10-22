@@ -7,7 +7,9 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <string>
 #include <string_view>
+#include <vector>
 
 namespace sgre::scene {
 	class EmoteVariableControls;
@@ -16,6 +18,12 @@ namespace sgre::scene {
 		float Position = 0;
 		bool Playing = false;
 		bool Looped = false;
+		std::uint32_t Flags = 0;
+		float BlendRatio = 1;
+	};
+
+	struct EmoteTimelinePlaybackInfo {
+		std::string Label;
 		std::uint32_t Flags = 0;
 		float BlendRatio = 1;
 	};
@@ -44,6 +52,7 @@ namespace sgre::scene {
 		[[nodiscard]] bool Animating() const;
 		[[nodiscard]] bool IsPlaying(std::string_view name = {}) const;
 		[[nodiscard]] std::optional<EmoteTimelinePlaybackState> State(std::string_view name) const;
+		[[nodiscard]] std::vector<EmoteTimelinePlaybackInfo> PlayingInfoList() const;
 		[[nodiscard]] std::size_t ActiveCount() const;
 		[[nodiscard]] std::size_t CatalogCount() const;
 		// Native2ccc50 runs once before channel processing, using the same actual containing elapsed ticks.

@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <string_view>
+#include <vector>
 
 namespace sgre::scene {
 	class MotionManagerRuntime;
@@ -74,6 +75,7 @@ namespace sgre::scene {
 		void FadeInTimeline(std::string_view name, float duration = 0, float easing = 0);
 		void FadeOutTimeline(std::string_view name, float duration = 0, float easing = 0);
 		[[nodiscard]] bool TimelinePlaying(std::string_view name = {}) const;
+		[[nodiscard]] std::vector<EmoteTimelinePlaybackInfo> PlayingTimelineInfoList() const;
 		[[nodiscard]] const MotionPlayerCommands& Commands() const;
 		[[nodiscard]] const MotionRootScene& Root() const;
 		[[nodiscard]] const MotionScenePlayer& PlainPlayer() const;

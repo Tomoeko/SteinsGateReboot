@@ -204,6 +204,33 @@ static void TestPlayStopParallelAndNormalization() {
 	Require(!scheduler.IsPlaying(), "unsupported difference mode must reject before partial active-list mutation");
 }
 
+static void TestPlayingInfoOrderFlagsAndCachedBlend() {
+	ActualMotionFixture actual;
+	auto controls = actual.Controls();
+	const auto definition = Definition({Track("instant", {Key(0, 5), Hidden(8)})}, 0, 8, 8);
+	const auto document = Document({Labeled("Ａ１", definition), Labeled("B2", definition), Labeled("unprepared", Atom(sgre::resource::PsbObject{}))});
+	sgre::scene::EmoteTimelineScheduler scheduler(*controls, document, [] {
+	});
+	Require(scheduler.PlayingInfoList().empty(), "metadata catalogue entries must not fabricate active playback information or prepare unused malformed tracks");
+	scheduler.Play("B2");
+	Require(scheduler.PlayingInfoList()[0].Flags == 1 && scheduler.State("B2")->Flags == 0, "default native playback exports parallel bit without changing its stored zero flags");
+	scheduler.Play("B2", 2);
+	scheduler.Play("Ａ１", 1);
+	scheduler.SetBlendRatio("B2", .25f, 4);
+	const auto before = scheduler.PlayingInfoList();
+	Require(before.size() == 2 && before[0].Label == "B2" && before[1].Label == "A1" && before[0].Flags == 3 && before[1].Flags == 1 && before[0].BlendRatio == 1 && before[1].BlendRatio == 1, "native info must preserve active insertion order, normalized playback labels, flags OR1 and cached blend before update");
+	Require(scheduler.State("B2")->Flags == 2 && scheduler.State("B2")->Position == 0, "observing native exported flags must not rewrite stored playback or advance actual timing");
+	scheduler.Update(2);
+	const auto advanced = scheduler.PlayingInfoList();
+	Require(advanced[0].BlendRatio == .625f && advanced[1].BlendRatio == 1 && before[0].BlendRatio == 1, "info owns a snapshot of the real published blend cache without retaining a live controller view");
+	scheduler.Play("A1", 1);
+	Require(scheduler.PlayingInfoList()[0].Label == "B2" && scheduler.PlayingInfoList()[1].Label == "A1", "replay of an existing label must not reorder exported active information");
+	scheduler.Stop("B2");
+	Require(scheduler.PlayingInfoList().size() == 1 && scheduler.PlayingInfoList()[0].Label == "A1", "stopped prepared catalogue entries must disappear from active info");
+	scheduler.Stop();
+	Require(scheduler.PlayingInfoList().empty() && advanced[0].Label == "B2", "stop-all must return a real empty list without invalidating prior owned results");
+}
+
 static void TestLazyAdmissionAndContainingGuards() {
 	ActualMotionFixture actual;
 	auto controls = actual.Controls();
@@ -577,6 +604,7 @@ int main() {
 		TestAnimatingContainingGuardAndThread();
 		TestOriginalSchedulerStatesAndRealControlPublication();
 		TestPlayStopParallelAndNormalization();
+		TestPlayingInfoOrderFlagsAndCachedBlend();
 		TestLazyAdmissionAndContainingGuards();
 		TestAssignedSchedulerRetainsCatalogAndSourceOrder();
 		TestAssignedSchedulerBlendAndSourceRetirement();

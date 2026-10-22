@@ -248,13 +248,13 @@ static sgre::script::SquirrelVmLimits Limits() {
 
 class Fixture {
 public:
-	explicit Fixture(bool common = true, std::string_view legacy_family = {}, sgre::scene::EmoteWindRandom* wind_random = nullptr) : Vm(Limits()), Objects(Vm), Psb(Vm, Objects), Cache([this](auto, const auto&) {
-		                                                                                                                                 return sgre::render::SpriteTextureHandle{static_cast<std::uint32_t>(++Uploads), 1, &Uploads};
-	                                                                                                                                 },
-	                                                                                                                                                                                  [this](auto) {
-		                                                                                                                                                                                  ++Releases;
-	                                                                                                                                                                                  }),
-	                                                                                                                                 Assets(Cache), Tree(8), Layers(Vm, Objects, Tree), Clock(0) {
+	explicit Fixture(bool common = true, std::string_view legacy_family = {}, sgre::scene::EmoteWindRandom* wind_random = nullptr, std::shared_ptr<sgre::resource::PsbDocument> document = {}) : Vm(Limits()), Objects(Vm), Psb(Vm, Objects), Cache([this](auto, const auto&) {
+		                                                                                                                                                                                             return sgre::render::SpriteTextureHandle{static_cast<std::uint32_t>(++Uploads), 1, &Uploads};
+	                                                                                                                                                                                             },
+	                                                                                                                                                                                                                                              [this](auto) {
+		                                                                                                                                                                                                                                              ++Releases;
+	                                                                                                                                                                                                                                              }),
+	                                                                                                                                                                                             Assets(Cache), Tree(8), Layers(Vm, Objects, Tree), Clock(0) {
 		Vm.InstallRecoveredBaseLibrary();
 		Layers.ConfigureMotionOwners(Psb, Assets, Cache);
 		Leaf = Vm.Invoke(Layers.LayerClass(), std::array<sgre::script::SquirrelValue, 1>{Vm.RootTable()}).Value;
@@ -264,7 +264,7 @@ public:
 		for (std::size_t index = 0; index < Seed.size(); ++index) {
 			Seed[index] = static_cast<std::uint32_t>(index) * 0x9e3779b9u + 17;
 		}
-		auto owner_document = OwnerDocument(common);
+		auto owner_document = document ? std::move(document) : OwnerDocument(common);
 		if (!legacy_family.empty()) {
 			Set(MutableField(owner_document->Root, "metadata"), std::string(legacy_family), Atom(sgre::resource::PsbArray{Atom(sgre::resource::PsbObject{{"enabled", Atom(true)}})}));
 		}
@@ -1700,6 +1700,47 @@ static void TestPassQueuedGuardAndRetainedCompletedCommonFrame() {
 	Require(!task.Player().TimelinePlaying("phase") && task.Player().ReadVariable("probe") == 9 && task.Player().Commands().ParameterValues().Read("probe") == 7, "successful native Pass remains a deferred control operation even with real Common enabled");
 }
 
+static void TestPlayingInfoOriginalAliasesAndDetachedReceiver() {
+	auto document = OwnerDocument(false);
+	auto& definitions = std::get<sgre::resource::PsbArray>(MutableField(MutableField(document->Root, "metadata"), "timelineControl").Data);
+	auto second = definitions.front();
+	Set(second, "label", Atom(std::string("Ａ１")));
+	definitions.push_back(std::move(second));
+	Fixture fixture(false, {}, nullptr, std::move(document));
+	const auto instance = fixture.New();
+	auto task = fixture.Bindings->Task(instance);
+	std::size_t conversions = 0;
+	const auto ignored = fixture.Vm.CreateTable();
+	fixture.Vm.NewSlot(ignored, "_tostring", fixture.Vm.CreateNativeClosure("unused.info.stringify", [&](auto&, auto) {
+		++conversions;
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("unused"));
+	}));
+	for (const auto* name : {"getPlayingTimelineInfoList", "getPlayingMotionInfoList"}) {
+		const auto empty = fixture.Call(instance, name, {ignored, true});
+		Require(fixture.Vm.Type(empty) == sgre::script::SquirrelValueType::Array && fixture.Vm.Length(empty) == 0, "an attached original info query must return an actual empty array before first playback");
+	}
+	static_cast<void>(fixture.Call(instance, "playTimeline", {std::string("phase"), std::int32_t{2}}));
+	static_cast<void>(fixture.Call(instance, "playMotion", {std::string("Ａ１"), std::int32_t{1}}));
+	static_cast<void>(fixture.Call(instance, "setTimelineBlendRatio", {std::string("phase"), .25f, 4.0f}));
+	for (const auto* name : {"getPlayingTimelineInfoList", "getPlayingMotionInfoList"}) {
+		const auto list = fixture.Call(instance, name, {ignored, std::numeric_limits<float>::infinity()});
+		Require(fixture.Vm.Length(list) == 2, "both original aliases must enumerate the same real active scheduler");
+		const auto first = fixture.Vm.ReadSlot(list, std::int32_t{0});
+		const auto second_info = fixture.Vm.ReadSlot(list, std::int32_t{1});
+		Require(fixture.Vm.Type(first) == sgre::script::SquirrelValueType::Table && fixture.Vm.Length(first) == 3 && sgre::script::StringText(fixture.Vm.ReadSlot(first, "label")) == "phase" && std::get<std::int32_t>(fixture.Vm.ReadSlot(first, "flags")) == 3 && std::get<float>(fixture.Vm.ReadSlot(first, "blendRatio")) == 1 && sgre::script::StringText(fixture.Vm.ReadSlot(second_info, "label")) == "A1" && std::get<std::int32_t>(fixture.Vm.ReadSlot(second_info, "flags")) == 1, "actual info tables must contain only original label, flags OR1 and cached float blendRatio in playback order");
+	}
+	static_cast<void>(fixture.Call(instance, "clear"));
+	Require(fixture.Vm.Length(fixture.Call(instance, "getPlayingTimelineInfoList")) == 2 && task.Player().PlainPlayer().Scene() == nullptr, "native plain Clear must preserve actual timeline playback information independently of selected geometry");
+	fixture.Layers.ReleaseInstance(fixture.Leaf);
+	for (const auto* name : {"getPlayingTimelineInfoList", "getPlayingMotionInfoList"}) {
+		Require(std::holds_alternative<std::monostate>(fixture.Call(instance, name, {ignored})), "detached original raw-VM info query returns no values before borrowing expired task state");
+	}
+	Require(!task.IsLive() && conversions == 0, "ignored info operands must never stringify or retain a detached physical owner");
+	fixture.Bindings->ReleaseInstance(instance);
+	Require(fixture.Bindings->CanClose(), "the detached info-query wrapper must release without any independent physical owner");
+}
+
 static void TestSkipTypedVoidExtrasPausedCurrentAndDetachedReceiver() {
 	std::size_t conversions = 0;
 	Fixture fixture(false);
@@ -1791,6 +1832,7 @@ static void TestSkipQueuedGuardAndWarmCommonClearProvenance() {
 int main(int argc, char** argv) {
 	try {
 		TestSkipTypedVoidExtrasPausedCurrentAndDetachedReceiver();
+		TestPlayingInfoOriginalAliasesAndDetachedReceiver();
 		TestSkipQueuedGuardAndWarmCommonClearProvenance();
 		TestPassTypedVoidExtrasDetachedAndDeferredPublication();
 		TestPassQueuedGuardAndRetainedCompletedCommonFrame();

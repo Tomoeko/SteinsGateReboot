@@ -75,6 +75,7 @@ namespace sgre::scene {
 	class EmoteTimelineScheduler::Implementation {
 	public:
 		struct Entry {
+			std::string Label;
 			const resource::PsbValue* Metadata = nullptr;
 			std::unique_ptr<EmoteTimelineTracks> Tracks;
 			std::uint32_t Flags = 0;
@@ -112,6 +113,7 @@ namespace sgre::scene {
 				}
 				names += name.size() + 1;
 				Entry entry;
+				entry.Label = name;
 				entry.Metadata = &actual;
 				// Native2b37b0 map insertion retains the first definition for an equivalent normalized key.
 				Entries.emplace(std::move(name), std::move(entry));
@@ -537,6 +539,23 @@ namespace sgre::scene {
 		result.BlendRatio = entry.BlendRatio;
 		return result;
 	}
+	std::vector<EmoteTimelinePlaybackInfo> EmoteTimelineScheduler::PlayingInfoList() const {
+		const auto& state = *m_Implementation;
+		state.RequireIdle();
+		std::vector<EmoteTimelinePlaybackInfo> result;
+		result.reserve(state.Active.size());
+		for (const auto* entry : state.Active) {
+			EmoteTimelinePlaybackInfo info;
+			info.Label = entry->Label;
+			// Native2cc300 exposes the stored flags with parallel bit1 set.
+			info.Flags = entry->Flags | 1u;
+			info.BlendRatio = entry->BlendRatio;
+			result.push_back(std::move(info));
+		}
+
+		return result;
+	}
+
 	std::size_t EmoteTimelineScheduler::ActiveCount() const {
 		m_Implementation->RequireIdle();
 		return m_Implementation->Active.size();

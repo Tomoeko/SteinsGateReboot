@@ -66,6 +66,7 @@ namespace sgre::script {
 		GetBlend = 56,
 		FadeIn = 57,
 		FadeOut = 58,
+		PlayingInfo = 60,
 		MainLabels = 61,
 		DifferenceLabels = 62,
 		AssignState = 63,
@@ -390,6 +391,23 @@ namespace sgre::script {
 				}
 				return SquirrelNativeResult::NoValues();
 			}
+			if (method == EmoteNativeMethod::PlayingInfo) {
+				if (record->Detached) {
+					return SquirrelNativeResult::NoValues();
+				}
+				const auto infos = record->Task->Player().PlayingTimelineInfoList();
+				std::vector<SquirrelValue> values;
+				values.reserve(infos.size());
+				for (const auto& info : infos) {
+					const auto value = Vm.CreateTable();
+					Vm.NewSlot(value, "label", Vm.CreateString(info.Label));
+					Vm.NewSlot(value, "flags", std::bit_cast<std::int32_t>(info.Flags));
+					Vm.NewSlot(value, "blendRatio", info.BlendRatio);
+					values.push_back(value);
+				}
+
+				return SquirrelNativeResult::ReturnValue(Vm.CreateArray(values));
+			}
 			if (method == EmoteNativeMethod::MainLabels || method == EmoteNativeMethod::DifferenceLabels) {
 				std::vector<SquirrelValue> values;
 				if (!record->Detached) {
@@ -540,12 +558,13 @@ namespace sgre::script {
 			owner->Construct(arguments, weak);
 			return SquirrelNativeResult::NoValues();
 		}));
-		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 49> methods{{{"skip", EmoteNativeMethod::Skip}, {"pass", EmoteNativeMethod::Pass}, {"getAnimating", EmoteNativeMethod::GetAnimating}, {"assignState", EmoteNativeMethod::AssignState}, {"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
+		const std::array<std::pair<std::string_view, EmoteNativeMethod>, 51> methods{{{"skip", EmoteNativeMethod::Skip}, {"pass", EmoteNativeMethod::Pass}, {"getAnimating", EmoteNativeMethod::GetAnimating}, {"assignState", EmoteNativeMethod::AssignState}, {"startWind", EmoteNativeMethod::StartWind}, {"stopWind", EmoteNativeMethod::StopWind}, {"setCoord", EmoteNativeMethod::SetCoordinate}, {"getLeft", EmoteNativeMethod::GetLeft}, {"getTop", EmoteNativeMethod::GetTop}, {"setScale", EmoteNativeMethod::SetScale}, {"getScale", EmoteNativeMethod::GetScale}, {"setRot", EmoteNativeMethod::SetRotation}, {"getRot", EmoteNativeMethod::GetRotation}, {"setMeshDivisionRatio", EmoteNativeMethod::SetMeshDivision}, {"getMeshDivisionRatio", EmoteNativeMethod::GetMeshDivision}, {"setBustScale", EmoteNativeMethod::SetBustScale}, {"getBustScale", EmoteNativeMethod::GetBustScale}, {"setHairScale", EmoteNativeMethod::SetHairScale}, {"getHairScale", EmoteNativeMethod::GetHairScale}, {"setPartsScale", EmoteNativeMethod::SetPartsScale}, {"getPartsScale", EmoteNativeMethod::GetPartsScale}, {"setColor", EmoteNativeMethod::SetColor}, {"getColor", EmoteNativeMethod::GetColor}, {"pause", EmoteNativeMethod::Pause}, {"clear", EmoteNativeMethod::Clear}, {"setVariable", EmoteNativeMethod::SetVariable}, {"getVariable", EmoteNativeMethod::GetVariable},
 		    {"setBlinkEnabled", EmoteNativeMethod::SetBlink}, {"getBlinkEnabled", EmoteNativeMethod::GetBlink},
 		    {"setVisible", EmoteNativeMethod::SetVisible}, {"getVisible", EmoteNativeMethod::GetVisible},
 		    {"playTimeline", EmoteNativeMethod::Play}, {"stopTimeline", EmoteNativeMethod::Stop}, {"getTimelinePlaying", EmoteNativeMethod::Playing},
 		    {"setTimelineBlendRatio", EmoteNativeMethod::SetBlend}, {"getTimelineBlendRatio", EmoteNativeMethod::GetBlend},
 		    {"fadeInTimeline", EmoteNativeMethod::FadeIn}, {"fadeOutTimeline", EmoteNativeMethod::FadeOut},
+		    {"getPlayingTimelineInfoList", EmoteNativeMethod::PlayingInfo}, {"getPlayingMotionInfoList", EmoteNativeMethod::PlayingInfo},
 		    {"getMainTimelineLabelList", EmoteNativeMethod::MainLabels}, {"getDiffTimelineLabelList", EmoteNativeMethod::DifferenceLabels},
 		    {"playMotion", EmoteNativeMethod::Play}, {"stopMotion", EmoteNativeMethod::Stop}, {"getMotionPlaying", EmoteNativeMethod::Playing},
 		    {"setMotionBlendRatio", EmoteNativeMethod::SetBlend}, {"getMotionBlendRatio", EmoteNativeMethod::GetBlend},

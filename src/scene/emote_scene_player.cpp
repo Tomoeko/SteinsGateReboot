@@ -493,6 +493,13 @@ namespace sgre::scene {
 		state.RequireMutable();
 		return state.Timelines->IsPlaying(name);
 	}
+	std::vector<EmoteTimelinePlaybackInfo> EmoteScenePlayer::PlayingTimelineInfoList() const {
+		auto& state = m_Implementation->Require();
+		state.RequireMutable();
+
+		return state.Timelines->PlayingInfoList();
+	}
+
 	const MotionPlayerCommands& EmoteScenePlayer::Commands() const {
 		return m_Implementation->Require().Commands;
 	}
