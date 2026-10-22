@@ -5,6 +5,7 @@
 #include "sgre/audio/sound_resource_control.hpp"
 #include "sgre/core/application_event_control.hpp"
 #include "sgre/core/background_calls.hpp"
+#include "sgre/debug/game_test_trace.hpp"
 #include "sgre/input/function_keys.hpp"
 #include "sgre/io/file_reader.hpp"
 #include "sgre/media/movie_audio.hpp"
@@ -146,6 +147,7 @@ namespace sgre::platform {
 		std::shared_ptr<CheckpointPreparation> CheckpointJob;
 		std::string CheckpointIdentity;
 		std::string CheckpointParent = "original-session-entry";
+		std::shared_ptr<debug::GameTestTrace> TestTrace;
 	};
 
 	static std::unique_ptr<script::SquirrelVm> CreateOriginalStartupVm() {
@@ -326,7 +328,12 @@ namespace sgre::platform {
 				m_LiveJump = std::make_unique<script::LiveSceneJump>(m_Vm);
 			}
 			m_RawImages.ConfigureStorageOwners(m_Structs);
-			script::InstallNativePrinting(m_Vm, m_Logs.OutputCallback());
+			script::InstallNativePrinting(m_Vm, [this, original = m_Logs.OutputCallback()](std::string_view message, bool error) {
+				if (m_Owners.TestTrace) {
+					m_Owners.TestTrace->ScriptOutput(message, error);
+				}
+				original(message, error);
+			});
 			m_System.ConfigureLooperTime(m_Owners.Looper);
 			// Original04b340 concatenates only disk root zero;SPEC_TXT selects wind3d11data here.
 			const auto disk_root = (m_Original / "wind3d11data").generic_string() + "/";
@@ -347,7 +354,16 @@ namespace sgre::platform {
 				m_SceneSeek = std::make_unique<script::OriginalSceneSeek>(m_Vm, *m_Owners.SceneSeek);
 			}
 			if (m_Owners.CheckpointCache && (!m_Owners.SceneEntry || !m_Owners.SceneEntry->Checkpoint.empty() || m_Owners.CheckpointJob)) {
-				m_CheckpointRecorder = std::make_unique<script::OriginalCheckpointRecorder>(m_Vm, m_Owners.CheckpointIdentity, m_Owners.CheckpointParent, [cache = m_Owners.CheckpointCache](const auto& location, auto bytes) {
+				m_CheckpointRecorder = std::make_unique<script::OriginalCheckpointRecorder>(m_Vm, m_Owners.CheckpointIdentity, m_Owners.CheckpointParent, [cache = m_Owners.CheckpointCache, trace = m_Owners.TestTrace](const auto& location, auto bytes) {
+					if (trace) {
+						const auto digest = ContentSha256(bytes);
+						trace->Snapshot(location, digest);
+
+						// Sweeps observe complete original states without publishing synthetic
+						// test histories into the user's append-only checkpoint cache.
+						return digest;
+					}
+					return cache->Submit(script::OriginalCheckpointKey(location), std::move(bytes));
 					return cache->Submit(script::OriginalCheckpointKey(location), std::move(bytes));
 				});
 			}
@@ -962,6 +978,9 @@ namespace sgre::platform {
 			m_ReportedMovieRequests = state.MovieRequests;
 			m_ReportedMovieConfirmations = state.MovieConfirmations;
 			m_ReportedPhoneActions = state.PhoneActions;
+			if (m_Owners.TestTrace) {
+				m_Owners.TestTrace->Seek(state);
+			}
 			if (m_SeekReportRows == 256) {
 				return;
 			}
@@ -1481,6 +1500,7 @@ namespace sgre::platform {
 		std::shared_ptr<CheckpointPreparation> CheckpointJob;
 		std::string CheckpointIdentity;
 		std::string CheckpointParent = "original-session-entry";
+		std::shared_ptr<debug::GameTestTrace> TestTrace;
 		render::SpritePresentationDescription Presentation;
 		std::filesystem::path Executable;
 		std::filesystem::path ConfigurationWorkspace;
@@ -1578,7 +1598,7 @@ namespace sgre::platform {
 
 					                             return m_Output->Description().Channels;
 				                             },
-				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek, m_Run.SceneCalendar, m_Run.CheckpointCache, m_Run.CheckpointJob, m_Run.CheckpointIdentity, m_Run.CheckpointParent};
+				    m_Platform, m_Run.Headless, m_Run.SceneEntry, m_Run.SceneSeek, m_Run.SceneCalendar, m_Run.CheckpointCache, m_Run.CheckpointJob, m_Run.CheckpointIdentity, m_Run.CheckpointParent, m_Run.TestTrace};
 				m_Driver = std::make_unique<OriginalScriptStartup>(std::move(owners), m_Run.Installation, m_Run.ArchiveSeed);
 				m_Driver->ConfigureApplicationClose(m_Events);
 				InstallFinishCloseReceiver();
@@ -1677,6 +1697,9 @@ namespace sgre::platform {
 					if (m_Run.Headless) {
 						PollPrivateCommands();
 					}
+					if (m_TestStopRequested) {
+						break;
+					}
 					active = m_Display->RunIteration();
 					UpdateDebugInspector();
 					UpdateVolumeMenu();
@@ -1685,18 +1708,21 @@ namespace sgre::platform {
 						loading = false;
 					}
 					++m_Iterations;
+					if (m_Run.TestTrace && m_Iterations % 60 == 0) {
+						m_Run.TestTrace->Frame(m_RootUpdates, m_RootDraws);
+					}
 					if (m_Run.Headless) {
 						CapturePrivateCommand();
 					}
 				}
-				if (m_Run.Headless) {
+				if (m_Run.Headless && !m_Run.TestTrace) {
 					try {
 						CaptureLastFrame();
 					} catch (const std::exception& capture_error) {
 						std::cerr << "private frame capture: " << capture_error.what() << '\n';
 					}
 				}
-				if (active) {
+				if (active && !m_TestStopRequested) {
 					throw std::runtime_error("original startup observation reached its actual OS-loop iteration/wall bound; whole game remains active");
 				}
 				if (!m_Driver->LastNativeError().empty()) {
@@ -1705,7 +1731,14 @@ namespace sgre::platform {
 				if (!m_Run.Headless) {
 					RememberWindowPreferences();
 				}
+				if (m_Run.TestTrace) {
+					m_Run.TestTrace->Frame(m_RootUpdates, m_RootDraws);
+					m_Run.TestTrace->Boundary(m_TestStopRequested ? "observation_stopped" : "application_ended", "owned headless observation finished before retirement");
+				}
 			} catch (const std::exception& error) {
+				if (m_Run.TestTrace) {
+					m_Run.TestTrace->Boundary("runtime_boundary", error.what());
+				}
 				WriteSilentAudioProgress(std::cerr);
 				std::cerr << "actual OS progress: elapsedMilliseconds=" << m_Counter.ReadMilliseconds() - started << " rootUpdates=" << m_RootUpdates << " rootDraws=" << m_RootDraws << " rootRetirements=" << m_RootRetirements << '\n';
 				m_Driver->WriteProgress(std::cerr);
@@ -1911,6 +1944,8 @@ namespace sgre::platform {
 					} else {
 						std::cerr << "private stdin capture bound reached\n";
 					}
+				} else if (command == 't' && m_Run.TestTrace) {
+					m_TestStopRequested = true;
 				} else {
 					std::cerr << "private stdin ignored command byte=" << static_cast<unsigned int>(static_cast<unsigned char>(command)) << '\n';
 				}
@@ -2332,6 +2367,7 @@ namespace sgre::platform {
 		static constexpr std::uint32_t kMaximumRootPhaseStallRows = 64;
 		std::uint32_t m_RootPhaseStallRows = 0;
 		static constexpr std::uint32_t kMaximumPrivateCommands = 4096;
+		bool m_TestStopRequested = false;
 		static constexpr std::uint32_t kMaximumCaptureRequests = 16;
 		static constexpr std::uint32_t kMaximumCaptureFileAttempts = 4096;
 		PrivateStartupStdin m_Stdin;
@@ -2537,6 +2573,9 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		RequireStartupSaveOverride(run.SaveDirectory, run.Installation, store.ConfigurationPath().parent_path());
 	}
 	run.CheckpointIdentity = sgre::platform::OriginalCheckpointResourceIdentity(run.Installation);
+	if (options.TestEvents) {
+		run.TestTrace = std::make_shared<sgre::debug::GameTestTrace>(std::cerr);
+	}
 	run.CheckpointCache = std::make_shared<sgre::save::SceneCheckpointCache>(store.ConfigurationPath().parent_path() / "checkpoints", run.CheckpointIdentity, sgre::platform::ContentSha256);
 	run.DebugStartInGame = options.Jump.has_value() || options.DebugStartInGame.value_or(loaded.Configuration.DebugStartInGame);
 	if (run.DebugStartInGame) {
@@ -2590,7 +2629,21 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 				for (const auto& candidate : candidates) {
 					keys.push_back(sgre::script::OriginalCheckpointKey({candidate.Storage, candidate.Label, candidate.SourceLine, candidate.Point, candidate.Record}));
 				}
-				if (auto selected = run.CheckpointCache->FindFirst(keys)) {
+				std::optional<sgre::save::SceneCheckpointSelection> selected;
+				if (!options.TestParent) {
+					selected = run.CheckpointCache->FindFirst(keys);
+				} else if (*options.TestParent != "new-game") {
+					for (std::size_t index = 0; index < keys.size(); ++index) {
+						if (auto checkpoint = run.CheckpointCache->Find(keys[index], *options.TestParent)) {
+							selected = sgre::save::SceneCheckpointSelection{index, std::move(*checkpoint)};
+							break;
+						}
+					}
+					if (!selected) {
+						throw std::runtime_error("requested test predecessor is absent from the retained original route ancestry");
+					}
+				}
+				if (selected) {
 					const auto& candidate = candidates[selected->Candidate];
 					sgre::script::ScriptDebugSceneEntry initial;
 					initial.Storage = candidate.Storage;
@@ -2608,6 +2661,9 @@ static sgre::platform::OriginalStartupRun ConfiguredStartupRun(const sgre::app::
 		std::cerr << (run.SceneEntry ? "original direct entry validated: storage=" : "original stateful seek validated: storage=") << std::quoted(target.CanonicalStorage) << " line=" << target.SourceLine << " snapshot_line=" << target.SnapshotLine << " snapshot_index=" << target.SnapshotIndex << " point=" << target.Point << '\n';
 	}
 	run.Presentation.VisibleWindow = !run.Headless;
+	if (run.TestTrace) {
+		run.TestTrace->Begin(run.CheckpointIdentity, run.CheckpointParent);
+	}
 	run.Presentation.WindowWidthPoints = configuration.WindowWidth;
 	run.Presentation.WindowHeightPoints = configuration.WindowHeight;
 	run.Presentation.WindowCentered = configuration.WindowCentered;

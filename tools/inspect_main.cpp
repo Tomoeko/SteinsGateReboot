@@ -1,4 +1,5 @@
 #include "sgre/app/display_path.hpp"
+#include "sgre/debug/test_json.hpp"
 #include "sgre/io/file_reader.hpp"
 #include "sgre/media/webm.hpp"
 #include "sgre/platform/inspect_gui.hpp"
@@ -90,6 +91,17 @@ static Options ReadSearchOptions(int argc, char** argv) {
 }
 
 static Options ReadOptions(int argc, char** argv) {
+	if (argc >= 2 && std::string_view(argv[1]) == "test-plan") {
+		Options options;
+		options.Command = "test-plan";
+		if (argc == 4 && std::string_view(argv[2]) == "--game-root" && std::string_view(argv[3]).size() != 0) {
+			options.GameRoot = std::filesystem::path(std::u8string(argv[3], argv[3] + std::string_view(argv[3]).size()));
+		} else if (argc != 2) {
+			throw std::runtime_error("usage: sgre-inspect test-plan [--game-root PATH]");
+		}
+
+		return options;
+	}
 	if (argc >= 2 && std::string_view(argv[1]) == "search") {
 		return ReadSearchOptions(argc, argv);
 	}
@@ -461,6 +473,51 @@ static void SearchScenarios(const Options& options) {
 	}
 }
 
+static void WriteScenarioTestPlan(const Options& options) {
+	const auto location = sgre::scenario::ResolveScenarioSearchLocation(std::filesystem::current_path(), options.GameRoot);
+	sgre::scenario::ScenarioSearchCatalog catalog(location);
+	const auto scenes = catalog.ReadTestPlan();
+	std::cout << "{\"schema\":1,\"entries\":" << catalog.Entries().size() << ",\"scenes\":[";
+	bool first_scene = true;
+	for (const auto& scene : scenes) {
+		std::cout << (first_scene ? "" : ",") << "\n{\"storage\":";
+		first_scene = false;
+		sgre::debug::WriteTestJsonString(std::cout, scene.Storage);
+		std::cout << ",\"label\":";
+		sgre::debug::WriteTestJsonString(std::cout, scene.Label);
+		std::cout << ",\"terminal_exits\":" << scene.TerminalExits << ",\"snapshots\":[";
+		bool first_snapshot = true;
+		for (const auto& snapshot : scene.Snapshots) {
+			std::cout << (first_snapshot ? "" : ",") << "\n{\"line\":" << snapshot.Location.SourceLine << ",\"point\":" << snapshot.Location.Point << ",\"record\":" << snapshot.Location.Record << ",\"jump_line\":";
+			first_snapshot = false;
+			if (snapshot.JumpLine) {
+				std::cout << *snapshot.JumpLine;
+			} else {
+				std::cout << "null";
+			}
+			std::cout << ",\"jump_min\":";
+			if (snapshot.JumpFirstLine) {
+				std::cout << *snapshot.JumpFirstLine;
+			} else {
+				std::cout << "null";
+			}
+			std::cout << '}';
+		}
+		std::cout << "],\"exits\":[";
+		bool first_exit = true;
+		for (const auto& exit : scene.Exits) {
+			std::cout << (first_exit ? "" : ",") << "{\"storage\":";
+			first_exit = false;
+			sgre::debug::WriteTestJsonString(std::cout, exit.Storage);
+			std::cout << ",\"label\":";
+			sgre::debug::WriteTestJsonString(std::cout, exit.Label);
+			std::cout << ",\"conditional\":" << (exit.Condition.empty() ? "false" : "true") << '}';
+		}
+		std::cout << "]}";
+	}
+	std::cout << "\n]}\n";
+}
+
 static int RunGui(int argc, char** argv) {
 #ifdef SGRE_HAS_INSPECT_GUI
 	sgre::platform::InspectGuiOptions options;
@@ -494,6 +551,8 @@ int main(int argc, char** argv) {
 		const auto options = ReadOptions(argc, argv);
 		if (options.Command == "search") {
 			SearchScenarios(options);
+		} else if (options.Command == "test-plan") {
+			WriteScenarioTestPlan(options);
 		} else if (options.Command == "inspect") {
 			InspectPsb(options);
 		} else if (options.Command == "scan") {

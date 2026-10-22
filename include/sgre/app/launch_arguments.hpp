@@ -31,6 +31,8 @@ namespace sgre::app {
 		std::optional<std::uint64_t> MaximumMilliseconds;
 		std::optional<std::size_t> MaximumIterations;
 		bool CheckpointWorker = false;
+		bool TestEvents = false;
+		std::optional<std::string> TestParent;
 		bool Headless = false;
 		bool ValidateOnly = false;
 		bool Help = false;

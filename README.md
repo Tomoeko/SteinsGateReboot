@@ -64,4 +64,13 @@ cmake --build Files/build/recovery --target sgre-check-format
 
 Use `-DSGRE_ENABLE_SANITIZERS=ON` when configuring a sanitizer build. Retained native comparison checks require their local fixtures under `Files/`.
 
+Run resumable, hidden and silent scenario checks; reports and reproducible failures stay under `Files/testing/game-sweep/`:
+
+```sh
+cmake --build Files/build/game-release --target sgre-game sgre-inspect --parallel
+python3 tools/game_sweep.py --limit 10
+```
+
+Omit `--limit` to queue all scenes. Runtime failures stop the batch for investigation; use `--keep-going` to collect further failures. Use `--target SCENE.ks:LINE` for specific checks. See [automated testing](docs/recovery/game_sweep.md) for replay commands and coverage limits.
+
 See [AGENTS.md](AGENTS.md), [STYLE.md](STYLE.md) and [recovery notes](docs/recovery/) for development guidance.

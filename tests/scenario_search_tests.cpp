@@ -362,6 +362,64 @@ static void TestSingleVariantOriginalFallback() {
 	    "language count");
 }
 
+static void TestCompleteTestInventory() {
+	auto document = Document();
+	auto& first = Member(Scenes(document)[0], "lines");
+	first = Value(sgre::resource::PsbArray{Snapshot(1, 10), Snapshot(2, 20), Snapshot(3, 20), Snapshot(4, 15), Snapshot(5, 30), Snapshot(6, 100)});
+	auto& object = std::get<sgre::resource::PsbObject>(Scenes(document)[0].Data);
+	object.emplace_back("nexts", Value(sgre::resource::PsbArray{Value(sgre::resource::PsbObject{{"type", Number(0)}, {"storage", String("fixture.ks")}, {"target", String("*later")}, {"eval", String("fixtureCondition")}}), Value(sgre::resource::PsbObject{{"type", Number(1)}})}));
+	const auto inventory = sgre::scenario::ReadScenarioTestDocument(document);
+	Require(inventory.size() == 2 && inventory[0].Snapshots.size() == 6 && inventory[0].Exits.size() == 1 && inventory[0].TerminalExits == 1 && inventory[0].Exits[0].Condition == "fixtureCondition", "test inventory lost a scene, duplicate/decreasing record, predicate or terminal control");
+	Require(inventory[0].Snapshots[0].JumpLine == 10 && inventory[0].Snapshots[1].JumpLine == 20 && !inventory[0].Snapshots[2].JumpLine && !inventory[0].Snapshots[3].JumpLine && inventory[0].Snapshots[4].JumpLine == 29 && !inventory[0].Snapshots[5].JumpLine, "test inventory fabricated addressability for repeated/decreasing lines or crossed a scene boundary");
+	for (const auto& scene : inventory) {
+		for (const auto& snapshot : scene.Snapshots) {
+			if (snapshot.JumpLine) {
+				const auto resolved = sgre::scenario::ValidateScenarioJump(document, scene.Storage, *snapshot.JumpLine);
+				Require(resolved.SceneLabel == scene.Label && resolved.SnapshotLine == snapshot.Location.SourceLine && resolved.Point == snapshot.Location.Point && resolved.SnapshotIndex == static_cast<std::size_t>(snapshot.Location.Record), "test target does not resolve to its exact original record");
+			}
+		}
+	}
+	Scenes(document).clear();
+	Reject([&] {
+		static_cast<void>(sgre::scenario::ReadScenarioTestDocument(document));
+	},
+	    "scene count");
+	for (std::int32_t seed = 0; seed < 32; ++seed) {
+		auto generated = Document();
+		auto& scenes = Scenes(generated);
+		scenes.clear();
+		for (std::int32_t scene_index = 0; scene_index < 3; ++scene_index) {
+			sgre::resource::PsbArray lines;
+			for (std::int32_t row = 0; row < 12; ++row) {
+				lines.push_back(Snapshot(row, (seed * 7 + row * 13) % 75));
+			}
+			scenes.push_back(Scene("*generated" + std::to_string(scene_index), scene_index * 20, std::move(lines)));
+		}
+		const auto plan = sgre::scenario::ReadScenarioTestDocument(generated);
+		for (std::int32_t requested = 0; requested < 90; ++requested) {
+			const auto selected = requested < 20 ? 0u : requested < 40 ? 1u
+			                                                           : 2u;
+			const auto& rows = std::get<sgre::resource::PsbArray>(Member(scenes[selected], "lines").Data);
+			std::optional<std::size_t> expected;
+			for (std::size_t row = 0; row < rows.size(); ++row) {
+				const auto& fields = std::get<sgre::resource::PsbArray>(rows[row].Data);
+				if (std::get<std::int64_t>(fields[4].Data) >= requested) {
+					expected = row;
+					break;
+				}
+			}
+			std::optional<std::size_t> actual;
+			for (const auto& target : plan[selected].Snapshots) {
+				if (target.JumpLine && *target.JumpFirstLine <= requested && requested <= *target.JumpLine) {
+					Require(!actual, "inverse jump intervals overlap");
+					actual = static_cast<std::size_t>(target.Location.Record);
+				}
+			}
+			Require(actual == expected, "inverse test target inventory differs from independent original-order scan");
+		}
+	}
+}
+
 int main() {
 	try {
 		TestMultilingualOwnedResults();
@@ -372,7 +430,8 @@ int main() {
 		TestBoundedWorkAndResults();
 		TestReadOnlyConfigurationResolution();
 		TestSingleVariantOriginalFallback();
-		std::cout << "8 scenario search groups passed\n";
+		TestCompleteTestInventory();
+		std::cout << "9 scenario search groups passed\n";
 		return 0;
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

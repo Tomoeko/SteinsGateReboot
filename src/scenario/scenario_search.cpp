@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <array>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -364,6 +365,50 @@ namespace sgre::scenario {
 		return JumpPoint(metadata, storage, target_line);
 	}
 
+	std::vector<ScenarioTestScene> ReadScenarioTestDocument(const resource::PsbDocument& document, ScenarioSearchLimits limits) {
+		RequireLimits(limits);
+		if (document.Root.Find("scenes") == nullptr) {
+			return {};
+		}
+		SearchBudget budget{limits};
+		const auto metadata = ReadMetadata(document, budget);
+		ScenarioNavigation navigation;
+		navigation.AddDocument(document);
+		std::vector<ScenarioTestScene> result;
+		for (std::size_t index = 0; index < metadata.Scenes.size(); ++index) {
+			const auto& source = metadata.Scenes[index];
+			ScenarioTestScene scene;
+			scene.Storage = metadata.Storage;
+			scene.Label = source.Label;
+			scene.Exits = navigation.Scenes().at(index).Exits;
+			if (const auto* nexts = source.Value->Find("nexts")) {
+				for (const auto& exit : Array(nexts, "scenario test nexts requires an array")) {
+					if (Line(exit.Find("type"), "scenario test exit type is invalid") == 1) {
+						++scene.TerminalExits;
+					}
+				}
+			}
+			// Invert the original first-snapshot>=line selection in linear time. Repeated
+			// and decreasing lines remain inventory records, never invented jump targets.
+			std::int64_t minimum = index == 0 ? 0 : source.FirstLine;
+			const auto maximum = index + 1 < metadata.Scenes.size() ? std::int64_t(metadata.Scenes[index + 1].FirstLine) - 1 : std::int64_t(std::numeric_limits<std::int32_t>::max());
+			for (const auto& snapshot : source.Snapshots) {
+				ScenarioTestSnapshot target;
+				target.Location = {scene.Storage, scene.Label, snapshot.SourceLine, snapshot.Point, static_cast<std::int32_t>(snapshot.Index)};
+				const auto upper = std::min<std::int64_t>(snapshot.SourceLine, maximum);
+				if (minimum <= upper) {
+					target.JumpLine = static_cast<std::int32_t>(upper);
+					target.JumpFirstLine = static_cast<std::int32_t>(minimum);
+				}
+				minimum = std::max(minimum, std::int64_t(snapshot.SourceLine) + 1);
+				scene.Snapshots.push_back(std::move(target));
+			}
+			result.push_back(std::move(scene));
+		}
+
+		return result;
+	}
+
 	static std::string ReadSmallText(const std::filesystem::path& path, std::size_t maximum) {
 		io::FileReader input(path);
 		Require(input.Size() != 0 && input.Size() <= maximum, "scenario search config/seed input is empty or exceeds its limit");
@@ -493,6 +538,31 @@ namespace sgre::scenario {
 				result.AddDocument(state.Read(entry.Name, budget));
 			} catch (const std::exception& error) {
 				throw std::runtime_error("scenario navigation entry " + entry.Name + ": " + error.what());
+			}
+		}
+
+		return result;
+	}
+
+	std::vector<ScenarioTestScene> ScenarioSearchCatalog::ReadTestPlan() {
+		auto& state = *m_Implementation;
+		SearchBudget budget{state.Limits};
+		std::vector<ScenarioTestScene> result;
+		std::size_t snapshots = 0;
+		for (const auto& entry : state.Entries) {
+			try {
+				const auto document = state.Read(entry.Name, budget);
+				if (document.Root.Find("scenes") != nullptr) {
+					Require(Text(document.Root.Find("name"), 4096, "scenario entry lacks its actual storage identity") == entry.Name, "scenario index key differs from its parsed storage identity");
+				}
+				auto scenes = ReadScenarioTestDocument(document, state.Limits);
+				Require(scenes.size() <= state.Limits.MaxScenes - result.size(), "scenario test plan exceeds scene limit");
+				for (const auto& scene : scenes) {
+					Consume(snapshots, scene.Snapshots.size(), state.Limits.MaxRecords, "scenario test plan exceeds snapshot limit");
+				}
+				result.insert(result.end(), std::make_move_iterator(scenes.begin()), std::make_move_iterator(scenes.end()));
+			} catch (const std::exception& error) {
+				throw std::runtime_error("scenario test plan entry " + entry.Name + ": " + error.what());
 			}
 		}
 

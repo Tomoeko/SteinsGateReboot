@@ -86,6 +86,23 @@ namespace sgre::scenario {
 		std::uint64_t PackedBytes = 0;
 	};
 
+	struct ScenarioTestSnapshot {
+		ScenarioNavigationLocation Location;
+		// Empty when the original first-qualifying-line resolver cannot address this record.
+		std::optional<std::int32_t> JumpLine;
+		std::optional<std::int32_t> JumpFirstLine;
+	};
+
+	struct ScenarioTestScene {
+		std::string Storage;
+		std::string Label;
+		std::vector<ScenarioTestSnapshot> Snapshots;
+		std::vector<ScenarioNavigationExit> Exits;
+		std::size_t TerminalExits = 0;
+	};
+
+	[[nodiscard]] std::vector<ScenarioTestScene> ReadScenarioTestDocument(const resource::PsbDocument& document, ScenarioSearchLimits limits = {});
+
 	// These operations also serve callers already holding actual decoded scenario metadata.
 	[[nodiscard]] ScenarioSearchResults SearchScenarioDocument(const resource::PsbDocument& document, const ScenarioSearchRequest& request, ScenarioSearchLimits limits = {});
 	[[nodiscard]] ScenarioJumpPoint ValidateScenarioJump(const resource::PsbDocument& document, std::string_view storage, std::int32_t target_line, ScenarioSearchLimits limits = {});
@@ -104,6 +121,7 @@ namespace sgre::scenario {
 		[[nodiscard]] ScenarioSearchResults Search(const ScenarioSearchRequest& request);
 		[[nodiscard]] ScenarioJumpPoint ValidateJump(std::string_view storage, std::int32_t target_line);
 		[[nodiscard]] ScenarioNavigation ReadNavigation();
+		[[nodiscard]] std::vector<ScenarioTestScene> ReadTestPlan();
 
 	private:
 		class Implementation;

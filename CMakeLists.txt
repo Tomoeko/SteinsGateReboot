@@ -68,6 +68,7 @@ add_library(sgre_resource
 	src/scenario/scenario_search.cpp
 	src/scenario/scenario_navigation.cpp
 	src/debug/inspector_panel.cpp
+	src/debug/game_test_trace.cpp
 	src/scenario/calendar_restore.cpp
 	src/io/file_read_serial.cpp
 	src/io/raw_read_destination.cpp
@@ -643,6 +644,7 @@ if(SGRE_BUILD_TESTS)
 		scenario_search
 		scenario_navigation
 		inspector_panel
+		game_test_trace
 		resource_cache
 		resource_receiving_observation
 		squirrel_vm

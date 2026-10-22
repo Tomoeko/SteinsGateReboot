@@ -1,5 +1,6 @@
 #include "sgre/app/launch_arguments.hpp"
 
+#include <algorithm>
 #include <charconv>
 #include <limits>
 #include <stdexcept>
@@ -138,6 +139,17 @@ namespace sgre::app {
 			} else if (option == "--headless") {
 				RequireUnique(result.Headless, "headless observation");
 				result.Headless = true;
+			} else if (option == "--test-events") {
+				RequireUnique(result.TestEvents, "test event stream");
+				result.TestEvents = true;
+			} else if (option == "--test-parent") {
+				RequireUnique(result.TestParent.has_value(), "test predecessor");
+				result.TestParent = OptionValue(arguments, index);
+				if (*result.TestParent != "new-game" && (result.TestParent->size() != 64 || !std::all_of(result.TestParent->begin(), result.TestParent->end(), [](char byte) {
+					    return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'f');
+				    }))) {
+					throw std::runtime_error("test predecessor requires new-game or an exact lowercase SHA-256");
+				}
 			} else if (option == "--validate-config") {
 				RequireUnique(result.ValidateOnly, "config validation");
 				result.ValidateOnly = true;
@@ -159,6 +171,12 @@ namespace sgre::app {
 				RequireUnique(result.Installation.has_value(), "installation path");
 				result.Installation = LaunchPath(option);
 			}
+		}
+		if (result.TestEvents && (!result.Headless || !result.SaveDirectory || !result.CheckpointWorker)) {
+			throw std::runtime_error("--test-events requires explicit --headless, --checkpoint-worker and isolated --save-root");
+		}
+		if (result.TestParent && !result.TestEvents) {
+			throw std::runtime_error("test predecessor selection requires --test-events");
 		}
 		if (result.CheckpointWorker && !result.Headless) {
 			throw std::runtime_error("internal checkpoint worker requires explicit headless policy");

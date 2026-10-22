@@ -474,6 +474,21 @@ static void LaunchArgumentTests(const Fixture& fixture) {
 	const auto serialized = sgre::app::SerializeLaunchConfiguration(changed);
 	Require(serialized.find("headless") == std::string::npos && serialized.find("maximum_") == std::string::npos && serialized.find("relative-saves") == std::string::npos && serialized.find("validate") == std::string::npos, "research/validation options escaped into remembered configuration");
 	Require(LaunchArguments({"--help"}).Help, "help cannot be selected before application creation");
+	const auto test_run = LaunchArguments({"--headless", "--checkpoint-worker", "fixture.ks:20", "--test-events", "--save-root", "isolated"});
+	Require(test_run.TestEvents && test_run.CheckpointWorker && test_run.Headless && test_run.SaveDirectory == "isolated", "test events lost their explicit isolated headless sequential policy");
+	Require(LaunchArguments({"--headless", "--checkpoint-worker", "fixture.ks:20", "--test-events", "--save-root", "isolated", "--test-parent", "new-game"}).TestParent == "new-game", "test replay cannot pin the original new-game producer");
+	const std::string digest(64, 'a');
+	Require(LaunchArguments({"--headless", "--checkpoint-worker", "fixture.ks:20", "--test-events", "--save-root", "isolated", "--test-parent", digest}).TestParent == digest, "test replay lost its exact authentic predecessor digest");
+	for (const auto& invalid : std::vector<std::vector<std::string_view>>{{"--test-parent", "new-game"}, {"--headless", "--checkpoint-worker", "fixture.ks:20", "--test-events", "--save-root", "isolated", "--test-parent", "invented"}, {"--headless", "--checkpoint-worker", "fixture.ks:20", "--test-events", "--save-root", "isolated", "--test-parent", "new-game", "--test-parent", "new-game"}}) {
+		Reject([&] {
+			static_cast<void>(sgre::app::ParseLaunchArguments(invalid));
+		});
+	}
+	for (const auto& invalid : std::vector<std::vector<std::string_view>>{{"--test-events"}, {"--headless", "--test-events"}, {"--headless", "--save-root", "isolated", "--test-events"}, {"--headless", "--checkpoint-worker", "fixture.ks:20", "--save-root", "isolated", "--test-events", "--test-events"}}) {
+		Reject([&] {
+			static_cast<void>(sgre::app::ParseLaunchArguments(invalid));
+		});
+	}
 	const std::vector<std::vector<std::string_view>> invalid_cases{{"--skip-startup", "--normal-start"}, {"--debug-start-in-game", "--skip-startup"}, {"--windowed", "--fullscreen"}, {"--center-window", "--no-center-window"}, {"--headless", "--headless"}, {"--validate-config", "--validate-config"}, {"--save-root", "--validate-config"}, {"--save-root", ""}, {"--maximum-milliseconds"}, {"--maximum-milliseconds", "0"}, {"--maximum-milliseconds", "900001"}, {"--maximum-milliseconds", "-1"}, {"--maximum-milliseconds", "1x"}, {"--maximum-iterations", "100001"}, {"--maximum-iterations", "18446744073709551616"}, {"--save-root", "first", "--save-root", "second"}, {"--maximum-iterations", "1", "--maximum-iterations", "2"}, {"one-installation", "second-installation"}, {"--unknown"}, {"-unknown"}, {"--skip-startup=true"}, {""}};
 	for (const auto& invalid : invalid_cases) {
 		Reject([&] {
