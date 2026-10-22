@@ -122,12 +122,12 @@ namespace sgre::scene {
 		if ((actual_controls.Flags & 0x100u) != 0) {
 			conversion = ComposeFrameMatrices(ComposeFrameMatrices(add_root, ComposeFrameMatrices(scale, subtract_root)), conversion);
 		}
-		resource::MotionPoint reference;
+		std::optional<resource::MotionPoint> reference;
 		if (scene == nullptr) {
-			if (!m_ClearedReference || !m_HasReference) {
-				throw std::runtime_error("Emote Velvety post-clear update requires an initialized native reference history; cold missing-anchor state remains unsupported");
+			if (m_HasReference && !m_ClearedReference) {
+				throw std::runtime_error("Emote Velvety post-clear update lost its actual retained reference coordinates");
 			}
-			reference = *m_ClearedReference;
+			reference = m_ClearedReference;
 		} else {
 			if (!m_Lookup || scene != m_Scene || m_Commands.SelectionSerial() != m_SelectionSerial || scene->GraphGeneration() != m_GraphGeneration) {
 				const auto selected_reference = scene->FindLayer(m_Definition.ReferenceLayer);
@@ -146,32 +146,36 @@ namespace sgre::scene {
 			m_Cleared = false;
 			m_ClearedReference.reset();
 		}
-		auto current = FramePoint(reference, conversion);
-		if (actual_controls.Mirror) {
-			current.X = -current.X;
-		}
-		if (!m_HistoryInitialized) {
-			m_PrecedingReference = current;
-			m_AccumulatedReference = current;
-			m_HasReference = true;
-			m_HistoryInitialized = true;
-		} else {
-			resource::MotionPoint delta{current.X - m_PrecedingReference.X, current.Y - m_PrecedingReference.Y};
-			m_PrecedingReference = current;
-			const auto limit = m_Definition.ReferenceSpeedLimit;
-			if (limit != 0 && elapsed_ticks != 0) {
-				const auto seconds = elapsed_ticks / 60.0f;
-				const auto x_velocity = delta.X / seconds;
-				const auto y_velocity = delta.Y / seconds;
-				const auto speed = std::sqrt(y_velocity * y_velocity + x_velocity * x_velocity);
-				if (speed > 0) {
-					const auto coefficient = ((1.0f - std::exp((speed / limit) * -1.60000002384185791015625f)) * limit) / speed;
-					delta.X = delta.X * coefficient;
-					delta.Y = delta.Y * coefficient;
-				}
+		// Native Common+B8 gates sampling/history writes. A cold cleared plain has
+		// no physical child reference; leave initialized host history pending.
+		if (reference) {
+			auto current = FramePoint(*reference, conversion);
+			if (actual_controls.Mirror) {
+				current.X = -current.X;
 			}
-			m_AccumulatedReference.X = delta.X + m_AccumulatedReference.X;
-			m_AccumulatedReference.Y = delta.Y + m_AccumulatedReference.Y;
+			if (!m_HistoryInitialized) {
+				m_PrecedingReference = current;
+				m_AccumulatedReference = current;
+				m_HasReference = true;
+				m_HistoryInitialized = true;
+			} else {
+				resource::MotionPoint delta{current.X - m_PrecedingReference.X, current.Y - m_PrecedingReference.Y};
+				m_PrecedingReference = current;
+				const auto limit = m_Definition.ReferenceSpeedLimit;
+				if (limit != 0 && elapsed_ticks != 0) {
+					const auto seconds = elapsed_ticks / 60.0f;
+					const auto x_velocity = delta.X / seconds;
+					const auto y_velocity = delta.Y / seconds;
+					const auto speed = std::sqrt(y_velocity * y_velocity + x_velocity * x_velocity);
+					if (speed > 0) {
+						const auto coefficient = ((1.0f - std::exp((speed / limit) * -1.60000002384185791015625f)) * limit) / speed;
+						delta.X = delta.X * coefficient;
+						delta.Y = delta.Y * coefficient;
+					}
+				}
+				m_AccumulatedReference.X = delta.X + m_AccumulatedReference.X;
+				m_AccumulatedReference.Y = delta.Y + m_AccumulatedReference.Y;
+			}
 		}
 		const auto preceding_x = conversion.TranslationX;
 		const auto preceding_y = conversion.TranslationY;

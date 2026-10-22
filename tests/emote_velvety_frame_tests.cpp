@@ -384,18 +384,24 @@ static void TestWarmChildClearAndExactOwnerAdmission() {
 	static_cast<void>(frame.Prepare(1, controls));
 }
 
-static void TestColdClearAndColdNextUpdateGate() {
+static void TestColdClearKeepsReferenceHistoryPending() {
 	Fixture fixture;
 	PlainFixture actual(fixture);
 	sgre::scene::EmoteVelvetyFrameOwner frame(actual.Root, actual.Commands, *actual.Plain, {}, 100);
 	frame.ClearPlain(*actual.Plain);
 	frame.ClearPlain(*actual.Plain);
 	Require(actual.Plain->Scene() == nullptr && actual.Plain->CanMutate(), "cold native Clear is real and idempotent before first physical update");
-	RequireFailure([&] {
-		static_cast<void>(frame.Prepare(1, {}));
-	},
-	    "cold missing-anchor");
-	Require(actual.Plain->CanMutate(), "unsupported cold history does not invent samples or block actual plain destruction");
+	const auto first = frame.Prepare(1, {});
+	const auto second = frame.Prepare(1, {});
+	Require(first.ResetRotationReference && !second.ResetRotationReference && first.WorldToPhysics.XX == 1 && first.WorldToPhysics.YY == 1 && first.WorldToPhysics.TranslationX == 0 && first.WorldToPhysics.TranslationY == 0 && second.WorldToPhysics.TranslationX == 0 && second.WorldToPhysics.TranslationY == 0, "a cold cleared frame must leave pending reference history untouched without inventing an anchor sample");
+	Require(actual.Plain->Scene() == nullptr && actual.Plain->CanMutate(), "empty frame processing must not create replacement physical layers");
+
+	actual.Commands.Play("main", sgre::scene::MotionPlayFlags::Force);
+	actual.Plain->Progress(0);
+	sgre::scene::EmoteVelvetyFrameOwner fresh(actual.Root, actual.Commands, *actual.Plain, {}, 100);
+	const auto recovered = frame.Prepare(1, {});
+	const auto expected = fresh.Prepare(1, {});
+	Require(recovered.WorldToPhysics.XX == expected.WorldToPhysics.XX && recovered.WorldToPhysics.XY == expected.WorldToPhysics.XY && recovered.WorldToPhysics.YX == expected.WorldToPhysics.YX && recovered.WorldToPhysics.YY == expected.WorldToPhysics.YY && recovered.WorldToPhysics.TranslationX == expected.WorldToPhysics.TranslationX && recovered.WorldToPhysics.TranslationY == expected.WorldToPhysics.TranslationY, "the first real reference after cold Clear must initialize history like a fresh actual owner");
 }
 
 static bool SameSkipLattice(const sgre::resource::MotionBezierLattice& left, const sgre::resource::MotionBezierLattice& right) {
@@ -693,7 +699,7 @@ int main() {
 		TestActualGlobalFrameAndReferenceSpeedLimit();
 		TestWarmClearOriginalFrames();
 		TestWarmChildClearAndExactOwnerAdmission();
-		TestColdClearAndColdNextUpdateGate();
+		TestColdClearKeepsReferenceHistoryPending();
 		TestSkipReferenceHistoryAndWarmClearProvenance();
 		TestWarmReferenceHistorySurvivesActualSameTimelineRenewal();
 		TestWarmReferenceRebindRetainsQueuedAndClearGuards();

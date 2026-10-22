@@ -610,7 +610,7 @@ static void TestSkipSceneFiniteRemovalAndLoopBlendCache() {
 	owner.Close();
 }
 
-static void TestContainingWarmClearAfterFinalResourceUnregister() {
+static void TestContainingClearAfterFinalResourceUnregister() {
 	{
 		Fixture fixture(OwnerDocument());
 		std::weak_ptr<const sgre::scene::LoadedMotionAsset> loaded = fixture.Asset;
@@ -696,19 +696,24 @@ static void TestContainingWarmClearAfterFinalResourceUnregister() {
 		const ClearPublication publication{*fixture.Runtime};
 		owner.SetVisible(true);
 		owner.Clear();
-		Require(fixture.Manager.Unregister(fixture.Project), "cold containing rejection must remove the real registration after actual tree retirement");
+		Require(fixture.Manager.Unregister(fixture.Project), "cold containing continuation must remove the real registration after actual tree retirement");
 		fixture.Asset.reset();
-		RequireFailure([&] {
+		const auto tick = owner.Commands().ClockState().TickCount;
+		const auto next_uid = fixture.Runtime->Identifiers().NextIdentifier();
+		for (std::size_t index = 0; index < 3; ++index) {
 			owner.Progress(1);
-		},
-		    "initialized native reference history");
-		Require(owner.CanClose() && owner.PlainPlayer().Scene() == nullptr && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->SceneContext().Size() == 0, "cold post-Clear history rejection must remain safely retireable without inventing a reference or selected geometry");
+			owner.Draw();
+			const auto physical = owner.PhysicalCounts();
+			const auto conversion = owner.PhysicsToWorld();
+			Require(physical.Updated == 0 && physical.MeshWrites == 0 && std::isfinite(conversion.XX) && std::isfinite(conversion.YY), "cold post-Clear continuation must prepare a finite conversion without updating absent physical children");
+		}
+		Require(owner.Commands().ClockState().TickCount == tick + 3 && owner.CanClose() && owner.PlainPlayer().Scene() == nullptr && fixture.Runtime->Identifiers().LiveCount() == 0 && fixture.Runtime->Identifiers().NextIdentifier() == next_uid && fixture.Runtime->SceneContext().Size() == 0 && fixture.Runtime->Context().Size() == 0, "cold post-Clear continuation must remain safely retireable without inventing a reference, UID, selected geometry or draw publication");
 	}
 }
 
 int main() {
 	try {
-		TestContainingWarmClearAfterFinalResourceUnregister();
+		TestContainingClearAfterFinalResourceUnregister();
 		TestSkipSceneFinishesCurrentAndQueuedAngleWithoutPublication();
 		TestSkipSceneFiniteRemovalAndLoopBlendCache();
 		TestPassSceneKeepsActualClocksAndPropertyControllers();
