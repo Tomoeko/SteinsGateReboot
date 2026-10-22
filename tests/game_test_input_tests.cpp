@@ -1,5 +1,6 @@
 #include "sgre/debug/game_test_input.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <iostream>
@@ -16,15 +17,16 @@ static void TestMouseEdgesAndKeyboardIsolation() {
 	Require(!input.Mouse() && !input.QueueClick(-1, 12) && !input.QueueClick(12, 16384), "headless click must reject invalid bounded client coordinates without enabling a pointer");
 	Require(input.QueueClick(48, 701) && input.Queue(sgre::debug::GameTestKey::Confirm), "headless mixed input queue rejected its bounded actions");
 	sgre::input::MouseInput mouse;
-	for (std::size_t frame = 0; frame != 6; ++frame) {
+	for (std::size_t frame = 0; frame != 8; ++frame) {
 		input.BeginUpdate(true);
 		input.EndUpdate();
 		auto sample = input.Mouse();
-		Require(sample && sample->ClientX == 48 && sample->ClientY == 701, "headless pointer lost its exact logical client position");
+		Require(sample && sample->ClientX == 46 + static_cast<std::int32_t>(std::min<std::size_t>(frame, 2)) && sample->ClientY == 701, "headless pointer lost its exact logical client position");
 		sample->Client = {0, 0, 1280, 720};
 		mouse.Advance(*sample);
-		Require(mouse.Inside() && mouse.Buttons() == (frame >= 1 && frame <= 4 ? 1 : 0), "headless mouse hover, hold or release changed");
-		Require(mouse.Pressed() == (frame == 1 ? 1 : 0) && mouse.Released() == (frame == 5 ? 1 : 0), "headless click must prime actual MouseInput before one press and one release edge");
+		Require((frame != 1 && frame != 2) || mouse.Movement().X != 0, "headless pointer must deliver separate mode-switch and focus movements before its button edge");
+		Require(mouse.Inside() && mouse.Buttons() == (frame >= 3 && frame <= 6 ? 1 : 0), "headless mouse hover, hold or release changed");
+		Require(mouse.Pressed() == (frame == 3 ? 1 : 0) && mouse.Released() == (frame == 7 ? 1 : 0), "headless click must prime actual MouseInput before one press and one release edge");
 		Require(input.Keyboard().ScanKeys[0x1c] == 0, "headless click leaked a keyboard confirm or skipped its release interval");
 	}
 	input.BeginUpdate(true);

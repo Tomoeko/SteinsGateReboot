@@ -38,6 +38,8 @@ namespace sgre::debug {
 		};
 		enum class Phase {
 			Idle,
+			Tracking,
+			Wake,
 			Hover,
 			Press,
 			Release

@@ -55,21 +55,29 @@ namespace sgre::debug {
 	void GameTestInput::BeginUpdate(bool hub_sampled) {
 		// InputHub samples in VSync after Update; keep the latch through that completed update.
 		m_Pressed = m_Phase == Phase::Press;
-		if (m_Phase != Phase::Idle || m_Count == 0 || !hub_sampled) {
-			return;
+		if (m_Phase == Phase::Idle) {
+			if (m_Count == 0 || !hub_sampled) {
+				return;
+			}
+			m_Active = m_Queue[m_First];
+			m_First = (m_First + 1) % kCapacity;
+			--m_Count;
+			if (m_Active->Click) {
+				m_Phase = Phase::Tracking;
+				m_Remaining = 1;
+			} else {
+				m_Phase = Phase::Press;
+				m_Remaining = 4;
+				m_Pressed = true;
+			}
 		}
-		m_Active = m_Queue[m_First];
-		m_First = (m_First + 1) % kCapacity;
-		--m_Count;
-		if (m_Active->Click) {
-			// Prime MouseInput's real enter/position state before delivering its first button edge.
-			m_Mouse = m_Active->Click;
-			m_Phase = Phase::Hover;
-			m_Remaining = 1;
-		} else {
-			m_Phase = Phase::Press;
-			m_Remaining = 4;
-			m_Pressed = true;
+		if (m_Active && m_Active->Click) {
+			m_Mouse = *m_Active->Click;
+			// Original panels consume one movement to enter mouse mode. Two successive
+			// movements after tracking give them a separate focus update before the press.
+			const auto distance = m_Phase == Phase::Tracking ? 2 : m_Phase == Phase::Wake ? 1
+			                                                                              : 0;
+			m_Mouse->X += m_Mouse->X >= 2 ? -distance : distance;
 		}
 	}
 
@@ -77,7 +85,13 @@ namespace sgre::debug {
 		if (m_Remaining == 0 || --m_Remaining != 0) {
 			return;
 		}
-		if (m_Phase == Phase::Hover) {
+		if (m_Phase == Phase::Tracking) {
+			m_Phase = Phase::Wake;
+			m_Remaining = 1;
+		} else if (m_Phase == Phase::Wake) {
+			m_Phase = Phase::Hover;
+			m_Remaining = 1;
+		} else if (m_Phase == Phase::Hover) {
 			m_Phase = Phase::Press;
 			m_Remaining = 4;
 		} else if (m_Phase == Phase::Press) {
