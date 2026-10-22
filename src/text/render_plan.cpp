@@ -144,8 +144,8 @@ namespace sgre::text {
 		return 0;
 	}
 
-	TextRenderPlan PrepareTextRenderPlan(std::span<const TextRenderLine> lines, std::span<const TextLinkState> links, std::span<const TextRevealBoundary> reveal_boundaries, std::uint32_t reveal_segment_count) {
-		const auto count = ValidatePreparation(lines, links, reveal_boundaries, reveal_segment_count);
+	TextRenderPlan PrepareTextRenderPlan(std::span<const TextRenderLine> lines, std::span<const TextLinkState> links, std::span<const TextRevealBoundary> reveal_boundaries, std::uint32_t render_call_count) {
+		const auto count = ValidatePreparation(lines, links, reveal_boundaries, render_call_count);
 		TextRenderPlan result;
 		result.Links.assign(links.begin(), links.end());
 		result.RevealBoundaries.assign(reveal_boundaries.begin(), reveal_boundaries.end());
@@ -167,7 +167,7 @@ namespace sgre::text {
 			++run;
 		}
 
-		if (reveal_segment_count > 1) {
+		if (render_call_count > 1) {
 			std::stable_sort(order.begin(), order.end(), [](const auto* first, const auto* second) {
 				return first->RevealTime < second->RevealTime;
 			});

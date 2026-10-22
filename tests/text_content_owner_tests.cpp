@@ -131,21 +131,67 @@ static void TestPreflightAndCallbackReentry() {
 	Require(fixture.Content.Render(Units(u"A"), fixture.Formatting, fixture.Options, {}, {}, fixture.Callbacks), "failed callback releases operation borrow");
 }
 
-static void TestEveryPriorRenderKeepsAppendDomainClosed() {
+static void TestRepeatedEmptyAndRejectedRenderContinuation() {
 	for (const auto input : std::array<std::u16string_view, 3>{u"", u"\n\n", u"A"}) {
 		MeasuredFixture fixture;
 		const auto size = input == u"A" ? sgre::text::TextCursor{1, 1} : sgre::text::TextCursor{};
 		static_cast<void>(fixture.Content.Render(Units(input), fixture.Formatting, fixture.Options, size, {}, fixture.Callbacks));
 		Require(fixture.Content.ElementCount() == 0, "prior empty/LF/rejected segment has no retained glyph elements");
-		const auto events = fixture.Events.size();
-		RequireFailure([&] {
-			static_cast<void>(fixture.Content.Render(Units(u"B"), fixture.Formatting, fixture.Options, {}, {}, fixture.Callbacks));
-		},
-		    "appended-segment");
-		Require(fixture.Events.size() == events, "unrecovered repeated segment rejects before genuine font callbacks");
+		const auto prior_count = fixture.Content.RenderedElementCount();
+		fixture.Events.clear();
+		Require(fixture.Content.Render(Units(u"B"), fixture.Formatting, fixture.Options, {}, {}, fixture.Callbacks), "native repeated Render must continue after an empty, LF-only or rejected prior call");
+		Require(fixture.Events == std::vector<std::string>{"normal", "unit", "ruby"} && fixture.Content.ElementCount() == 1 && fixture.Content.RenderedElementCount() == prior_count + 1, "repeated preparation must execute real font callbacks and retain the independent native attempted-element counter");
 		fixture.Content.Clear();
-		Require(fixture.Content.Render(Units(u"B"), fixture.Formatting, fixture.Options, {}, {}, fixture.Callbacks), "real Clear resets the segment admission boundary");
+		Require(fixture.Content.Render(Units(u"B"), fixture.Formatting, fixture.Options, {}, {}, fixture.Callbacks) && fixture.Content.RenderedElementCount() == 1, "real Clear resets both attempted-element history and repeated-call state");
 	}
+}
+
+static void TestNativeEmptyAppendTimingAndKeep() {
+	for (const auto keep : {false, true}) {
+		MeasuredFixture fixture;
+		sgre::text::TextContentRequest first;
+		first.ElementDelay = 3;
+		Require(fixture.Content.Render(Units(u"AB"), fixture.Formatting, fixture.Options, {}, first, fixture.Callbacks), "first retained segment must prepare real glyphs and reveal times");
+		fixture.Content.Finalize(fixture.Formatting, fixture.Options, {});
+		Require(fixture.Content.RevealBoundaries().size() == 1 && fixture.Content.RevealBoundaries()[0].FirstElement == 2 && fixture.Content.RevealBoundaries()[0].Time == 6, "native initial terminal boundary retains the actual rendered count and completed segment end");
+		sgre::text::TextContentRequest empty;
+		empty.ElementDelay = 5;
+		empty.KeepPreviousTimes = keep;
+		Require(fixture.Content.Render({}, fixture.Formatting, fixture.Options, {}, empty, fixture.Callbacks), "native empty append must preserve actual retained content");
+		const auto expected_times = keep ? std::vector<float>{0, 3} : std::vector<float>{0, 0};
+		Require(fixture.Content.Plan().RevealTimes == expected_times && fixture.Content.RenderDelay(1) == (keep ? 6 : 0) && fixture.Content.RenderedElementCount() == 2 && fixture.Content.ElementCount() == 2, "whole native empty-call vectors retain first/count and reset history/duration only for non-keep requests");
+		Require(fixture.Content.RevealBoundaries().size() == 1 && fixture.Content.RevealBoundaries()[0].FirstElement == 2 && fixture.Content.RevealBoundaries()[0].Time == (keep ? 6 : 0), "keep must not append a new key-wait terminal; non-keep replaces it with actual current duration");
+	}
+}
+
+static void TestAppendedRevealQueryReadinessAndSorting() {
+	for (const auto keep : {false, true}) {
+		MeasuredFixture fixture;
+		sgre::text::TextContentRequest first;
+		first.ElementDelay = 3;
+		Require(fixture.Content.Render(Units(u"AB"), fixture.Formatting, fixture.Options, {}, first, fixture.Callbacks), "first append fixture must prepare the actual history");
+		fixture.Content.Finalize(fixture.Formatting, fixture.Options, {});
+		sgre::text::TextContentRequest next;
+		next.ElementDelay = 5;
+		next.KeepPreviousTimes = keep;
+		Require(fixture.Content.Render(Units(u"CD"), fixture.Formatting, fixture.Options, {}, next, fixture.Callbacks), "second actual render must append its own glyphs rather than replacing prior text");
+		Require(fixture.Content.RenderedElementCount() == 4 && fixture.Content.ElementCount() == 4 && fixture.Content.RenderDelay(1) == 10, "new relative timing must restart at zero and retime only the new physical range");
+		Require(fixture.Content.Plan().RevealTimes == (keep ? std::vector<float>{0, 3} : std::vector<float>{0, 0, 0, 5}), "keep defers query-pointer reconstruction until done; non-keep rebuilds the actual whole table immediately");
+		Require(fixture.Content.RevealBoundaries().size() == 1 && fixture.Content.RevealBoundaries()[0].FirstElement == (keep ? 2u : 4u) && fixture.Content.RevealBoundaries()[0].Time == (keep ? 6 : 10), "appending must retain or rebuild original terminal ownership according to the actual query flag");
+		fixture.Content.Finalize(fixture.Formatting, fixture.Options, {});
+		Require(fixture.Content.Plan().RenderOrder == (keep ? std::vector<std::uint32_t>{0, 2, 1, 3} : std::vector<std::uint32_t>{0, 1, 2, 3}) && fixture.Content.Plan().RevealTimes == (keep ? std::vector<float>{0, 0, 3, 5} : std::vector<float>{0, 0, 0, 5}), "second-call done must sort real retained elements by actual reveal time while preserving their identities");
+	}
+
+	MeasuredFixture current;
+	sgre::text::TextContentRequest first;
+	first.ElementDelay = 3;
+	Require(current.Content.Render(Units(u"ABC"), current.Formatting, current.Options, {}, first, current.Callbacks), "unfinalized append fixture requires an actual current line");
+	sgre::text::TextContentRequest next;
+	next.ElementDelay = 5;
+	Require(current.Content.Render(Units(u"D"), current.Formatting, current.Options, {}, next, current.Callbacks), "unfinalized second render must append to the actual current line");
+	Require(current.Content.Plan().RevealTimes == std::vector<float>{0, 3, 6, 0} && current.Content.RenderDelay(1) == 5 && current.Content.CurrentLine().size() == 4, "non-keep resets completed history only; it must not flatten current-line reveal times or retime earlier elements");
+	current.Content.Finalize(current.Formatting, current.Options, {});
+	Require(current.Content.Plan().RenderOrder == std::vector<std::uint32_t>{0, 3, 1, 2}, "done must still order repeated non-keep current-line times using the native call counter");
 }
 
 static void TestSignedIndentWithoutGrouping() {
@@ -585,7 +631,9 @@ int main(int argc, char** argv) {
 		TestNativeCenterDirectiveAndProcessedPrefix();
 		TestOverflowRetiresActualCurrentLine();
 		TestPreflightAndCallbackReentry();
-		TestEveryPriorRenderKeepsAppendDomainClosed();
+		TestRepeatedEmptyAndRejectedRenderContinuation();
+		TestNativeEmptyAppendTimingAndKeep();
+		TestAppendedRevealQueryReadinessAndSorting();
 		TestSignedIndentWithoutGrouping();
 		TestNativeQuoteNestingAndLineStarts();
 		TestDistinctOpeningMeasurementAndCallbackOrder();

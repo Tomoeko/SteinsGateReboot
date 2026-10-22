@@ -20,7 +20,8 @@ namespace sgre::text {
 	};
 
 	// Supply history-line elements followed by current-line elements in their native order.
+	// The rendered counter includes failed append attempts and can exceed retained elements.
 	// Call only while preparing text; the operation preflights and retimes caller-owned values without allocation.
-	[[nodiscard]] TextRevealRetiming RetimeTextRevealSegment(TextRevealCursor& cursor, std::span<float> element_times, std::uint32_t first_element, bool force_target_time, float default_element_delay, std::int32_t target_time);
+	[[nodiscard]] TextRevealRetiming RetimeTextRevealSegment(TextRevealCursor& cursor, std::span<float> element_times, std::uint32_t rendered_element_count, std::uint32_t first_element, bool force_target_time, float default_element_delay, std::int32_t target_time);
 
 } // namespace sgre::text

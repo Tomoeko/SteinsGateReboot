@@ -184,11 +184,11 @@ static void TestRealVmFontOwnerAndDrawReceiving() {
 	Require(drawn.size() == 2 && drawn[0].ColorRgba == 0x008affff && drawn[1].ColorRgba == 0x804020ff, "actual VM/render/done/atlas/draw must preserve orange then default color");
 	const auto finds = fixture.FindCalls;
 	fixture.Call("clear");
-	Require(fixture.Text.Context(fixture.Instance).Content().ElementCount() == 0, "actual clear must release all retained tip elements");
+	Require(fixture.Text.Context(fixture.Instance).Content().ElementCount() == 0 && fixture.FindCalls == finds, "actual clear releases retained tip elements and existing private fonts after cached reset callbacks without reacquiring providers");
 	fixture.Render("B");
 	drawn.clear();
 	fixture.Draw();
-	Require(drawn.size() == 1 && drawn[0].ColorRgba == 0x804020ff && fixture.FindCalls == finds, "real reset must not lose its retained FontInfo owner or glyph cache");
+	Require(drawn.size() == 1 && drawn[0].ColorRgba == 0x804020ff && fixture.FindCalls == finds + 2, "native full Clear retires private font interfaces; subsequent rendering reacquires normal/ruby while preserving the source and default appearance");
 }
 
 int main() {

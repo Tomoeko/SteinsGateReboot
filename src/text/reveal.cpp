@@ -13,8 +13,8 @@ namespace sgre::text {
 		}
 	}
 
-	TextRevealRetiming RetimeTextRevealSegment(TextRevealCursor& cursor, std::span<float> element_times, std::uint32_t first_element, bool force_target_time, float default_element_delay, std::int32_t target_time) {
-		if (element_times.size() > kMaximumRevealElements || cursor.SegmentFirstElement > kMaximumRevealElements || first_element > kMaximumRevealElements) {
+	TextRevealRetiming RetimeTextRevealSegment(TextRevealCursor& cursor, std::span<float> element_times, std::uint32_t rendered_element_count, std::uint32_t first_element, bool force_target_time, float default_element_delay, std::int32_t target_time) {
+		if (element_times.size() > rendered_element_count || rendered_element_count > kMaximumRevealElements || cursor.SegmentFirstElement > kMaximumRevealElements || first_element > kMaximumRevealElements) {
 			throw std::runtime_error("text reveal count exceeds recovery limit");
 		}
 
@@ -23,7 +23,7 @@ namespace sgre::text {
 		RequireFiniteTime(cursor.SegmentBaseTime);
 		RequireFiniteTime(default_element_delay);
 		TextRevealRetiming result;
-		if (element_times.size() <= first_element) {
+		if (rendered_element_count <= first_element) {
 			return result;
 		}
 
@@ -51,7 +51,7 @@ namespace sgre::text {
 		}
 
 		cursor.SegmentBaseTime = segment_end;
-		cursor.SegmentFirstElement = static_cast<std::uint32_t>(element_times.size());
+		cursor.SegmentFirstElement = rendered_element_count;
 		cursor.NextRelativeTime = 0;
 		result.SegmentDuration = duration;
 		result.Changed = true;

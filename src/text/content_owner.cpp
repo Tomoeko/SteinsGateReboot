@@ -483,15 +483,13 @@ namespace sgre::text {
 			elements.push_back(&element);
 			times.push_back(element.RevealTime);
 		}
-		static_cast<void>(RetimeTextRevealSegment(m_Reveal, times, m_Reveal.SegmentFirstElement, request.TargetTime > 0, delay, request.TargetTime));
+		static_cast<void>(RetimeTextRevealSegment(m_Reveal, times, m_RenderedElementCount, m_Reveal.SegmentFirstElement, request.TargetTime > 0, delay, request.TargetTime));
 		if (m_Reveal.SegmentBaseTime > m_RenderDelay) {
 			m_RenderDelay = m_Reveal.SegmentBaseTime;
 		}
 		for (std::size_t index = 0; index < elements.size(); ++index) {
 			elements[index]->RevealTime = times[index];
 		}
-		m_Boundaries.push_back({static_cast<std::uint32_t>(elements.size()), 0});
-		++m_SegmentCount;
 	}
 
 	bool TextContentOwner::Render(std::span<const std::uint16_t> input, TextFormattingState& formatting, const TextProcessingOptions& options, TextCursor render_size, const TextContentRequest& request, const TextContentCallbacks& callbacks) {
@@ -499,8 +497,8 @@ namespace sgre::text {
 			throw std::runtime_error("text content operation cannot reenter its retained owner");
 		}
 		RequireContentDomain(input, formatting, options, callbacks);
-		if (m_SegmentCount != 0) {
-			throw std::runtime_error("Text.render appended-segment state requires native multi-call timing recovery");
+		if (m_RenderCallCount >= kMaximumContentElements) {
+			throw std::runtime_error("text render call count exceeds its bounded preparation domain");
 		}
 		m_Operating = true;
 		try {
@@ -517,10 +515,13 @@ namespace sgre::text {
 					}
 				}
 				m_Boundaries.clear();
-				m_SegmentCount = 0;
+				m_RevealQueriesPending = true;
 				m_RenderDelay = 0;
 			}
-			m_Reveal = {};
+			// Native032B23 resets per-call relative clocks, retaining core+260.
+			m_Reveal.NextRelativeTime = 0;
+			m_Reveal.LastRelativeTime = 0;
+			m_Reveal.SegmentBaseTime = 0;
 			const auto delay = request.TargetTime > 0 && request.ElementDelay == 0 ? 0.001f : static_cast<float>(request.ElementDelay);
 			TextMarkupReader reader(input);
 			std::size_t work = 0;
@@ -576,23 +577,34 @@ namespace sgre::text {
 				}
 			}
 			Retime(request, delay);
-			m_Plan = {};
-			// The native query table is already available when Render returns; done later rebuilds its order.
-			m_Plan.RevealTimes.reserve(m_ElementCount);
-			for (const auto& line : m_History) {
-				for (const auto& element : line.Elements) {
-					m_Plan.RevealTimes.push_back(element.RevealTime);
-				}
+			if (m_RevealQueriesPending) {
+				RebuildRevealQueries();
 			}
-			for (const auto& element : m_Current) {
-				m_Plan.RevealTimes.push_back(element.RevealTime);
-			}
+			++m_RenderCallCount;
 			m_Operating = false;
 			return accepted;
 		} catch (...) {
 			m_Operating = false;
 			throw;
 		}
+	}
+
+	void TextContentOwner::RebuildRevealQueries() {
+		m_Boundaries.push_back({m_RenderedElementCount, 0});
+		m_Plan = {};
+		m_Plan.RevealTimes.reserve(m_ElementCount);
+		for (const auto& line : m_History) {
+			for (const auto& element : line.Elements) {
+				m_Plan.RevealTimes.push_back(element.RevealTime);
+			}
+		}
+		for (const auto& element : m_Current) {
+			m_Plan.RevealTimes.push_back(element.RevealTime);
+		}
+		for (auto& boundary : m_Boundaries) {
+			boundary.Time = boundary.FirstElement < m_Plan.RevealTimes.size() ? m_Plan.RevealTimes[boundary.FirstElement] : m_Reveal.SegmentBaseTime;
+		}
+		m_RevealQueriesPending = false;
 	}
 
 	void TextContentOwner::RebuildPlan() {
@@ -612,7 +624,7 @@ namespace sgre::text {
 			}
 			lines.push_back({storage[index]});
 		}
-		m_Plan = PrepareTextRenderPlan(lines, {}, m_Boundaries, m_SegmentCount);
+		m_Plan = PrepareTextRenderPlan(lines, {}, m_Boundaries, m_RenderCallCount);
 		m_Boundaries = m_Plan.RevealBoundaries;
 	}
 
@@ -689,7 +701,8 @@ namespace sgre::text {
 		m_Wrap = {};
 		m_Reveal = {};
 		m_Boundaries.clear();
-		m_SegmentCount = 0;
+		m_RenderCallCount = 0;
+		m_RevealQueriesPending = true;
 		m_ElementCount = 0;
 		m_RenderedElementCount = 0;
 		m_RenderDelay = 0;

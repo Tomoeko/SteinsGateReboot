@@ -1,0 +1,15 @@
+# Repeated Text.render calls
+
+Reference `Files/STEINS.GATE.REBOOT/sgre_steam.exe`, SHA-256 `75a83a0e2a7e22055417ae0474b47be98418c4e42c695c548b558705c404b9d8`. Read-only Binary Ninja inspection uses `candidate:view:2:UEU`; addresses are executable VAs.
+
+Render `0x1400328E0` selects normal/measurement/ruby services before resetting per-call timing. At `0x140032B23`, it resets core+250, relative next/last clocks+258/+25C and segment base+264. It retains the rendered-element counter+254 and first-element cursor+260. A non-keep request additionally zeros completed-history element times, clears boundary records, resets duration+268 and sets query-rebuild flag+2B8. It leaves current-line times and render-call count+2BC intact.
+
+Retiming `0x140030250` compares the rendered counter against the requested first index, then visits actual retained elements by physical order. Append `0x140030FA0` increments that counter before `0x14002DC40` can reject an element. The counter can therefore exceed retained storage. The portable retiming interface keeps those quantities separate, including an empty physical range with a genuine counter advance.
+
+At `0x140032D06`, a clear query flag skips terminal insertion and query-table reconstruction. Otherwise the native tail appends the rendered count, rebuilds actual element pointers and fills each boundary time from its selected element or the completed segment end. `0x140034D66` clears that flag and increments the render-call count. Thus a kept append retains the preceding query table until done; it does not manufacture a new key wait. Done `0x14002F280` uses the retained call count to select its existing time-ordering phase.
+
+The portable owner now follows these phases while retaining its real glyph runs, geometry, fonts, formatting, wrapping and ruby owners. Clear resets the count/cursor/query readiness. The former blanket repeated-render rejection is removed; unsupported markup and lifetime/work limits remain explicit.
+
+Eight whole unchanged Render executions with empty input/prepared retained history and four independent retiming executions visit 1,966 byte-verified native instructions at 349 sites, plus 40 declared service-boundary visits. Prepared core/history storage, font selection/measurement, UTF-16 length and security-cookie return are explicit boundaries; this is not whole glyph append, font-factory or native pixel acceptance. Private report SHA-256: `699a83c8ae579e313695777ebe0ecce94effbb9240d36fb8deb56e982e796974`.
+
+Twelve focused sanitizer suites pass. New cases cover empty/LF/rejected predecessors, kept and non-kept append, current versus completed lines, counter/storage divergence, terminal timing, query readiness and done ordering. Two stale expectations were corrected: a two-element delay3 terminal ends at6, and the already-recovered full atlas Clear reacquires normal/ruby interfaces on the following render. Original chapter-two receiving is tracked separately; full multi-call native glyph/frame equality remains open.

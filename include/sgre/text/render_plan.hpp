@@ -51,7 +51,7 @@ namespace sgre::text {
 
 	// Call during text preparation. Lines borrow the owner's finalized geometry and UTF-16 text.
 	// Existing link state is retained and appended, as in the original finalized-list phase.
-	// More than one reveal segment enables stable time ordering and updates all but the last boundary.
-	[[nodiscard]] TextRenderPlan PrepareTextRenderPlan(std::span<const TextRenderLine> lines, std::span<const TextLinkState> links, std::span<const TextRevealBoundary> reveal_boundaries, std::uint32_t reveal_segment_count);
+	// More than one Render call enables stable time ordering and updates all but the last boundary.
+	[[nodiscard]] TextRenderPlan PrepareTextRenderPlan(std::span<const TextRenderLine> lines, std::span<const TextLinkState> links, std::span<const TextRevealBoundary> reveal_boundaries, std::uint32_t render_call_count);
 
 } // namespace sgre::text

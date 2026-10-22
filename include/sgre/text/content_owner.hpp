@@ -95,6 +95,7 @@ namespace sgre::text {
 		[[nodiscard]] bool FinishLine(const TextFormattingState& formatting, const TextProcessingOptions& options, TextCursor render_size);
 		void Retime(const TextContentRequest& request, float delay);
 		void RebuildPlan();
+		void RebuildRevealQueries();
 		std::deque<TextContentElement> m_Current;
 		std::vector<TextContentLine> m_History;
 		std::u16string m_Processed;
@@ -108,13 +109,15 @@ namespace sgre::text {
 		TextWrapState m_Wrap;
 		TextRevealCursor m_Reveal;
 		std::vector<TextRevealBoundary> m_Boundaries;
-		std::uint32_t m_SegmentCount = 0;
+		std::uint32_t m_RenderCallCount = 0;
 		std::size_t m_ElementCount = 0;
 		std::uint32_t m_RenderedElementCount = 0;
 		// Native core+268 retains the greatest completed reveal-segment end.
 		float m_RenderDelay = 0;
 		// Retained native core+B8; parser nesting is local to each Render and Clear resets this value.
 		float m_LineStart = 0;
+		// Native core+2B8 controls terminal-boundary and query-table reconstruction.
+		bool m_RevealQueriesPending = true;
 		bool m_Overflowed = false;
 		bool m_Operating = false;
 		bool m_Clearing = false;

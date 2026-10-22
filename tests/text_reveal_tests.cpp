@@ -58,7 +58,7 @@ static void TestOriginalCompleteRevealOperation() {
 			times[index] = std::bit_cast<float>(fixture.ElementInputs[index]);
 		}
 
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, std::span<float>(times).first(fixture.Count), fixture.First, fixture.Force, std::bit_cast<float>(fixture.CursorInputs[0]), fixture.Target));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, std::span<float>(times).first(fixture.Count), static_cast<std::uint32_t>(fixture.Count), fixture.First, fixture.Force, std::bit_cast<float>(fixture.CursorInputs[0]), fixture.Target));
 		Require(std::bit_cast<std::uint32_t>(cursor.NextRelativeTime) == fixture.CursorOutputs[0] && cursor.SegmentFirstElement == fixture.CursorOutputs[1] && std::bit_cast<std::uint32_t>(cursor.SegmentBaseTime) == fixture.CursorOutputs[2], "reveal cursor differs from original instructions");
 		for (std::size_t index = 0; index < fixture.Count; ++index) {
 			Require(std::bit_cast<std::uint32_t>(times[index]) == fixture.ElementOutputs[index], "reveal element time differs from original instructions");
@@ -72,20 +72,20 @@ static void TestNaturalAndTargetDurations() {
 	cursor.LastRelativeTime = 20;
 	cursor.SegmentBaseTime = 100;
 	std::array<float, 4> times{3, 0, 10, 20};
-	const auto natural = sgre::text::RetimeTextRevealSegment(cursor, times, 1, false, 10, 0);
+	const auto natural = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1, false, 10, 0);
 	Require(natural.Changed && natural.Scale == 1 && natural.SegmentDuration == 30 && times == std::array<float, 4>{3, 100, 110, 120}, "natural reveal segment did not retain delay and base time");
 	Require(cursor.NextRelativeTime == 0 && cursor.SegmentBaseTime == 130 && cursor.SegmentFirstElement == 4 && cursor.LastRelativeTime == 20, "reveal segment advanced or reset the wrong cursor fields");
 	cursor.SegmentBaseTime = 100;
 	times = {3, 0, 10, 20};
-	const auto shortened = sgre::text::RetimeTextRevealSegment(cursor, times, 1, false, 10, 115);
+	const auto shortened = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1, false, 10, 115);
 	Require(shortened.Scale == 0.5f && shortened.SegmentDuration == 15 && times == std::array<float, 4>{3, 100, 105, 110} && cursor.SegmentBaseTime == 115, "shorter target did not compress the current segment");
 	cursor.SegmentBaseTime = 100;
 	times = {3, 0, 10, 20};
-	const auto extended = sgre::text::RetimeTextRevealSegment(cursor, times, 1, false, 10, 160);
+	const auto extended = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1, false, 10, 160);
 	Require(extended.Scale == 1 && extended.SegmentDuration == 60 && times[3] == 120 && cursor.SegmentBaseTime == 160, "unforced later target stretched element reveal times");
 	cursor.SegmentBaseTime = 100;
 	times = {3, 0, 10, 20};
-	const auto forced = sgre::text::RetimeTextRevealSegment(cursor, times, 1, true, 10, 160);
+	const auto forced = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1, true, 10, 160);
 	Require(forced.Scale == 2 && forced.SegmentDuration == 60 && times[3] == 140 && cursor.SegmentBaseTime == 160, "forced target did not scale the selected segment");
 }
 
@@ -94,14 +94,28 @@ static void TestEmptyAndSignedZero() {
 	cursor.NextRelativeTime = 20;
 	cursor.SegmentBaseTime = 12;
 	std::array<float, 1> times{99};
-	const auto unchanged = sgre::text::RetimeTextRevealSegment(cursor, times, 1, true, 10, 0);
+	const auto unchanged = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1, true, 10, 0);
 	Require(!unchanged.Changed && times[0] == 99 && cursor.NextRelativeTime == 20 && cursor.SegmentBaseTime == 12, "empty selection mutated timing state");
 	cursor = {};
 	cursor.SegmentBaseTime = 0.0f;
 	cursor.LastRelativeTime = -0.0f;
-	const auto zero = sgre::text::RetimeTextRevealSegment(cursor, times, 0, false, -0.0f, 0);
+	const auto zero = sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 0, false, -0.0f, 0);
 	Require(zero.Changed && std::bit_cast<std::uint32_t>(zero.SegmentDuration) == 0, "native MAXSS equal signed-zero selection changed");
 	Require(cursor.SegmentFirstElement == 1, "retiming did not count the selected element");
+}
+
+static void TestNativeAttemptedCountWithoutRetainedCells() {
+	// Whole unchanged030250 vectors distinguish the native254 counter from deque size.
+	for (const auto retained : {std::size_t{0}, std::size_t{1}}) {
+		sgre::text::TextRevealCursor cursor;
+		cursor.NextRelativeTime = 9;
+		cursor.LastRelativeTime = 4;
+		cursor.SegmentFirstElement = 1;
+		cursor.SegmentBaseTime = 10;
+		std::array<float, 1> times{99};
+		const auto result = sgre::text::RetimeTextRevealSegment(cursor, std::span<float>(times).first(retained), 2, 1, false, 3, 0);
+		Require(result.Changed && result.SegmentDuration == 7 && cursor.NextRelativeTime == 0 && cursor.LastRelativeTime == 4 && cursor.SegmentFirstElement == 2 && cursor.SegmentBaseTime == 17 && times[0] == 99, "native attempted-count guard must advance retained history even when no physical element falls in the selected range");
+	}
 }
 
 static void TestPreflightAndLimits() {
@@ -111,25 +125,25 @@ static void TestPreflightAndLimits() {
 	cursor.SegmentBaseTime = 10;
 	std::array<float, 3> times{1, 2, std::numeric_limits<float>::infinity()};
 	RequireFailure([&] {
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, 0, false, 1, 0));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 0, false, 1, 0));
 	});
 	Require(times[0] == 1 && times[1] == 2 && cursor.NextRelativeTime == 3 && cursor.SegmentBaseTime == 10, "invalid reveal preparation partially mutated output");
 	times = {1, 2, 3};
 	cursor.LastRelativeTime = 0;
 	RequireFailure([&] {
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, 0, true, 0, 100));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 0, true, 0, 100));
 	});
 	Require(times == std::array<float, 3>{1, 2, 3} && cursor.SegmentBaseTime == 10, "zero-duration division changed output before validation");
 	cursor.SegmentFirstElement = 1'000'001;
 	RequireFailure([&] {
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, 0, false, 1, 0));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 0, false, 1, 0));
 	});
 	cursor = {};
 	RequireFailure([&] {
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, 1'000'001, false, 1, 0));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 1'000'001, false, 1, 0));
 	});
 	RequireFailure([&] {
-		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, 0, false, std::numeric_limits<float>::quiet_NaN(), 0));
+		static_cast<void>(sgre::text::RetimeTextRevealSegment(cursor, times, static_cast<std::uint32_t>(times.size()), 0, false, std::numeric_limits<float>::quiet_NaN(), 0));
 	});
 }
 
@@ -139,6 +153,7 @@ int main() {
 		TestNaturalAndTargetDurations();
 		TestEmptyAndSignedZero();
 		TestPreflightAndLimits();
+		TestNativeAttemptedCountWithoutRetainedCells();
 		std::cout << "Text reveal tests passed\n";
 	} catch (const std::exception& error) {
 		std::cerr << error.what() << '\n';

@@ -210,7 +210,7 @@ static void TestActualKeyWaitGetterAndRetirement() {
 	Require(next != empty && fixture.Vm.Length(next) == 0 && fixture.Vm.Length(empty) == 1, "each getter must create an independent array and ignore native extra operands");
 	Require(std::get<bool>(fixture.Call("render", {std::string("BB"), std::int32_t{0}, std::int32_t{3}, std::int32_t{0}, false})), "key-wait fixture must own two genuine shaped content elements");
 	const auto& content = fixture.Text.Context(fixture.Instance).Content();
-	Require(content.RevealBoundaries().size() == 1 && content.RevealBoundaries()[0].FirstElement == 2 && content.RevealBoundaries()[0].Time == 0, "actual single Render owns the native terminal boundary before done");
+	Require(content.RevealBoundaries().size() == 1 && content.RevealBoundaries()[0].FirstElement == 2 && content.RevealBoundaries()[0].Time == 6, "actual single Render owns the native terminal boundary before done");
 	Require(fixture.Vm.Length(fixture.Call("getKeyWait")) == 0, "terminal-only native boundary cannot manufacture a key-wait record before done");
 	fixture.Call("done");
 	fixture.Call("setTimeScale", {2.5f});
