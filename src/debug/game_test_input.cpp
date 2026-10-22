@@ -25,10 +25,28 @@ namespace sgre::debug {
 
 	bool GameTestInput::Queue(GameTestKey key) {
 		static_cast<void>(KeyCodes(key));
+		Action action;
+		action.Key = key;
+
+		return QueueAction(action);
+	}
+
+	bool GameTestInput::QueueClick(std::int32_t x, std::int32_t y) {
+		static constexpr std::int32_t kMaximumCoordinate = 16384;
+		if (x < 0 || y < 0 || x >= kMaximumCoordinate || y >= kMaximumCoordinate) {
+			return false;
+		}
+		Action action;
+		action.Click = input::MousePixels{x, y};
+
+		return QueueAction(action);
+	}
+
+	bool GameTestInput::QueueAction(Action action) {
 		if (m_Count == kCapacity) {
 			return false;
 		}
-		m_Queue[(m_First + m_Count) % kCapacity] = key;
+		m_Queue[(m_First + m_Count) % kCapacity] = action;
 		++m_Count;
 
 		return true;
@@ -36,36 +54,62 @@ namespace sgre::debug {
 
 	void GameTestInput::BeginUpdate(bool hub_sampled) {
 		// InputHub samples in VSync after Update; keep the latch through that completed update.
-		m_Pressed = m_PressUpdates != 0;
-		if (m_PressUpdates != 0 || m_ReleaseUpdates != 0 || m_Count == 0 || !hub_sampled) {
+		m_Pressed = m_Phase == Phase::Press;
+		if (m_Phase != Phase::Idle || m_Count == 0 || !hub_sampled) {
 			return;
 		}
 		m_Active = m_Queue[m_First];
 		m_First = (m_First + 1) % kCapacity;
 		--m_Count;
-		m_PressUpdates = 4;
-		m_Pressed = true;
+		if (m_Active->Click) {
+			// Prime MouseInput's real enter/position state before delivering its first button edge.
+			m_Mouse = m_Active->Click;
+			m_Phase = Phase::Hover;
+			m_Remaining = 1;
+		} else {
+			m_Phase = Phase::Press;
+			m_Remaining = 4;
+			m_Pressed = true;
+		}
 	}
 
 	void GameTestInput::EndUpdate() noexcept {
-		if (m_PressUpdates != 0) {
-			--m_PressUpdates;
-			if (m_PressUpdates == 0) {
-				m_ReleaseUpdates = 1;
-			}
-		} else if (m_ReleaseUpdates != 0) {
-			--m_ReleaseUpdates;
+		if (m_Remaining == 0 || --m_Remaining != 0) {
+			return;
+		}
+		if (m_Phase == Phase::Hover) {
+			m_Phase = Phase::Press;
+			m_Remaining = 4;
+		} else if (m_Phase == Phase::Press) {
+			m_Phase = Phase::Release;
+			m_Remaining = 1;
+		} else {
+			m_Phase = Phase::Idle;
 		}
 	}
 
 	input::KeyboardSample GameTestInput::Keyboard() const {
 		input::KeyboardSample result;
 		result.Available = true;
-		if (m_Pressed && m_Active) {
-			const auto codes = KeyCodes(*m_Active);
+		if (m_Pressed && m_Active && m_Active->Key) {
+			const auto codes = KeyCodes(*m_Active->Key);
 			result.ScanKeys[codes[0]] = 0x80;
 			result.VirtualKeys[codes[1]] = 0x80;
 		}
+
+		return result;
+	}
+
+	std::optional<input::MouseSample> GameTestInput::Mouse() const {
+		if (!m_Mouse) {
+			return {};
+		}
+		input::MouseSample result;
+		result.ClientX = m_Mouse->X;
+		result.ClientY = m_Mouse->Y;
+		result.TargetWindowMatches = true;
+		result.EnterTracking = true;
+		result.Buttons = m_Pressed && m_Active && m_Active->Click ? 1 : 0;
 
 		return result;
 	}

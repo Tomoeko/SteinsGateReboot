@@ -11,8 +11,30 @@ static void Require(bool condition, const char* message) {
 	}
 }
 
+static void TestMouseEdgesAndKeyboardIsolation() {
+	sgre::debug::GameTestInput input;
+	Require(!input.Mouse() && !input.QueueClick(-1, 12) && !input.QueueClick(12, 16384), "headless click must reject invalid bounded client coordinates without enabling a pointer");
+	Require(input.QueueClick(48, 701) && input.Queue(sgre::debug::GameTestKey::Confirm), "headless mixed input queue rejected its bounded actions");
+	sgre::input::MouseInput mouse;
+	for (std::size_t frame = 0; frame != 6; ++frame) {
+		input.BeginUpdate(true);
+		input.EndUpdate();
+		auto sample = input.Mouse();
+		Require(sample && sample->ClientX == 48 && sample->ClientY == 701, "headless pointer lost its exact logical client position");
+		sample->Client = {0, 0, 1280, 720};
+		mouse.Advance(*sample);
+		Require(mouse.Inside() && mouse.Buttons() == (frame >= 1 && frame <= 4 ? 1 : 0), "headless mouse hover, hold or release changed");
+		Require(mouse.Pressed() == (frame == 1 ? 1 : 0) && mouse.Released() == (frame == 5 ? 1 : 0), "headless click must prime actual MouseInput before one press and one release edge");
+		Require(input.Keyboard().ScanKeys[0x1c] == 0, "headless click leaked a keyboard confirm or skipped its release interval");
+	}
+	input.BeginUpdate(true);
+	input.EndUpdate();
+	Require(input.Keyboard().ScanKeys[0x1c] == 0x80 && input.Mouse()->Buttons == 0, "following keyboard action must leave the headless mouse released at its retained position");
+}
+
 int main() {
 	try {
+		TestMouseEdgesAndKeyboardIsolation();
 		using sgre::debug::GameTestKey;
 		const std::array<GameTestKey, 7> keys{GameTestKey::Confirm, GameTestKey::Cancel, GameTestKey::Up, GameTestKey::Down, GameTestKey::Left, GameTestKey::Right, GameTestKey::Escape};
 		const std::array<std::size_t, 7> scans{0x1c, 0x2d, 0xc8, 0xd0, 0xcb, 0xcd, 1};

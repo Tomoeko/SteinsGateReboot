@@ -212,6 +212,21 @@ namespace sgre::platform {
 		}
 	}
 
+	static input::MousePixels ReadPrivateClick(std::string_view text) {
+		const auto comma = text.find(',');
+		if (comma == std::string_view::npos || comma == 0 || comma + 1 == text.size()) {
+			throw std::runtime_error("headless click requires @x,y followed by a newline");
+		}
+		input::MousePixels result;
+		const auto x = std::from_chars(text.data(), text.data() + comma, result.X);
+		const auto y = std::from_chars(text.data() + comma + 1, text.data() + text.size(), result.Y);
+		if (x.ec != std::errc{} || x.ptr != text.data() + comma || y.ec != std::errc{} || y.ptr != text.data() + text.size()) {
+			throw std::runtime_error("headless click coordinates must be bounded decimal integers");
+		}
+
+		return result;
+	}
+
 	class PrivateStartupStdin {
 	public:
 		explicit PrivateStartupStdin(bool enabled) {
@@ -632,6 +647,11 @@ namespace sgre::platform {
 			++m_PendingMouseMoves;
 
 			return true;
+		}
+
+		[[nodiscard]] bool QueuePrivateClick(input::MousePixels point) {
+			RequireOpen();
+			return m_Owners.Headless && m_PrivateKeys.QueueClick(point.X, point.Y);
 		}
 
 		[[nodiscard]] bool SceneEntryReady() const {
@@ -1396,6 +1416,10 @@ namespace sgre::platform {
 		std::array<scene::MotionMaskedBlendPass, 20> m_BlendPasses;
 
 		[[nodiscard]] input::MouseSample ReadPrivateMouseFrame() {
+			if (auto replay = m_PrivateKeys.Mouse()) {
+				replay->Client = {0, 0, 1280, 720};
+				return *replay;
+			}
 			if (!m_PrivateMouseEnabled && m_PendingMouseMoves == 0) {
 				return m_Owners.Platform.ReadMouseFrame();
 			}
@@ -1894,6 +1918,20 @@ namespace sgre::platform {
 			std::array<char, 256> buffer{};
 			const auto count = m_Stdin.Read(buffer);
 			for (const auto command : std::span(buffer).first(count)) {
+				if (m_ReadingPrivateClick) {
+					if (command == '\n' || command == '\r') {
+						const auto point = ReadPrivateClick(m_PrivateClick);
+						std::cerr << "private stdin click x=" << point.X << " y=" << point.Y << " queued=" << m_Driver->QueuePrivateClick(point) << '\n';
+						m_PrivateClick.clear();
+						m_ReadingPrivateClick = false;
+					} else {
+						if (m_PrivateClick.size() == 48) {
+							throw std::runtime_error("headless click command exceeds its bounded coordinate buffer");
+						}
+						m_PrivateClick.push_back(command);
+					}
+					continue;
+				}
 				if (command == ' ' || command == '\t' || command == '\r' || command == '\n') {
 					continue;
 				}
@@ -1903,7 +1941,9 @@ namespace sgre::platform {
 					break;
 				}
 				++m_PrivateCommands;
-				if (command == 'r') {
+				if (command == '@') {
+					m_ReadingPrivateClick = true;
+				} else if (command == 'r') {
 					std::cerr << "private stdin Return queued=" << m_Driver->QueuePrivateKeyPulse(debug::GameTestKey::Confirm) << '\n';
 				} else if (const auto key = ReadPrivateKeyCommand(command)) {
 					std::cerr << "private stdin key=" << command << " queued=" << m_Driver->QueuePrivateKeyPulse(*key) << '\n';
@@ -2346,6 +2386,8 @@ namespace sgre::platform {
 		static constexpr std::uint32_t kMaximumRootPhaseStallRows = 64;
 		std::uint32_t m_RootPhaseStallRows = 0;
 		static constexpr std::uint32_t kMaximumPrivateCommands = 4096;
+		std::string m_PrivateClick;
+		bool m_ReadingPrivateClick = false;
 		bool m_TestStopRequested = false;
 		static constexpr std::uint32_t kMaximumCaptureRequests = 16;
 		static constexpr std::uint32_t kMaximumCaptureFileAttempts = 4096;
