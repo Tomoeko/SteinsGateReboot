@@ -14,6 +14,7 @@ namespace sgre::scene {
 	class MotionSelectedLayerNodes;
 	class MotionLayerMeshLocalOwner;
 	class MotionSelectedMeshAncestry;
+	class MotionNumericStorage;
 
 	struct MotionLayerOverrides {
 		std::array<float, 3> Coordinate{};
@@ -77,6 +78,7 @@ namespace sgre::scene {
 
 	private:
 		friend class MotionSceneEvaluation;
+		friend class MotionNumericStorage;
 		friend class MotionLocalFrames;
 		friend class MotionLayerShapeOwner;
 		friend class MotionSelectedMeshGeometry;
@@ -94,6 +96,7 @@ namespace sgre::scene {
 		bool m_NormalizeAgainstRoot = false;
 		std::vector<MotionLayerOverrides> m_Overrides;
 		std::vector<MotionComposedLayer> m_Layers;
+		MotionNumericStorage* m_NumericStorage = nullptr;
 		std::vector<bool> m_OverrideDirty;
 		std::vector<bool> m_Changes;
 		bool m_Composed = false;

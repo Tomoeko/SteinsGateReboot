@@ -461,10 +461,136 @@ static void TestRetainedLayerVisibility() {
 	require_visibility(false, true);
 	fixture.Secondary->SceneContext().Clear();
 	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	require_visibility(true, true);
+}
+
+static void TestNumericAllocationSurvivesSelectionReplacement() {
+	using sgre::resource::PsbArray;
+	using sgre::resource::PsbObject;
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	auto& motions = FixtureField(FixtureField(FixtureField(document->Root, "object"), "outer"), "motion");
+	auto replacement = FixtureField(motions, "main");
+	auto& replacement_layers = std::get<PsbArray>(FixtureField(replacement, "layer").Data);
+	replacement_layers.resize(1);
+	FixtureField(replacement_layers[0], "label") = Atom(std::string("different replacement label"));
+	auto& frames = std::get<PsbArray>(FixtureField(replacement_layers[0], "frameList").Data);
+	FixtureField(FixtureField(frames[0], "content"), "coord") = Atom(PsbArray{Atom(6.0), Atom(9.0), Atom(0.0)});
+	FixtureField(replacement, "layerIndexMap") = Atom(PsbObject{{"replacement key", Integer(0)}});
+	FixtureField(std::get<PsbArray>(FixtureField(replacement, "priority").Data)[0], "content") = Atom(PsbArray{Integer(0)});
+	auto larger = replacement;
+	auto& larger_layers = std::get<PsbArray>(FixtureField(larger, "layer").Data);
+	while (larger_layers.size() != 8) {
+		larger_layers.push_back(Layer(false, 2));
+	}
+	PsbArray order;
+	for (std::size_t index = 0; index != larger_layers.size(); ++index) {
+		order.push_back(Integer(static_cast<std::int64_t>(index)));
+	}
+	FixtureField(std::get<PsbArray>(FixtureField(larger, "priority").Data)[0], "content") = Atom(std::move(order));
+	std::get<PsbObject>(motions.Data).emplace_back("replacement", std::move(replacement));
+	std::get<PsbObject>(motions.Data).emplace_back("larger", std::move(larger));
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("rectangle map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto setter = fixture.Call(motion, "getLayerSetter", {std::string("rectangle map key")});
+	const auto setter_root = fixture.Vm.Retain(setter);
+	const auto nested = fixture.Call(motion, "getLayerGetter", {std::string("nested map key")});
+	const auto nested_root = fixture.Vm.Retain(nested);
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto old_reference = task.GenericPlayer()->Scene()->FindLayer("rectangle map key");
+	Require(std::get<float>(fixture.Call(getter, "getTop")) == 40, "numeric fixture must begin at its genuine composed cell");
+	static_cast<void>(fixture.Call(motion, "clear"));
+	Require(std::get<float>(fixture.Call(getter, "getTop")) == 40, "Clear retains the physical numeric cell without retaining selected resources");
 	RequireFailure([&] {
-		static_cast<void>(fixture.Call(getter, "getVisible"));
+		static_cast<void>(fixture.Call(nested, "getTop"));
 	},
 	    "retired");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("replacement"), std::int32_t{1}}));
+	Require(std::get<float>(fixture.Call(getter, "getTop")) == 0, "same allocation reads the newly initialized physical ordinal before composition");
+	RequireFailure([&] {
+		static_cast<void>(task.GenericPlayer()->Scene()->LayerCoordinate(*old_reference));
+	},
+	    "retired actual root selection");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(std::get<float>(fixture.Call(getter, "getLeft")) == 6 && std::get<float>(fixture.Call(getter, "getTop")) == 9, "physical numeric borrow follows reused storage despite different motion, label and lookup names");
+	Require(std::get<float>(fixture.Call(setter, "getTop")) == 0, "replacement setter starts from the genuine initialized override cell");
+	static_cast<void>(fixture.Call(setter, "setTop", {11.0f}));
+	Require(std::get<float>(fixture.Call(setter, "getTop")) == 11 && std::get<float>(fixture.Call(getter, "getTop")) == 9, "persistent setter must change pending overrides without forcing evaluated numbers");
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(std::get<float>(fixture.Call(getter, "getTop")) == 20, "reused override cell feeds the genuine current composition");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("replacement"), std::int32_t{1}}));
+	Require(std::get<float>(fixture.Call(getter, "getTop")) == 0, "Force retains the allocation but initializes its replacement numeric words");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("larger"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(getter, "getTop"));
+	},
+	    "allocation has retired");
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(setter, "setTop", {13.0f}));
+	},
+	    "allocation has retired");
+	const auto fresh = fixture.Call(motion, "getLayerGetter", {std::string("replacement key")});
+	const auto fresh_root = fixture.Vm.Retain(fresh);
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	Require(std::get<float>(fixture.Call(fresh, "getTop")) == 9, "new getter must resolve the genuine enlarged allocation");
+	fixture.Bindings->NativeOwners().ReleaseInstance(motion);
+	fixture.Second().Update();
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(fresh, "getTop"));
+	},
+	    "retired");
+}
+
+static void TestNativeNumericAllocationIntervals() {
+	using sgre::resource::PsbArray;
+	using sgre::resource::PsbObject;
+	// Unchanged native4ff640/50fd90 witness: total row counts and retained capacities after each selection.
+	const std::array<std::size_t, 12> counts{2, 3, 2, 3, 4, 2, 9, 5, 10, 14, 22, 2};
+	const std::array<std::size_t, 12> capacities{2, 3, 3, 3, 4, 4, 9, 9, 13, 19, 28, 28};
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*Document(2, false));
+	auto& motions = FixtureField(FixtureField(FixtureField(document->Root, "object"), "outer"), "motion");
+	const auto original = FixtureField(motions, "main");
+	for (std::size_t index = 0; index != counts.size(); ++index) {
+		auto timeline = original;
+		auto& layers = std::get<PsbArray>(FixtureField(timeline, "layer").Data);
+		layers.clear();
+		PsbArray order;
+		for (std::size_t row = 1; row < counts[index]; ++row) {
+			layers.push_back(Layer(false, 2));
+			order.push_back(Integer(static_cast<std::int64_t>(row - 1)));
+		}
+		FixtureField(timeline, "layerIndexMap") = Atom(PsbObject{{"same numeric ordinal", Integer(0)}});
+		FixtureField(std::get<PsbArray>(FixtureField(timeline, "priority").Data)[0], "content") = Atom(std::move(order));
+		std::get<PsbObject>(motions.Data).emplace_back("numeric" + std::to_string(index), std::move(timeline));
+	}
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	sgre::script::SquirrelValue previous;
+	sgre::script::SquirrelHostRoot previous_root;
+	for (std::size_t index = 0; index != counts.size(); ++index) {
+		static_cast<void>(fixture.Call(motion, "play", {"numeric" + std::to_string(index)}));
+		if (index != 0) {
+			if (capacities[index] != capacities[index - 1]) {
+				RequireFailure([&] {
+					static_cast<void>(fixture.Call(previous, "getTop"));
+				},
+				    "allocation has retired");
+			} else {
+				Require(std::get<float>(fixture.Call(previous, "getTop")) == 0, "native retained-capacity interval must preserve its numeric borrow");
+			}
+		}
+		previous = fixture.Call(motion, "getLayerGetter", {std::string("same numeric ordinal")});
+		previous_root = fixture.Vm.Retain(previous);
+		static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+		Require(std::get<float>(fixture.Call(previous, "getTop")) == 40, "native capacity sequence changed completed numeric values");
+	}
 }
 
 static void TestSelectedLayerSetterControls() {
@@ -540,10 +666,8 @@ static void TestSelectedLayerSetterControls() {
 	    "queued row borrows");
 	fixture.Secondary->SceneContext().Clear();
 	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
-	RequireFailure([&] {
-		static_cast<void>(fixture.Call(alias, "setLeft", {99.0f}));
-	},
-	    "retired");
+	static_cast<void>(fixture.Call(alias, "setLeft", {99.0f}));
+	Require(std::get<float>(fixture.Call(alias, "getLeft")) == 99, "same-allocation setter follows its original physical override cell across Force");
 	RequireFailure([&] {
 		static_cast<void>(fixture.Call(nested, "getLeft"));
 	},
@@ -1552,6 +1676,8 @@ int main() {
 		TestAllSnapshotMapsAndContainment();
 		TestEmptyActualChildCatalogueCount();
 		TestRetainedNumericPosition();
+		TestNumericAllocationSurvivesSelectionReplacement();
+		TestNativeNumericAllocationIntervals();
 		TestRetainedLayerVisibility();
 		TestSelectedLayerSetterControls();
 		TestChainIntoShorterSelectedScene();

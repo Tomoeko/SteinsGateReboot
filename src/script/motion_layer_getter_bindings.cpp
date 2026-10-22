@@ -33,8 +33,7 @@ namespace sgre::script {
 		return 0;
 	}
 
-	static SquirrelValue NumericAttribute(const scene::MotionComposedLayer& layer, std::size_t index) {
-		const auto& value = layer.Hierarchy.Attributes;
+	static SquirrelValue NumericAttribute(const scene::MotionLayerNumbers& value, std::size_t index) {
 		switch (index) {
 		case 0:
 			return value.FlipX;
@@ -65,6 +64,7 @@ namespace sgre::script {
 			SquirrelObjectIdentity Instance;
 			scene::MotionPlayerTask Task;
 			scene::MotionSceneLayerReference Layer;
+			scene::MotionNumericBorrow Numeric;
 			std::optional<SquirrelObjectIdentity> OwningLayer;
 			std::optional<scene::MotionChildBorrow> Child;
 		};
@@ -119,6 +119,14 @@ namespace sgre::script {
 			}
 
 			return found->second;
+		}
+
+		static scene::MotionLayerNumbers Numeric(const GetterRecord& record) {
+			if (!record.Task.IsLive()) {
+				throw std::runtime_error("MotionLayerGetter actual task has retired");
+			}
+
+			return record.Numeric.Read();
 		}
 
 		const ShapeRecord& Shape(const SquirrelValue& instance) const {
@@ -239,7 +247,7 @@ namespace sgre::script {
 			Objects.AttachInstance(instance);
 			const auto identity = Vm.BorrowObjectIdentity(instance);
 			try {
-				Getters.emplace(identity.Index, GetterRecord{identity, task, layer, actual_layer, actual_child});
+				Getters.emplace(identity.Index, GetterRecord{identity, task, layer, ActualScene(task, actual_child).BorrowNumeric(layer), actual_layer, actual_child});
 				Objects.ConfigureNativeRelease(instance, [weak, identity](const SquirrelValue&) {
 					if (const auto owner = weak.lock()) {
 						const auto found = owner->Getters.find(identity.Index);
@@ -323,7 +331,7 @@ namespace sgre::script {
 					}
 					const auto receiver = arguments[0];
 					const auto& record = owner->Getter(receiver);
-					const auto coordinate = ActualScene(record.Task, record.Child).LayerCoordinate(record.Layer);
+					const auto coordinate = Numeric(record).Coordinate;
 
 					return SquirrelNativeResult::ReturnValue(coordinate[axis]);
 				}));
@@ -385,7 +393,7 @@ namespace sgre::script {
 						throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
 					}
 					const auto& record = owner->Getter(arguments[0]);
-					const auto state = ActualScene(record.Task, record.Child).LayerVisibility(record.Layer);
+					const auto state = Numeric(record);
 					const std::array<bool, 3> values{state.Visible, state.BranchVisible, state.Visible && state.BranchVisible};
 
 					return SquirrelNativeResult::ReturnValue(values[index]);
@@ -400,7 +408,7 @@ namespace sgre::script {
 						throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
 					}
 					const auto& record = owner->Getter(arguments[0]);
-					const auto& numeric = ActualScene(record.Task, record.Child).LayerNumeric(record.Layer);
+					const auto numeric = Numeric(record);
 
 					return SquirrelNativeResult::ReturnValue(NumericAttribute(numeric, index));
 				}));

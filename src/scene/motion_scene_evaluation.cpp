@@ -89,6 +89,7 @@ namespace sgre::scene {
 					Ancestry = std::make_unique<MotionSelectedMeshAncestry>(selected, *Sources, scene.Runtime, containing == nullptr ? nullptr : containing->Ancestry.get());
 				}
 				Composition = std::make_unique<MotionLayerComposition>(selected, root, child == nullptr || !child->IndependentLayerInherit());
+				commands.m_NumericStorage->Install(*Composition);
 				Vertices = std::make_unique<MotionSelectedMeshVertices>(*Ancestry);
 				Stencil = std::make_unique<MotionLayerStencilAncestry>(selected);
 				Clips = std::make_unique<MotionLayerClipRectangles>(Local->Preparation());
@@ -895,7 +896,10 @@ namespace sgre::scene {
 			auto& composition = *destination.Composition;
 			composition.m_LocalFrames = original.m_LocalFrames == nullptr ? nullptr : destination.Local.get();
 			composition.m_Overrides = original.m_Overrides;
-			composition.m_Layers = original.m_Layers;
+			if (composition.m_Layers.size() != original.m_Layers.size()) {
+				throw std::runtime_error("motion numeric clone differs from its installed physical row count");
+			}
+			std::copy(original.m_Layers.begin(), original.m_Layers.end(), composition.m_Layers.begin());
 			for (std::size_t index = 0; index < composition.m_Layers.size(); ++index) {
 				auto& attributes = composition.m_Layers[index].Hierarchy.Attributes;
 				attributes.Source = CloneSampleText(attributes.Source, old.m_Layers[index], local.m_Layers[index]);
@@ -1812,6 +1816,49 @@ namespace sgre::scene {
 
 	std::uint32_t MotionSceneEvaluation::LayerType(const MotionSceneLayerReference& reference) const {
 		return m_Implementation->ResolveLayer(reference).Prepared->Type;
+	}
+
+	MotionNumericBorrow MotionSceneEvaluation::BorrowNumeric(const MotionSceneLayerReference& reference) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			if (entry.Actual != nullptr && entry.Actual->Identity == reference.ContextIdentity) {
+				return entry.Actual->Commands.m_NumericStorage->Borrow(reference.NativeOrdinal);
+			}
+		}
+		throw std::runtime_error("motion numeric getter context is no longer current");
+	}
+
+	MotionSceneLayerReference MotionSceneEvaluation::ResolveNumeric(const MotionNumericBorrow& reference) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(reference.Read());
+		state.BuildCatalogue();
+		std::uint32_t base = 0;
+		for (const auto& entry : state.Catalogue) {
+			const auto* context = entry.Actual;
+			const auto nodes = context == nullptr ? std::span<const MotionSelectedLayerNode>() : context->Selected.Nodes();
+			if (context != nullptr && context->Commands.m_NumericStorage->Owns(reference)) {
+				if (reference.m_Ordinal > nodes.size() || reference.m_Ordinal > std::numeric_limits<std::uint32_t>::max() - base) {
+					throw std::runtime_error("motion numeric cell differs from its actual selected ordinal range");
+				}
+				MotionSceneLayerReference result;
+				result.Owner = m_Implementation.get();
+				result.RootSelectionSerial = state.Root->SelectionSerial;
+				result.GraphGeneration = state.Generation;
+				result.ContextIdentity = context->Identity;
+				result.ContextSelectionSerial = context->SelectionSerial;
+				result.NativeOrdinal = reference.m_Ordinal;
+				result.GlobalOrdinal = base + reference.m_Ordinal;
+				result.NodeIdentifier = nodes[reference.m_Ordinal - 1].Identifier;
+
+				return result;
+			}
+			if (nodes.size() + 1 > std::numeric_limits<std::uint32_t>::max() - base) {
+				throw std::runtime_error("motion numeric cell catalogue exceeds its native ordinal range");
+			}
+			base += static_cast<std::uint32_t>(nodes.size() + 1);
+		}
+		throw std::runtime_error("motion numeric setter physical cell has no current selected row");
 	}
 
 	std::vector<MotionSceneLayerReference> MotionSceneEvaluation::LayerChildren(const MotionSceneLayerReference& reference) const {

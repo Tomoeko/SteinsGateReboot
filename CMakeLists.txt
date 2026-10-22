@@ -69,6 +69,7 @@ add_library(sgre_resource
 	src/scenario/scenario_navigation.cpp
 	src/debug/inspector_panel.cpp
 	src/debug/game_test_trace.cpp
+	src/debug/game_test_input.cpp
 	src/scenario/calendar_restore.cpp
 	src/io/file_read_serial.cpp
 	src/io/raw_read_destination.cpp
@@ -128,6 +129,7 @@ add_library(sgre_resource
 	src/scene/motion_timeline_clock.cpp
 	src/scene/motion_timeline_variables.cpp
 	src/scene/motion_player_commands.cpp
+	src/scene/motion_numeric_storage.cpp
 	src/scene/motion_clone_resource.cpp
 	src/scene/motion_scene_clone_state.cpp
 	src/scene/motion_layer_uids.cpp
@@ -980,6 +982,7 @@ if(SGRE_BUILD_TESTS)
 		motion_alternate_texture_source
 		motion_shape_owner
 		motion_layer_getter_bindings
+		game_test_input
 		squirrel_close
 		cff
 		cff_driver_hints

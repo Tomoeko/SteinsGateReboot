@@ -1,6 +1,7 @@
 #include "sgre/scene/motion_player_commands.hpp"
 
 #include "sgre/scene/motion_clone_resource.hpp"
+#include "sgre/scene/motion_numeric_storage.hpp"
 
 #include "sgre/scene/motion_timeline_variables.hpp"
 
@@ -31,7 +32,7 @@ namespace sgre::scene {
 	}
 
 	MotionPlayerCommands::MotionPlayerCommands(const MotionResourceManager& manager, std::size_t max_name_bytes)
-	    : m_Manager(manager), m_MaxNameBytes(max_name_bytes), m_ParameterValues(*this), m_LayerUids(*this) {
+	    : m_Manager(manager), m_MaxNameBytes(max_name_bytes), m_ParameterValues(*this), m_LayerUids(*this), m_NumericStorage(std::make_unique<MotionNumericStorage>()) {
 		if (max_name_bytes == 0 || max_name_bytes > kMaximumMotionCommandNameBytes) {
 			throw std::runtime_error("motion command name limit must be between 1 and 65536 bytes");
 		}
@@ -93,6 +94,7 @@ namespace sgre::scene {
 			variables = std::make_unique<MotionTimelineVariables>(*this, *source.m_TimelineVariables);
 		}
 		m_ParameterValues.CopyStoredForClone(source.m_ParameterValues);
+		m_NumericStorage->CopyForClone(*source.m_NumericStorage);
 		m_Names = std::move(names);
 		m_Clock = source.m_Clock;
 		m_SelectedProject = selection;

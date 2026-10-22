@@ -158,7 +158,7 @@ namespace sgre::script {
 		struct Record {
 			SquirrelObjectIdentity Instance;
 			scene::MotionPlayerTask Task;
-			scene::MotionSceneLayerReference Layer;
+			scene::MotionNumericBorrow Numeric;
 			std::optional<scene::MotionChildBorrow> Child;
 		};
 
@@ -219,7 +219,7 @@ namespace sgre::script {
 			Objects.AttachInstance(instance);
 			const auto identity = Vm.BorrowObjectIdentity(instance);
 			try {
-				Records.emplace(identity.Index, Record{identity, task, *layer, child});
+				Records.emplace(identity.Index, Record{identity, task, actual.BorrowNumeric(*layer), child});
 				Objects.ConfigureNativeRelease(instance, [weak, identity](const SquirrelValue&) {
 					if (const auto owner = weak.lock()) {
 						const auto found = owner->Records.find(identity.Index);
@@ -273,9 +273,11 @@ namespace sgre::script {
 						throw std::runtime_error("MotionLayerSetter binding owner retired or arguments are invalid");
 					}
 					auto record = owner->View(arguments[0]);
-					auto value = ActualScene(record.Task, record.Child).LayerOverrides(record.Layer);
+					const auto& actual = ActualScene(record.Task, record.Child);
+					const auto current = actual.ResolveNumeric(record.Numeric);
+					auto value = actual.LayerOverrides(current);
 					WriteControl(value, control, arguments);
-					record.Task.SetLayerOverrides(record.Layer, value);
+					record.Task.SetLayerOverrides(current, value);
 
 					return SquirrelNativeResult::NoValues();
 				}));
@@ -286,7 +288,8 @@ namespace sgre::script {
 							throw std::runtime_error("MotionLayerSetter binding owner retired or receiver is missing");
 						}
 						const auto record = owner->View(arguments[0]);
-						const auto value = ActualScene(record.Task, record.Child).LayerOverrides(record.Layer);
+						const auto& actual = ActualScene(record.Task, record.Child);
+						const auto value = actual.LayerOverrides(actual.ResolveNumeric(record.Numeric));
 
 						return SquirrelNativeResult::ReturnValue(ReadControl(value, control));
 					}));

@@ -15,6 +15,7 @@
 
 namespace sgre::scene {
 	class MotionTimelineVariables;
+	class MotionNumericStorage;
 
 	inline constexpr std::size_t kMaximumMotionCommandNameBytes = 65536;
 
@@ -128,6 +129,7 @@ namespace sgre::scene {
 		// Native retained timeline atoms outlive source unregistration and selected-tree Clear.
 		std::shared_ptr<const resource::MotionResource> m_CachedResource;
 		std::unique_ptr<MotionTimelineVariables> m_TimelineVariables;
+		std::unique_ptr<MotionNumericStorage> m_NumericStorage;
 		bool m_SelectedLayersCleared = false;
 		std::uint64_t m_SelectionSerial = 0;
 		float m_MeshDivisionRatio = 1;

@@ -1,5 +1,7 @@
 #include "sgre/scene/motion_layer_composition.hpp"
 
+#include "sgre/scene/motion_numeric_storage.hpp"
+
 #include "sgre/scene/motion_bezier_lattice.hpp"
 #include "sgre/scene/motion_deformation.hpp"
 #include "sgre/scene/motion_layer_mesh_local_owner.hpp"
@@ -194,6 +196,10 @@ namespace sgre::scene {
 	}
 
 	MotionLayerComposition::~MotionLayerComposition() noexcept {
+		if (m_NumericStorage != nullptr) {
+			m_NumericStorage->Retire(*this);
+		}
+
 		if (m_SelectedOwner != nullptr && m_SelectedOwner->m_CompositionOwner == this) {
 			m_SelectedOwner->m_CompositionOwner = nullptr;
 		}

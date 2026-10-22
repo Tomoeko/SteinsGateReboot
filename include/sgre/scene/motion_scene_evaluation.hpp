@@ -4,6 +4,7 @@
 #include "sgre/scene/motion_join_state.hpp"
 #include "sgre/scene/motion_layer_clip_rectangles.hpp"
 #include "sgre/scene/motion_manager_runtime.hpp"
+#include "sgre/scene/motion_numeric_storage.hpp"
 #include "sgre/scene/motion_selected_layer_sources.hpp"
 #include "sgre/scene/motion_selected_mesh_mask_packets.hpp"
 #include "sgre/scene/motion_shape_owner.hpp"
@@ -93,6 +94,10 @@ namespace sgre::scene {
 		[[nodiscard]] std::optional<MotionSceneLayerReference> FindLayer(std::string_view name) const;
 		// The actual child commands select a current catalogue subtree; no containing/sibling names leak into its lookup.
 		[[nodiscard]] std::optional<MotionSceneLayerReference> FindLayer(std::string_view name, const MotionPlayerCommands& actual_player) const;
+		// Script numeric getters borrow the physical player's cell allocation, not an ephemeral selected-tree view.
+		[[nodiscard]] MotionNumericBorrow BorrowNumeric(const MotionSceneLayerReference& reference) const;
+		// Reconstructs a current selected view only for the exact still-live physical cell; no resource/name lookup.
+		[[nodiscard]] MotionSceneLayerReference ResolveNumeric(const MotionNumericBorrow& reference) const;
 		[[nodiscard]] MotionShapeSnapshot Shape(const MotionSceneLayerReference& reference) const;
 		// Queries retained shape owners without advancing selected frames or requiring an unqueued draw.
 		[[nodiscard]] bool Contains(const MotionSceneLayerReference& reference, resource::MotionPoint point) const;

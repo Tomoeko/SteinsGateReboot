@@ -5,6 +5,7 @@
 #include "sgre/audio/sound_resource_control.hpp"
 #include "sgre/core/application_event_control.hpp"
 #include "sgre/core/background_calls.hpp"
+#include "sgre/debug/game_test_input.hpp"
 #include "sgre/debug/game_test_trace.hpp"
 #include "sgre/input/function_keys.hpp"
 #include "sgre/io/file_reader.hpp"
@@ -190,6 +191,25 @@ namespace sgre::platform {
 		}
 
 		return static_cast<std::int64_t>(integral + fraction);
+	}
+
+	static std::optional<debug::GameTestKey> ReadPrivateKeyCommand(char command) {
+		switch (command) {
+		case 'u':
+			return debug::GameTestKey::Up;
+		case 'd':
+			return debug::GameTestKey::Down;
+		case '<':
+			return debug::GameTestKey::Left;
+		case '>':
+			return debug::GameTestKey::Right;
+		case 'x':
+			return debug::GameTestKey::Cancel;
+		case 'e':
+			return debug::GameTestKey::Escape;
+		default:
+			return {};
+		}
 	}
 
 	class PrivateStartupStdin {
@@ -379,19 +399,13 @@ namespace sgre::platform {
 					return actual_frame;
 				}
 
-				input::KeyboardSample replay;
-				replay.Available = true;
-				const bool pressed = m_CommandReturnPressed;
-				if (pressed) {
-					replay.ScanKeys[0x1c] = 0x80;
-					replay.VirtualKeys[0x0d] = 0x80;
-				}
+				const auto replay = m_PrivateKeys.Keyboard();
 				auto frame = input::ResolveKeyboardOnlyFrame(replay, mappings.Convert(replay));
 				frame.CursorExtent = actual_frame.CursorExtent;
 				m_LastPrivateHubUpdate = m_UpdateCount;
 				m_PrivateHubSampled = true;
 				if ((m_UpdateCount == 3000 || m_UpdateCount == 3004 || m_UpdateCount == 3600 || m_UpdateCount == 3604) && m_LastInputReplayLog != m_UpdateCount) {
-					std::cerr << "privateInputReplay update=" << m_UpdateCount << " return=" << pressed << " resolvedButtons=" << frame.Devices[0].Buttons << '\n';
+					std::cerr << "privateInputReplay update=" << m_UpdateCount << " return=" << (replay.ScanKeys[0x1c] != 0) << " resolvedButtons=" << frame.Devices[0].Buttons << '\n';
 					m_LastInputReplayLog = m_UpdateCount;
 				}
 				return frame;
@@ -605,14 +619,9 @@ namespace sgre::platform {
 		OriginalScriptStartup(const OriginalScriptStartup&) = delete;
 		OriginalScriptStartup& operator=(const OriginalScriptStartup&) = delete;
 
-		[[nodiscard]] bool QueuePrivateReturnPulse() {
+		[[nodiscard]] bool QueuePrivateKeyPulse(debug::GameTestKey key) {
 			RequireOpen();
-			if (m_PendingReturnPulses == kMaximumPendingReturnPulses) {
-				return false;
-			}
-			++m_PendingReturnPulses;
-
-			return true;
+			return m_Owners.Headless && m_PrivateKeys.Queue(key);
 		}
 
 		[[nodiscard]] bool QueuePrivateMouseMove() {
@@ -657,7 +666,7 @@ namespace sgre::platform {
 					throw std::runtime_error(error);
 				}
 			}
-			BeginPrivateReturnUpdate();
+			m_PrivateKeys.BeginUpdate(m_PrivateHubSampled && m_LastPrivateHubUpdate == m_UpdateCount);
 			// Real macOS upload preparation services jobs queued by actual resource workers.
 			static_cast<void>(m_Owners.FontPreparation->PreparePending());
 			m_Owners.FontPreparation->RetirePending();
@@ -695,7 +704,7 @@ namespace sgre::platform {
 					std::cerr << "original checkpoint cache: " << error << '\n';
 				}
 			}
-			CompletePrivateReturnUpdate();
+			m_PrivateKeys.EndUpdate();
 			++m_UpdateCount;
 		}
 
@@ -1424,33 +1433,6 @@ namespace sgre::platform {
 			return sample;
 		}
 
-		void BeginPrivateReturnUpdate() {
-			// InputHub samples in VSync after Update; retain this latch through the completed update.
-			m_CommandReturnPressed = m_CommandReturnUpdates != 0;
-			if (m_CommandReturnUpdates != 0 || m_CommandReleaseUpdates != 0 || m_PendingReturnPulses == 0) {
-				return;
-			}
-			if (!m_PrivateHubSampled || m_LastPrivateHubUpdate != m_UpdateCount) {
-				return;
-			}
-			--m_PendingReturnPulses;
-			m_CommandReturnUpdates = kCommandReturnUpdates;
-			m_CommandReturnPressed = true;
-			std::cerr << "private stdin Return begin update=" << m_UpdateCount << " pending=" << m_PendingReturnPulses << '\n';
-		}
-
-		void CompletePrivateReturnUpdate() {
-			if (m_CommandReturnUpdates != 0) {
-				--m_CommandReturnUpdates;
-				if (m_CommandReturnUpdates == 0) {
-					m_CommandReleaseUpdates = 1;
-					std::cerr << "private stdin Return release after update=" << m_UpdateCount << '\n';
-				}
-			} else if (m_CommandReleaseUpdates != 0) {
-				--m_CommandReleaseUpdates;
-			}
-		}
-
 		static constexpr std::uint32_t kMaximumPendingMouseMoves = 16;
 		static constexpr std::uint32_t kMaximumPrivateMouseRows = 64;
 		std::uint32_t m_PendingMouseMoves = 0;
@@ -1461,12 +1443,7 @@ namespace sgre::platform {
 		bool m_PrivateMouseEnabled = false;
 		bool m_PrivateMouseSampled = false;
 		bool m_PrivateMouseOffsetNext = false;
-		static constexpr std::uint32_t kMaximumPendingReturnPulses = 16;
-		static constexpr std::uint32_t kCommandReturnUpdates = 4;
-		std::uint32_t m_PendingReturnPulses = 0;
-		std::uint32_t m_CommandReturnUpdates = 0;
-		std::uint32_t m_CommandReleaseUpdates = 0;
-		bool m_CommandReturnPressed = false;
+		debug::GameTestInput m_PrivateKeys;
 		bool m_PrivateHubSampled = false;
 		std::uint64_t m_LastPrivateHubUpdate = 0;
 		std::uint64_t m_UpdateCount = 0;
@@ -1927,7 +1904,9 @@ namespace sgre::platform {
 				}
 				++m_PrivateCommands;
 				if (command == 'r') {
-					std::cerr << "private stdin Return queued=" << m_Driver->QueuePrivateReturnPulse() << '\n';
+					std::cerr << "private stdin Return queued=" << m_Driver->QueuePrivateKeyPulse(debug::GameTestKey::Confirm) << '\n';
+				} else if (const auto key = ReadPrivateKeyCommand(command)) {
+					std::cerr << "private stdin key=" << command << " queued=" << m_Driver->QueuePrivateKeyPulse(*key) << '\n';
 				} else if (command == 'm') {
 					std::cerr << "private stdin mouse queued=" << m_Driver->QueuePrivateMouseMove() << '\n';
 				} else if (command == 'p') {
