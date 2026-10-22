@@ -72,6 +72,19 @@ static void TestGraphAndPhonePolicy() {
 	});
 }
 
+static void TestSeparatedPhoneDispatch() {
+	sgre::scenario::ScenarioNavigation graph;
+	graph.AddDocument(Document("entry.ks", {Scene("*input", {Exit("dispatch.ks", "*bridge")})}));
+	graph.AddDocument(Document("dispatch.ks", {Scene("*bridge", {Exit("dispatch.ks", "*select")}), Scene("*select", {Exit("dispatch.ks", "*retry", "phoneNumbers==\"#120\""), Exit("output.ks", {}, "phoneNumbers==\"120#\""), Exit("dispatch.ks", "*retry")}), Scene("*retry", {Exit("dispatch.ks", "*select")})}));
+	graph.AddDocument(Document("output.ks", {Scene("*start")}));
+	Require(graph.PhoneNumbers("entry.ks", "*input", "output.ks", "*start") == "120#", "phone policy must follow the original unconditional staging links and exclude a retry through its dispatch");
+	Require(!graph.PhoneNumbers("entry.ks", "*input", "dispatch.ks", "*select"), "a target before the number-dependent branch cannot choose an arbitrary number");
+	graph.AddDocument(Document("unknown.ks", {Scene("*conditional", {Exit("dispatch.ks", "*select", "unknownFlag")}), Scene("*multiple", {Exit("dispatch.ks", "*select"), Exit("output.ks", "*start")}), Scene("*cycle", {Exit("unknown.ks", "*cycle")}), Scene("*missing", {Exit("missing.ks", "*start")})}));
+	for (const auto label : {"*conditional", "*multiple", "*cycle", "*missing"}) {
+		Require(!graph.PhoneNumbers("unknown.ks", label, "output.ks", "*start"), "phone staging followed unknown conditions, multiple defaults, a cycle or an absent scene");
+	}
+}
+
 static void TestLiteralSafety() {
 	for (const auto condition : {"phoneNumbers=\"5\"", "phoneNumbers==\"5\" || true", "phoneNumbersExtra==\"5\"", "phoneNumbers==\"a\"", "phoneNumbers==\"\"", "phoneNumbers==\"5\\x31\"", "unknown==\"5\""}) {
 		sgre::scenario::ScenarioNavigation graph;
@@ -90,6 +103,7 @@ int main() {
 	try {
 		TestGraphAndPhonePolicy();
 		TestLiteralSafety();
+		TestSeparatedPhoneDispatch();
 		std::cout << "scenario graph, record ordering, phone retry cycles, ambiguity and literal safety passed\n";
 
 		return 0;

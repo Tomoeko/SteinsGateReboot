@@ -134,9 +134,9 @@ namespace sgre::scenario {
 			return found == Labels.end() ? kMissingScene : found->second;
 		}
 
-		[[nodiscard]] std::vector<std::size_t> Distances(std::size_t target, std::size_t excluded = kMissingScene) const {
+		[[nodiscard]] std::vector<std::size_t> Distances(std::size_t target, std::size_t excluded = kMissingScene, std::size_t excluded_dispatch = kMissingScene) const {
 			std::vector<std::size_t> distances(Scenes.size(), kMissingScene);
-			if (target == kMissingScene || target == excluded) {
+			if (target == kMissingScene || target == excluded || target == excluded_dispatch) {
 				return distances;
 			}
 			std::queue<std::size_t> pending;
@@ -146,7 +146,7 @@ namespace sgre::scenario {
 				const auto index = pending.front();
 				pending.pop();
 				for (const auto previous : Previous[index]) {
-					if (previous != excluded && distances[previous] == kMissingScene) {
+					if (previous != excluded && previous != excluded_dispatch && distances[previous] == kMissingScene) {
 						distances[previous] = distances[index] + 1;
 						pending.push(previous);
 					}
@@ -221,6 +221,24 @@ namespace sgre::scenario {
 		return std::string(condition);
 	}
 
+	static std::optional<std::size_t> FindPhoneDispatch(const std::vector<ScenarioNavigationScene>& scenes, const NavigationIndex& index, std::size_t current) {
+		std::vector<bool> visited(scenes.size());
+		while (current != kMissingScene && !visited[current]) {
+			visited[current] = true;
+			const auto& exits = scenes[current].Exits;
+			if (std::any_of(exits.begin(), exits.end(), [](const auto& exit) {
+				    return LiteralPhoneNumbers(exit.Condition).has_value();
+			    })) {
+				return current;
+			}
+			if (exits.size() != 1 || !exits.front().Condition.empty()) {
+				return {};
+			}
+			current = index.Find(exits.front().Storage, exits.front().Label);
+		}
+		return {};
+	}
+
 	std::optional<std::string> ScenarioNavigation::PhoneNumbers(std::string_view storage, std::string_view label, std::string_view target_storage, std::string_view target_label) const {
 		const NavigationIndex index(m_Scenes);
 		const auto current = index.Find(storage, label);
@@ -228,9 +246,13 @@ namespace sgre::scenario {
 		if (current == kMissingScene || target == kMissingScene || current == target) {
 			return {};
 		}
-		const auto distances = index.Distances(target, current);
+		const auto dispatch = FindPhoneDispatch(m_Scenes, index, current);
+		if (!dispatch || *dispatch == target) {
+			return {};
+		}
+		const auto distances = index.Distances(target, current, *dispatch);
 		std::optional<std::string> result;
-		for (const auto& exit : m_Scenes[current].Exits) {
+		for (const auto& exit : m_Scenes[*dispatch].Exits) {
 			const auto destination = index.Find(exit.Storage, exit.Label);
 			const auto numbers = LiteralPhoneNumbers(exit.Condition);
 			if (!numbers || destination == kMissingScene || distances[destination] == kMissingScene) {

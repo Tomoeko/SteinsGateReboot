@@ -37,8 +37,8 @@ namespace sgre::scenario {
 	public:
 		void AddDocument(const resource::PsbDocument& document);
 		[[nodiscard]] std::vector<ScenarioNavigationLocation> Predecessors(const ScenarioNavigationLocation& target) const;
-		// A number is usable only when exactly one literal equality exits this scene
-		// toward the target without revisiting the current phone interaction.
+		// Follow only single unconditional dispatch links. A number is usable only when one literal
+		// equality reaches the target without revisiting the interaction or its dispatch scene.
 		[[nodiscard]] std::optional<std::string> PhoneNumbers(std::string_view storage, std::string_view label, std::string_view target_storage, std::string_view target_label) const;
 		[[nodiscard]] const std::vector<ScenarioNavigationScene>& Scenes() const noexcept;
 
