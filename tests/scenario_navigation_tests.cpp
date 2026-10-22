@@ -1,5 +1,6 @@
 #include "sgre/scenario/scenario_navigation.hpp"
 
+#include <algorithm>
 #include <iostream>
 #include <stdexcept>
 #include <utility>
@@ -99,11 +100,73 @@ static void TestLiteralSafety() {
 	Require(graph.Scenes().empty(), "failed document published partial navigation state");
 }
 
+static sgre::resource::PsbValue Activation(std::string id) {
+	return Value(sgre::resource::PsbArray{Value(std::string("resg_phone")), Value(std::string("cmd")), Value(std::string("trigger")), Value(std::string("action")), Value(std::string("start")), Value(std::string("id")), Value(std::move(id))});
+}
+
+static sgre::resource::PsbDocument PhoneMaster(sgre::resource::PsbArray definitions) {
+	sgre::resource::PsbDocument result;
+	result.Root = Value(sgre::resource::PsbObject{{"trigger_list", Value(std::move(definitions))}});
+
+	return result;
+}
+
+static sgre::resource::PsbValue PhoneDefinition(std::string id, std::string target) {
+	return Value(sgre::resource::PsbObject{{"id", Value(std::move(id))}, {"triggers", Value(sgre::resource::PsbArray{Value(sgre::resource::PsbObject{{"target", Value(std::move(target))}})})}});
+}
+
+static void TestPhoneEventCandidates() {
+	sgre::scenario::ScenarioNavigation graph;
+	auto activated = Scene("*activate", {Exit("event.ks", "*loop")});
+	auto& fields = std::get<sgre::resource::PsbObject>(activated.Data);
+	auto& lines = std::get<sgre::resource::PsbArray>(std::find_if(fields.begin(), fields.end(), [](const auto& field) {
+		return field.first == "lines";
+	})->second.Data);
+	lines.push_back(Activation("original-trigger"));
+	lines.push_back(Activation("original-trigger"));
+	graph.AddDocument(Document("input.ks", {Scene("*input", {Exit("event.ks", "*activate", "phoneNumbers==\"12\""), Exit("input.ks", "*retry", "phoneNumbers==\"99\"")}), Scene("*retry", {Exit("input.ks", "*input")})}));
+	graph.AddDocument(Document("event.ks", {std::move(activated), Scene("*loop", {Exit("event.ks", "*loop")}), Scene("*call", {Exit("end.ks", "*start")})}));
+	graph.AddDocument(Document("end.ks", {Scene("*start")}));
+	graph.AddDocument(Document("other.ks", {Scene("*call")}));
+	Require(!graph.Reaches("input.ks", "*input", "end.ks", "*start"), "static graph invented a phone event before its definitions were supplied");
+	Require(graph.Scenes()[2].PhoneTriggers == std::vector<std::string>{"original-trigger"}, "literal trigger inventory lost identity or retained duplicate activation hints");
+	graph.AddPhoneMaster(PhoneMaster({PhoneDefinition("original-trigger", "*call")}));
+	Require(graph.Reaches("input.ks", "*input", "end.ks", "*start") && !graph.Reaches("event.ks", "*activate", "other.ks", "*call"), "resource phone event links must be local to the activating storage");
+	Require(graph.PhoneNumbers("input.ks", "*input", "end.ks", "*start") == "12", "an explicit resource event must permit earlier literal phone dispatch without admitting its wrong-number cycle");
+	Require(!graph.Reaches("event.ks", "*loop", "end.ks", "*start"), "activation hints must not fabricate inherited live phone state in later scenes");
+	Require(graph.Scenes()[2].Exits.size() == 1 && graph.Scenes()[2].Exits[0].Label == "*loop", "phone candidate reachability replaced original executable exits");
+	const auto predecessors = graph.Predecessors({"end.ks", "*start", 19, 5, 1});
+	Require(std::any_of(predecessors.begin(), predecessors.end(), [](const auto& point) {
+		return point.Storage == "input.ks";
+	}),
+	    "event reachability must include genuine earlier checkpoint candidates");
+	Reject([&] {
+		graph.AddPhoneMaster(PhoneMaster({}));
+	});
+
+	for (const auto target : {"", "other.ks*call"}) {
+		sgre::scenario::ScenarioNavigation malformed;
+		Reject([&] {
+			malformed.AddPhoneMaster(PhoneMaster({PhoneDefinition("id", target)}));
+		});
+		malformed.AddPhoneMaster(PhoneMaster({PhoneDefinition("id", "*valid")}));
+	}
+	sgre::scenario::ScenarioNavigation duplicate;
+	Reject([&] {
+		duplicate.AddPhoneMaster(PhoneMaster({PhoneDefinition("id", "*one"), PhoneDefinition("id", "*two")}));
+	});
+	duplicate.AddPhoneMaster(PhoneMaster({}));
+	Reject([&] {
+		duplicate.AddPhoneMaster(PhoneMaster({}));
+	});
+}
+
 int main() {
 	try {
 		TestGraphAndPhonePolicy();
 		TestLiteralSafety();
 		TestSeparatedPhoneDispatch();
+		TestPhoneEventCandidates();
 		std::cout << "scenario graph, record ordering, phone retry cycles, ambiguity and literal safety passed\n";
 
 		return 0;

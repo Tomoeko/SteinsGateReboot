@@ -43,6 +43,71 @@ namespace sgre::scenario {
 		return static_cast<std::int32_t>(*integer);
 	}
 
+	static std::optional<std::string> PhoneTriggerActivation(const resource::PsbArray& command) {
+		if (command.empty() || !std::holds_alternative<std::string>(command.front().Data) || std::get<std::string>(command.front().Data) != "resg_phone") {
+			return {};
+		}
+		if (command.size() % 2 == 0) {
+			throw std::runtime_error("scenario phone command has incomplete key/value operands");
+		}
+		std::map<std::string, const resource::PsbValue*> parameters;
+		for (std::size_t index = 1; index < command.size(); index += 2) {
+			const auto key = NavigationText(&command[index]);
+			if (!parameters.emplace(key, &command[index + 1]).second) {
+				throw std::runtime_error("scenario phone command has duplicate operands");
+			}
+		}
+		const auto text = [&](std::string_view key) {
+			const auto found = parameters.find(std::string(key));
+			return found == parameters.end() ? std::string{} : NavigationText(found->second, true);
+		};
+		if (text("cmd") != "trigger" || text("action") != "start") {
+			return {};
+		}
+		const auto id = text("id");
+		if (id.empty()) {
+			throw std::runtime_error("scenario phone trigger activation lacks its original id");
+		}
+
+		return id;
+	}
+
+	void ScenarioNavigation::AddPhoneMaster(const resource::PsbDocument& document) {
+		const auto& definitions = NavigationArray(document.Root.Find("trigger_list"));
+		if (m_PhoneMasterLoaded || definitions.size() > 4096) {
+			throw std::runtime_error("scenario phone event definitions are repeated or exceed their bound");
+		}
+		std::vector<std::pair<std::string, std::vector<std::string>>> pending;
+		std::size_t total = 0;
+		for (const auto& definition : definitions) {
+			const auto id = NavigationText(definition.Find("id"));
+			if (id.empty() || std::any_of(pending.begin(), pending.end(), [&](const auto& prior) {
+				    return prior.first == id;
+			    })) {
+				throw std::runtime_error("scenario phone event id is empty or duplicated");
+			}
+			std::vector<std::string> targets;
+			const auto& triggers = NavigationArray(definition.Find("triggers"));
+			if (triggers.size() > 4096 - total) {
+				throw std::runtime_error("scenario phone event target count exceeds its bound");
+			}
+			total += triggers.size();
+			for (const auto& trigger : triggers) {
+				const auto target = NavigationText(trigger.Find("target"));
+				// Original openUserInteractionPhone concatenates curStorage and target.
+				if (target.empty() || target.front() != '*') {
+					throw std::runtime_error("scenario phone event requires its original local target label");
+				}
+				if (std::find(targets.begin(), targets.end(), target) == targets.end()) {
+					targets.push_back(target);
+				}
+			}
+			pending.emplace_back(id, std::move(targets));
+		}
+		m_PhoneTargets = std::move(pending);
+		m_PhoneMasterLoaded = true;
+	}
+
 	void ScenarioNavigation::AddDocument(const resource::PsbDocument& document) {
 		if (document.Root.Find("scenes") == nullptr) {
 			return;
@@ -77,7 +142,13 @@ namespace sgre::scenario {
 			}
 			for (std::size_t index = 0; index < lines.size(); ++index) {
 				const auto* row = std::get_if<resource::PsbArray>(&lines[index].Data);
-				if (row == nullptr || row->empty() || !std::holds_alternative<std::int64_t>(row->front().Data)) {
+				if (row == nullptr || row->empty()) {
+					continue;
+				}
+				if (!std::holds_alternative<std::int64_t>(row->front().Data)) {
+					if (const auto trigger = PhoneTriggerActivation(*row); trigger && std::find(scene.PhoneTriggers.begin(), scene.PhoneTriggers.end(), *trigger) == scene.PhoneTriggers.end()) {
+						scene.PhoneTriggers.push_back(*trigger);
+					}
 					continue;
 				}
 				if (row->size() < 5 || snapshots == kMaximumSnapshots) {
@@ -108,7 +179,7 @@ namespace sgre::scenario {
 
 	class NavigationIndex {
 	public:
-		explicit NavigationIndex(const std::vector<ScenarioNavigationScene>& scenes) : Scenes(scenes), Previous(scenes.size()) {
+		explicit NavigationIndex(const std::vector<ScenarioNavigationScene>& scenes, const std::vector<std::pair<std::string, std::vector<std::string>>>& phone_targets) : Scenes(scenes), Previous(scenes.size()) {
 			for (std::size_t index = 0; index < scenes.size(); ++index) {
 				Labels.emplace(std::pair{scenes[index].Storage, scenes[index].Label}, index);
 				First.try_emplace(scenes[index].Storage, index);
@@ -118,6 +189,20 @@ namespace sgre::scenario {
 					const auto target = Find(exit.Storage, exit.Label);
 					if (target != kMissingScene) {
 						Previous[target].push_back(index);
+					}
+				}
+				for (const auto& trigger : scenes[index].PhoneTriggers) {
+					const auto found = std::find_if(phone_targets.begin(), phone_targets.end(), [&](const auto& definition) {
+						return definition.first == trigger;
+					});
+					if (found == phone_targets.end()) {
+						continue;
+					}
+					for (const auto& label : found->second) {
+						const auto target = Find(scenes[index].Storage, label);
+						if (target != kMissingScene) {
+							Previous[target].push_back(index);
+						}
 					}
 				}
 			}
@@ -162,8 +247,16 @@ namespace sgre::scenario {
 		std::vector<std::vector<std::size_t>> Previous;
 	};
 
+	bool ScenarioNavigation::Reaches(std::string_view storage, std::string_view label, std::string_view target_storage, std::string_view target_label) const {
+		const NavigationIndex index(m_Scenes, m_PhoneTargets);
+		const auto source = index.Find(storage, label);
+		const auto target = index.Find(target_storage, target_label);
+
+		return source != kMissingScene && target != kMissingScene && index.Distances(target)[source] != kMissingScene;
+	}
+
 	std::vector<ScenarioNavigationLocation> ScenarioNavigation::Predecessors(const ScenarioNavigationLocation& target) const {
-		const NavigationIndex index(m_Scenes);
+		const NavigationIndex index(m_Scenes, m_PhoneTargets);
 		const auto goal = index.Find(target.Storage, target.Label);
 		if (goal == kMissingScene) {
 			throw std::runtime_error("scenario navigation target is absent from the original graph");
@@ -240,7 +333,7 @@ namespace sgre::scenario {
 	}
 
 	std::optional<std::string> ScenarioNavigation::PhoneNumbers(std::string_view storage, std::string_view label, std::string_view target_storage, std::string_view target_label) const {
-		const NavigationIndex index(m_Scenes);
+		const NavigationIndex index(m_Scenes, m_PhoneTargets);
 		const auto current = index.Find(storage, label);
 		const auto target = index.Find(target_storage, target_label);
 		if (current == kMissingScene || target == kMissingScene || current == target) {

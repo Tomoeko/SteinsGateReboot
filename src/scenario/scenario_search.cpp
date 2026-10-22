@@ -451,14 +451,14 @@ namespace sgre::scenario {
 
 	class ScenarioSearchCatalog::Implementation {
 	public:
-		Implementation(ScenarioSearchLocation location, ScenarioSearchLimits limits) : Limits(limits) {
+		Implementation(ScenarioSearchLocation location, ScenarioSearchLimits limits) : Limits(limits), Location(std::move(location)) {
 			RequireLimits(limits);
 			resource::ArchiveLimits archive_limits;
 			archive_limits.MaxMetadataBytes = limits.MaxDecodedEntryBytes;
 			archive_limits.MaxPackedEntryBytes = limits.MaxDecodedEntryBytes;
 			archive_limits.MaxDecodedEntryBytes = limits.MaxDecodedEntryBytes;
-			const auto data = location.Installation / "wind3d11data";
-			Archive = std::make_unique<resource::ArchiveReader>(data / "scenario_info.psb.m", data / "scenario_body.bin", std::move(location.ArchiveSeed), archive_limits);
+			const auto data = Location.Installation / "wind3d11data";
+			Archive = std::make_unique<resource::ArchiveReader>(data / "scenario_info.psb.m", data / "scenario_body.bin", Location.ArchiveSeed, archive_limits);
 			Require(Archive->Index().Entries.size() <= limits.MaxEntries && Archive->Index().ExpireSuffixes == std::vector<std::string>{".scn.m"}, "scenario archive index exceeds its entry limit or has an unrecovered shell suffix");
 			for (const auto& entry : Archive->Index().Entries) {
 				Entries.push_back({entry.Name, entry.Offset, entry.Size});
@@ -477,6 +477,7 @@ namespace sgre::scenario {
 		}
 
 		ScenarioSearchLimits Limits;
+		ScenarioSearchLocation Location;
 		std::unique_ptr<resource::ArchiveReader> Archive;
 		std::vector<ScenarioArchiveEntry> Entries;
 	};
@@ -540,6 +541,16 @@ namespace sgre::scenario {
 				throw std::runtime_error("scenario navigation entry " + entry.Name + ": " + error.what());
 			}
 		}
+
+		const auto data = state.Location.Installation / "wind3d11data";
+		resource::ArchiveLimits limits;
+		limits.MaxMetadataBytes = state.Limits.MaxDecodedEntryBytes;
+		limits.MaxPackedEntryBytes = state.Limits.MaxDecodedEntryBytes;
+		limits.MaxDecodedEntryBytes = state.Limits.MaxDecodedEntryBytes;
+		resource::ArchiveReader configuration(data / "config_info.psb.m", data / "config_body.bin", state.Location.ArchiveSeed, limits);
+		const auto phone_master = configuration.Read("phone_master", "phone_master.psb.m");
+		Consume(budget.DecodedBytes, phone_master.size(), state.Limits.MaxDecodedTotalBytes, "scenario navigation exceeded its whole-query decoded byte limit");
+		result.AddPhoneMaster(resource::ReadPsbMetadata(phone_master, phone_master.size()));
 
 		return result;
 	}

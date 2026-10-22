@@ -414,7 +414,7 @@ def suite_pins(repository, build, installation, plan, options):
 	paths = [build / "sgre-game", build / "sgre-inspect", Path(__file__).resolve()]
 	paths += sorted(build.glob("*.dylib"))
 	paths += sorted((repository / "shaders/metal").glob("*.metal"))
-	paths += [installation / name for name in ("sgre_steam.exe", "wind3d11data/script_body.bin", "wind3d11data/scenario_body.bin")]
+	paths += [installation / name for name in ("sgre_steam.exe", "wind3d11data/script_body.bin", "wind3d11data/scenario_body.bin", "wind3d11data/config_body.bin")]
 	paths += sorted((installation / "wind3d11data").glob("*_info.psb.m"))
 	paths.append(repository / "Files/config.json")
 	paths.append(repository / "tools/limit_file_output.py")
