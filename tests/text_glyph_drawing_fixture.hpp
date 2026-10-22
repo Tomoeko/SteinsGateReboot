@@ -45,7 +45,7 @@ namespace text_drawing_test {
 		std::function<void()> Finding;
 		std::size_t FindCalls = 0;
 
-		Fixture(sgre::scene::TextureCache& cache, sgre::scene::MutableTextureBackend& backend, sgre::script::ScriptTextRenderBindings::VectorGlyphDrawing draw, sgre::scene::LayerCameraDrawScope* camera = nullptr)
+		Fixture(sgre::scene::TextureCache& cache, sgre::scene::MutableTextureBackend& backend, sgre::script::ScriptTextRenderBindings::VectorGlyphDrawing draw, sgre::scene::LayerCameraDrawScope* camera = nullptr, std::function<void(Fixture&, const sgre::script::SquirrelValue&)> before_construct = {})
 		    : Vectors(Vm, Objects, [this](auto, auto) {
 			      return [this]() -> std::optional<sgre::script::ScriptResourceAsset> {
 				      sgre::script::ScriptResourceAsset asset;
@@ -76,6 +76,9 @@ namespace text_drawing_test {
 				}
 				return sgre::script::SquirrelNativeResult::ReturnValue(Source);
 			}));
+			if (before_construct) {
+				before_construct(*this, derived);
+			}
 			Layer = Construct(Layers.LayerClass());
 			Instance = Construct(derived, {Layer});
 			Call("setDefault", {Properties({{"fontsize", std::int32_t{8}}, {"rubysize", std::int32_t{4}}, {"linesize", std::int32_t{8}}, {"linespacing", std::int32_t{0}}, {"shadow", false}, {"color", std::bit_cast<std::int32_t>(std::uint32_t{0xff204080})}})});

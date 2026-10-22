@@ -8,6 +8,8 @@ Recover the entire supplied game and all character models, animation variants, r
 
 The user authorizes a deliberate improvement to hair physics: preserve smooth visible continuity across animation and pose changes, even when the original engine snaps. Keep this authored policy separate from recovered simulation, independent of character names, and scoped to physical deformation. Preserve authored body poses, facial animation, camera behavior and game sequence. Native comparisons must state whether the continuity policy is enabled.
 
+The user authorizes a dialogue-layout improvement for blocks exceeding three laid-out lines: preserve glyph proportions and fit the entire block inside its actual message box, including ruby, outlines and shadows. Keep this policy separate from recovered layout, preserve dialogue content, wrapping, reveal and game sequencing, and leave shorter dialogue and unrelated UI under their recovered behavior. Native comparisons must state whether this policy is enabled.
+
 The immediate target is macOS on Apple Silicon with Metal. Keep the engine and resource interpretation portable for future Linux, Ubuntu, Windows, and SteamOS ports. Native behavior, executable analysis, original resources, and retained native captures are the fidelity oracles. Recover behavior; do not invent replacement gameplay, dialogue, menus, assets, timing, or animations to close a checklist.
 
 ## Working rules

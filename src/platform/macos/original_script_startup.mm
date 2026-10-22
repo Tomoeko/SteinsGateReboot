@@ -66,6 +66,7 @@
 #include "sgre/script/native_math.hpp"
 #include "sgre/script/native_texture_bindings.hpp"
 #include "sgre/script/original_calendar_restore.hpp"
+#include "sgre/script/original_dialogue_layout.hpp"
 #include "sgre/script/original_scene_seek.hpp"
 #include "sgre/script/packed_color_bindings.hpp"
 #include "sgre/script/prepared_driver_close.hpp"
@@ -592,6 +593,7 @@ namespace sgre::platform {
 			    },
 			    ResourceError());
 			m_Text->ConfigureFontOwners(m_Psb, *m_Vectors, *m_BitmapFonts, textures);
+			m_DialogueLayout = std::make_unique<script::OriginalDialogueLayout>(m_Vm, *m_Text);
 			script::ScriptMotionBindingServices motion;
 			motion.ResolveRuntime = [this](const auto& receiver, auto source) -> scene::MotionManagerRuntime& {
 				const auto& resources = m_Layers.MotionResources(receiver);
@@ -957,6 +959,8 @@ namespace sgre::platform {
 			if (m_Vm.IsClosed()) {
 				return;
 			}
+
+			m_DialogueLayout->InstallAvailableHook();
 
 			if (m_Owners.SceneEntry && !m_SceneEntryInstalled && m_Vm.HasSlot(m_Vm.RootTable(), std::string("Application"))) {
 				auto entry = *m_Owners.SceneEntry;
@@ -1392,6 +1396,7 @@ namespace sgre::platform {
 		std::unique_ptr<script::ScriptLayerRawTextureBindings> m_LayerRaw;
 		std::unique_ptr<script::ScriptLayerMovieBindings> m_Movies;
 		std::unique_ptr<script::ScriptTextRenderBindings> m_Text;
+		std::unique_ptr<script::OriginalDialogueLayout> m_DialogueLayout;
 		std::unique_ptr<script::ScriptIndicatorBindings> m_Indicators;
 		std::unique_ptr<script::ScriptConsoleBindings> m_Console;
 		std::unique_ptr<script::ScriptBackupBindings> m_Backup;

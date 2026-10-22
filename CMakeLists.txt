@@ -317,6 +317,7 @@ add_library(sgre_resource
 	src/script/original_checkpoint.cpp
 	src/save/scene_checkpoint_cache.cpp
 	src/script/original_calendar_restore.cpp
+	src/script/original_dialogue_layout.cpp
 	src/script/original_scene_seek.cpp
 	src/script/live_scene_jump.cpp
 	src/script/driver_phases.cpp
@@ -641,6 +642,7 @@ if(SGRE_BUILD_TESTS)
 		original_debug_scene_entry
 		original_checkpoint
 		original_calendar_restore
+		original_dialogue_layout
 		original_scene_seek
 		live_scene_jump
 		scenario_search

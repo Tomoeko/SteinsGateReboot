@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -139,6 +140,7 @@ namespace sgre::script {
 		bool DeferredClose = false;
 		bool GlyphOperation = false;
 		bool GlyphsPrepared = false;
+		std::optional<text::TextBounds> PresentationClip;
 		std::vector<PreparedTextElement> DrawOrder;
 		std::vector<text::CachedVectorGlyphDraw> GlyphScratch;
 		std::vector<text::VectorGlyphDrawRectangle> EdgeDraws;
@@ -149,6 +151,7 @@ namespace sgre::script {
 				throw std::runtime_error("TextRender cannot mutate content/fonts during actual glyph preparation or drawing");
 			}
 			GlyphsPrepared = false;
+			PresentationClip.reset();
 			DrawOrder.clear();
 		}
 
@@ -589,6 +592,32 @@ namespace sgre::script {
 			}
 		}
 
+		void PrepareDrawRectangles(const SquirrelValue& instance, const std::shared_ptr<TextRenderTask>& task, text::TextCursor origin, std::size_t shown, std::size_t& edge_count, std::size_t& ordinary_count) {
+			for (std::size_t index = 0; index < shown; ++index) {
+				const auto& prepared = task->DrawOrder[index];
+				const auto& element = *prepared.Element;
+				const auto& normal = prepared.Runs.front();
+				const auto selected = SelectFont(instance, normal.Family, normal.Key, normal.Face);
+				if (selected.Font != normal.Font) {
+					throw std::runtime_error("TextRender glyph font cache changed after its actual done preparation");
+				}
+				const auto plan = text::PrepareTextElementDrawPlan(origin, element.Geometry.Position, element.Style);
+				for (const auto& pass : std::span(plan.Passes).first(plan.PassCount)) {
+					AppendGlyphRun(task, normal, pass, edge_count, ordinary_count);
+				}
+				for (const auto& pass : std::span(plan.Passes).first(plan.PassCount)) {
+					for (std::size_t ruby = 1; ruby < prepared.Runs.size(); ++ruby) {
+						const auto& run = prepared.Runs[ruby];
+						const auto ruby_selected = SelectFont(instance, run.Family, run.Key, run.Face);
+						if (ruby_selected.Font != run.Font) {
+							throw std::runtime_error("TextRender ruby font cache changed after its actual done preparation");
+						}
+						AppendGlyphRun(task, run, text::PrepareTextRubyDrawPass(pass, run.Offset), edge_count, ordinary_count);
+					}
+				}
+			}
+		}
+
 		void Draw(const SquirrelValue& instance, const std::shared_ptr<TextRenderTask>& actual_task) {
 			static_cast<void>(Record(instance));
 			const auto record = Instances.at(std::get<SquirrelObjectHandle>(instance).Index);
@@ -612,40 +641,62 @@ namespace sgre::script {
 				std::size_t edge_count = 0;
 				std::size_t ordinary_count = 0;
 				const auto shown = std::min<std::size_t>(state.ShownElementCount, task->DrawOrder.size());
-				for (std::size_t index = 0; index < shown; ++index) {
-					const auto& prepared = task->DrawOrder[index];
-					const auto& element = *prepared.Element;
-					const auto& normal = prepared.Runs.front();
-					const auto selected = SelectFont(instance, normal.Family, normal.Key, normal.Face);
-					if (selected.Font != normal.Font) {
-						throw std::runtime_error("TextRender glyph font cache changed after its actual done preparation");
-					}
-					const auto plan = text::PrepareTextElementDrawPlan(origin, element.Geometry.Position, element.Style);
-					for (const auto& pass : std::span(plan.Passes).first(plan.PassCount)) {
-						AppendGlyphRun(task, normal, pass, edge_count, ordinary_count);
-					}
-					for (const auto& pass : std::span(plan.Passes).first(plan.PassCount)) {
-						for (std::size_t ruby = 1; ruby < prepared.Runs.size(); ++ruby) {
-							const auto& run = prepared.Runs[ruby];
-							const auto ruby_selected = SelectFont(instance, run.Family, run.Key, run.Face);
-							if (ruby_selected.Font != run.Font) {
-								throw std::runtime_error("TextRender ruby font cache changed after its actual done preparation");
-							}
-							AppendGlyphRun(task, run, text::PrepareTextRubyDrawPass(pass, run.Offset), edge_count, ordinary_count);
-						}
-					}
+				PrepareDrawRectangles(instance, task, origin, shown, edge_count, ordinary_count);
+				auto clip = state.ClippingBounds;
+				if (task->PresentationClip) {
+					clip = *task->PresentationClip;
+					const auto x = state.Coordinate.X + state.ClipOffset.X;
+					const auto y = state.Coordinate.Y + state.ClipOffset.Y;
+					clip.Left += x;
+					clip.Right += x;
+					clip.Top += y;
+					clip.Bottom += y;
 				}
+
 				if (edge_count != 0) {
-					GlyphDrawing(task->Context.Atlas(), std::span(task->EdgeDraws).first(edge_count), state.ClippingBounds);
+					GlyphDrawing(task->Context.Atlas(), std::span(task->EdgeDraws).first(edge_count), clip);
 				}
 				if (ordinary_count != 0) {
-					GlyphDrawing(task->Context.Atlas(), std::span(task->OrdinaryDraws).first(ordinary_count), state.ClippingBounds);
+					GlyphDrawing(task->Context.Atlas(), std::span(task->OrdinaryDraws).first(ordinary_count), clip);
 				}
 			} catch (...) {
 				failure = std::current_exception();
 			}
 			task->GlyphOperation = false;
 			FinishPropertyOperation(record, task, failure);
+		}
+
+		text::TextBounds DrawingBounds(const SquirrelValue& instance) {
+			static_cast<void>(Record(instance));
+			const auto record = Instances.at(std::get<SquirrelObjectHandle>(instance).Index);
+			const auto task = Task(*record);
+			if (!task || !task->GlyphsPrepared || task->GlyphOperation || task->Closing) {
+				throw std::runtime_error("TextRender drawing bounds require its completed, idle glyph preparation");
+			}
+			++task->PropertyDepth;
+			task->GlyphOperation = true;
+			std::exception_ptr failure;
+			auto bounds = task->Context.Content().Bounds();
+			try {
+				std::size_t edges = 0;
+				std::size_t ordinary = 0;
+				PrepareDrawRectangles(instance, task, {}, task->DrawOrder.size(), edges, ordinary);
+				for (const auto rectangles : {std::span(task->EdgeDraws).first(edges), std::span(task->OrdinaryDraws).first(ordinary)}) {
+					for (const auto& rectangle : rectangles) {
+						const auto& ink = rectangle.DestinationPixels;
+						bounds.Left = std::min(bounds.Left, ink.Left);
+						bounds.Top = std::min(bounds.Top, ink.Top);
+						bounds.Right = std::max(bounds.Right, ink.Right);
+						bounds.Bottom = std::max(bounds.Bottom, ink.Bottom);
+					}
+				}
+			} catch (...) {
+				failure = std::current_exception();
+			}
+			task->GlyphOperation = false;
+			FinishPropertyOperation(record, task, failure);
+
+			return bounds;
 		}
 
 		bool Render(const SquirrelValue& instance, const std::string& input, const text::TextContentRequest& request) {
@@ -1228,6 +1279,22 @@ namespace sgre::script {
 
 	TextFontLookupResult ScriptTextRenderBindings::SelectFont(const SquirrelValue& instance, text::TextFontFamily family, text::TextFontSelectionKey key, std::string_view face_name) {
 		return m_Implementation->SelectFont(instance, family, key, face_name);
+	}
+
+	text::TextBounds ScriptTextRenderBindings::DrawingBounds(const SquirrelValue& instance) {
+		return m_Implementation->DrawingBounds(instance);
+	}
+
+	void ScriptTextRenderBindings::SetPresentationClip(const SquirrelValue& instance, const text::TextBounds& clip) {
+		if (!std::isfinite(clip.Left) || !std::isfinite(clip.Top) || !std::isfinite(clip.Right) || !std::isfinite(clip.Bottom) || clip.Right <= clip.Left || clip.Bottom <= clip.Top) {
+			throw std::runtime_error("TextRender presentation clip requires positive finite bounds");
+		}
+
+		const auto task = Implementation::Task(m_Implementation->Record(instance));
+		if (!task || !task->GlyphsPrepared || task->GlyphOperation || task->Closing) {
+			throw std::runtime_error("TextRender presentation clipping requires its completed, idle glyph preparation");
+		}
+		task->PresentationClip = clip;
 	}
 
 	SquirrelValue ScriptTextRenderBindings::TextRenderClass() const {

@@ -35,6 +35,10 @@ namespace sgre::script {
 		void ConfigureGlyphDrawing(VectorGlyphDrawing draw);
 		void ConfigureFontOwners(ScriptPsbBindings& psb, ScriptVectorFontBindings& vectors, scene::BitmapFontAssetCatalog& fonts, scene::TextureCache& textures);
 		[[nodiscard]] TextFontLookupResult SelectFont(const SquirrelValue& instance, text::TextFontFamily family, text::TextFontSelectionKey key, std::string_view face_name);
+		// Authored presentation uses the complete prepared ink, including effects/ruby, independently of reveal count.
+		[[nodiscard]] text::TextBounds DrawingBounds(const SquirrelValue& instance);
+		// A layout-specific clip is retired on every native content/font invalidation.
+		void SetPresentationClip(const SquirrelValue& instance, const text::TextBounds& clip);
 		[[nodiscard]] SquirrelValue TextRenderClass() const;
 		[[nodiscard]] const scene::LayerScaleView& ScaleView(const SquirrelValue& instance) const;
 		[[nodiscard]] bool IsDetached(const SquirrelValue& instance) const;
