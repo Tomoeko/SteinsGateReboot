@@ -74,6 +74,10 @@ namespace sgre::scene {
 		if (selection) {
 			selection->Project = ResolveMotionCloneProject(m_Manager, source.m_Manager, selection->Project);
 		}
+		auto cached_selection = source.m_CachedSelection;
+		if (cached_selection) {
+			cached_selection->Project = ResolveMotionCloneProject(m_Manager, source.m_Manager, cached_selection->Project);
+		}
 		MotionPlayerCommandNames names;
 		names.CurrentCharacter = ReadName(source.m_Names.CurrentCharacter);
 		names.RequestedCharacter = ReadName(source.m_Names.RequestedCharacter);
@@ -92,6 +96,7 @@ namespace sgre::scene {
 		m_Names = std::move(names);
 		m_Clock = source.m_Clock;
 		m_SelectedProject = selection;
+		m_CachedSelection = cached_selection;
 		m_PreferredProject = source.m_PreferredProject;
 		m_CachedTimeline = source.m_CachedTimeline;
 		m_CachedResource = source.m_CachedResource;
@@ -193,6 +198,7 @@ namespace sgre::scene {
 		m_Clock.ApplyTimeline(*selection->Timeline, continuation);
 		++m_SelectionSerial;
 		m_SelectedProject = selection;
+		m_CachedSelection = selection;
 		m_PreferredProject = selection->Identity;
 		m_CachedTimeline = selection->Timeline;
 		m_CachedResource = std::move(metadata);
@@ -368,6 +374,10 @@ namespace sgre::scene {
 
 	const std::optional<ResolvedMotionTimeline>& MotionPlayerCommands::SelectedProject() const noexcept {
 		return m_SelectedProject;
+	}
+
+	const std::optional<ResolvedMotionTimeline>& MotionPlayerCommands::CachedSelection() const noexcept {
+		return m_CachedSelection;
 	}
 
 	const resource::MotionTimeline* MotionPlayerCommands::CachedTimeline() const noexcept {

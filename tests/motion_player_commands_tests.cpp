@@ -108,9 +108,11 @@ static void TestRequestsAndControls() {
 	commands.Play("alt", sgre::scene::MotionPlayFlags::Force | sgre::scene::MotionPlayFlags::Chain | sgre::scene::MotionPlayFlags::AsCan);
 	Require(commands.Names().RequestedMotion == "alt" && commands.ClockState().TickCount == 15 && commands.ClockState().EvaluationTime == 4 && commands.ClockState().LastTime == 50, "Force must override AsCan while Chain preserves both prior tick words");
 	const auto* cached = commands.CachedTimeline();
+	const auto cached_owner = commands.CachedSelection();
 	commands.Play("missing");
 	commands.SetTickCount(3);
 	Require(!commands.SelectedProject() && commands.CachedTimeline() == cached && !commands.ClockState().Playing && commands.ClockState().TickCount == 15 && commands.Names().CurrentMotion == "alt" && commands.Names().RequestedMotion == "alt", "failed selection must clear only the selected project and playing guard, retaining names, cached timeline and timing");
+	Require(commands.CachedSelection() && commands.CachedSelection()->Project == cached_owner->Project && commands.CachedSelection()->Identity == cached_owner->Identity && commands.CachedSelection()->Timeline == cached && commands.CachedSelection()->Character == cached_owner->Character, "failed lookup changed the independently retained cached timeline owner identity");
 	commands.Play("alt");
 	Require(!commands.SelectedProject(), "same-name request after failure must not silently reacquire a root");
 	commands.Play("alt", sgre::scene::MotionPlayFlags::Force);
@@ -184,6 +186,10 @@ static void TestNativeCloneCommandState() {
 	sgre::scene::MotionPlayerCommands cross_manager(other_manager);
 	cross_manager.CopyForClone(source);
 	Require(cross_manager.SelectedProject()->Project == destination_project && destination_project != source.SelectedProject()->Project && cross_manager.CachedTimeline() == source.CachedTimeline() && cross_manager.Names().CurrentMotion.empty() && cross_manager.ClockState().TickCount == source.ClockState().TickCount, "native destination manager override must use the exact immutable resource alias rather than a colliding source project slot");
+	source.Play("missing-optional-motion");
+	sgre::scene::MotionPlayerCommands stopped_clone(other_manager);
+	stopped_clone.CopyForClone(source);
+	Require(!source.SelectedProject() && !stopped_clone.SelectedProject() && stopped_clone.CachedSelection() && stopped_clone.CachedSelection()->Project == destination_project && stopped_clone.CachedTimeline() == source.CachedTimeline() && stopped_clone.CachedSelection()->Timeline == source.CachedSelection()->Timeline && stopped_clone.CachedSelection()->Character == source.CachedSelection()->Character && !stopped_clone.ClockState().Playing, "cloning a failed lookup must keep its null lookup root and independently remap the retained timeline owner");
 	sgre::scene::MotionResourceManager missing_manager(cache);
 	static_cast<void>(missing_manager.Register(unrelated_identity, model, {}));
 	sgre::scene::MotionPlayerCommands missing_alias(missing_manager);

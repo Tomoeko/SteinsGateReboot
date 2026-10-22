@@ -669,7 +669,7 @@ namespace sgre::scene {
 		if ((m_Mutating && !during_added) || (!m_Published && !during_added) || layer >= m_Owners.size() || !m_Owners[layer]->IdentifierLive || m_Owners[layer]->MeshLocal == nullptr || m_Nodes[layer].Prepared != &m_Preparation.Layers[layer]) {
 			throw std::runtime_error("motion mesh UID write requires its actual constructed exclusive mesh owner");
 		}
-		const auto& selection = m_Commands.SelectedProject();
+		const auto& selection = m_Commands.CachedSelection();
 		if (!selection || selection->Timeline != &m_Timeline || m_CommandSelectionSerial != m_Commands.SelectionSerial() || !m_Commands.Manager().Contains(selection->Project)) {
 			throw std::runtime_error("motion mesh UID write requires its exact current registered selection");
 		}

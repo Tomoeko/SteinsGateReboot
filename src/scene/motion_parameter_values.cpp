@@ -251,7 +251,7 @@ namespace sgre::scene {
 	}
 
 	void MotionPlayerParameterValues::RequireDescriptorSelection() const {
-		if (m_Selected == nullptr || m_Selected->m_CommandSelectionSerial != m_Commands.SelectionSerial() || m_Commands.CachedTimeline() != &m_Selected->m_Timeline || !m_Commands.SelectedProject() || !m_Commands.Manager().Contains(m_Commands.SelectedProject()->Project)) {
+		if (m_Selected == nullptr || m_Selected->m_CommandSelectionSerial != m_Commands.SelectionSerial() || m_Commands.CachedTimeline() != &m_Selected->m_Timeline || !m_Commands.CachedSelection() || !m_Commands.Manager().Contains(m_Commands.CachedSelection()->Project)) {
 			throw std::runtime_error("motion descriptor requires its actual current selected containing owner");
 		}
 	}
@@ -561,7 +561,7 @@ namespace sgre::scene {
 
 	void MotionTimelineParameters::RequireSelection() const {
 		const auto& commands = m_Values.Commands();
-		const auto& selection = commands.SelectedProject();
+		const auto& selection = commands.CachedSelection();
 		// Native50fd90 retains these exact cells after selected nodes retire; the command owner retains their metadata.
 		const bool cleared_current = commands.SelectedLayersCleared() && commands.CachedResource() && m_Values.m_Selected == nullptr && m_Values.m_CurrentParameters == this;
 		if (!selection || commands.SelectionSerial() != m_SelectionSerial || commands.CachedTimeline() != &m_Timeline || selection->Timeline != &m_Timeline || (!cleared_current && !commands.Manager().Contains(selection->Project))) {

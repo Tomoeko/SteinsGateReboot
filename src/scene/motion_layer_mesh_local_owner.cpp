@@ -127,7 +127,7 @@ namespace sgre::scene {
 			const auto& first = m_Slots[state.CurrentSlot].Deformation;
 			m_OwnPatch = first.Patch;
 			if (current.Tween && !following.Hidden && std::abs(evaluation.Ratio) >= std::numeric_limits<float>::epsilon()) {
-				const auto& selection = *m_Selected.m_Commands.SelectedProject();
+				const auto& selection = *m_Selected.m_Commands.CachedSelection();
 				const auto& resource = m_Selected.m_Commands.Manager().Resource(selection.Project);
 				const auto* easing = first.EasingIndex ? &resource.Easing.at(*first.EasingIndex) : nullptr;
 				m_OwnPatch = InterpolateMotionBezierPatch(first.Patch, m_Slots[1 - state.CurrentSlot].Deformation.Patch, evaluation.Ratio, easing);

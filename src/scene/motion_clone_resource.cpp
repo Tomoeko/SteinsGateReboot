@@ -45,5 +45,10 @@ namespace sgre::scene {
 		if (old && (copied->Project != ResolveMotionCloneProject(destination.Manager(), source.Manager(), old->Project) || copied->Identity != old->Identity || copied->Character != old->Character || copied->Timeline != old->Timeline)) {
 			throw std::runtime_error("motion clone selected atoms differ from the actual destination resource alias");
 		}
+		const auto& old_cached = source.CachedSelection();
+		const auto& copied_cached = destination.CachedSelection();
+		if (old_cached.has_value() != copied_cached.has_value() || (old_cached && (copied_cached->Project != ResolveMotionCloneProject(destination.Manager(), source.Manager(), old_cached->Project) || copied_cached->Identity != old_cached->Identity || copied_cached->Character != old_cached->Character || copied_cached->Timeline != old_cached->Timeline))) {
+			throw std::runtime_error("motion clone cached atoms differ from the actual destination resource alias");
+		}
 	}
 } // namespace sgre::scene

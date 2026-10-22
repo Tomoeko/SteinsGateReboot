@@ -73,21 +73,27 @@ namespace sgre::scene {
 	}
 
 	void MotionSelectedLayerSources::RequireSelected() const {
-		const auto& selection = m_Selected.m_Commands.SelectedProject();
-		if (!m_Selected.m_Published || m_Selected.m_Mutating || (m_Selected.m_SourceOwner != nullptr && m_Selected.m_SourceOwner != this) || &m_Selected.m_Commands.Manager() != &m_Manager || !selection || selection->Project != m_Project || selection->Identity != m_Identity || selection->Timeline != &m_Selected.m_Timeline || m_Selected.m_Commands.CachedTimeline() != &m_Selected.m_Timeline || !m_Manager.Contains(m_Project) || m_Manager.Identity(m_Project) != m_Identity) {
+		const auto& selection = m_Selected.m_Commands.CachedSelection();
+		// Native515d40 reads the retained timeline at+140. Failed lookup clears only
+		// the separate root at+150; it does not retire these evaluated source cells.
+		const bool selection_matches = selection && selection->Project == m_Project && selection->Identity == m_Identity && selection->Timeline == &m_Selected.m_Timeline;
+		if (!m_Selected.m_Published || m_Selected.m_Mutating || (m_Selected.m_SourceOwner != nullptr && m_Selected.m_SourceOwner != this) || &m_Selected.m_Commands.Manager() != &m_Manager || !selection_matches || m_Selected.m_Commands.CachedTimeline() != &m_Selected.m_Timeline || !m_Manager.Contains(m_Project) || m_Manager.Identity(m_Project) != m_Identity) {
 			throw std::runtime_error("motion selected source borrow requires its exact live requesting project and selected tree");
 		}
 		const auto& resource = m_Manager.Resource(m_Project);
 		bool owned = false;
 		for (const auto& character : resource.Objects) {
-			if (&character == selection->Character) {
-				owned = std::any_of(character.Timelines.begin(), character.Timelines.end(), [&](const auto& timeline) {
-					return &timeline == selection->Timeline;
-				});
+			if (&character != selection->Character) {
+				continue;
+			}
+			owned = std::any_of(character.Timelines.begin(), character.Timelines.end(), [&](const auto& timeline) {
+				return &timeline == &m_Selected.m_Timeline;
+			});
+			if (owned) {
 				break;
 			}
 		}
-		if (!owned || m_Selected.Nodes().size() != m_Selected.m_Preparation.Layers.size()) {
+		if (!owned || m_Selected.m_CommandSelectionSerial != m_Selected.m_Commands.SelectionSerial() || m_Selected.Nodes().size() != m_Selected.m_Preparation.Layers.size()) {
 			throw std::runtime_error("motion selected source requester is outside its actual registered character/timeline");
 		}
 	}

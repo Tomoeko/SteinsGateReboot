@@ -255,7 +255,7 @@ namespace sgre::scene {
 			throw std::runtime_error("motion selected local numeric cache belongs to its exact exclusive owner");
 		}
 
-		const auto& selection = m_SelectedOwner->m_Commands.SelectedProject();
+		const auto& selection = m_SelectedOwner->m_Commands.CachedSelection();
 		if (!selection || m_SelectedOwner->m_Commands.CachedTimeline() != &m_Timeline || selection->Timeline != &m_Timeline || !m_SelectedOwner->m_Commands.Manager().Contains(selection->Project) || &m_SelectedOwner->m_Commands.Manager().Resource(selection->Project) != m_Resource) {
 			throw std::runtime_error("motion local numeric phase requires its actual registered selected resource");
 		}

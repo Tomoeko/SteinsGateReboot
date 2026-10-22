@@ -1896,6 +1896,35 @@ static void TestUnpublishedSelectedTreeCloneRemainsRejected() {
 	Require(fixture.Runtime->Identifiers().LiveCount() == 0 && source.ParameterValues().RegisteredParameterCount() == 0 && destination.ParameterValues().RegisteredParameterCount() == 0, "unpublished clone rejection must not acquire IDs or selected parameter ownership");
 }
 
+static void TestFailedMotionLookupKeepsEvaluatedSourceOwner(bool parameters, bool mesh) {
+	Fixture fixture(parameters, false, mesh);
+	auto task = fixture.Attach();
+	task.SetVisible(true);
+	task.Play("main");
+	task.Progress(0);
+	const auto* original_scene = task.GenericPlayer()->Scene();
+	const auto* original_timeline = task.Commands().CachedTimeline();
+	const auto original_serial = task.Commands().SelectionSerial();
+	const auto original_ids = fixture.Runtime->Identifiers().LiveCount();
+	const auto asset_references = fixture.Asset.use_count();
+	const auto events = fixture.Events;
+	const auto original_rows = original_scene->PacketRows().size();
+	task.Play("missing-optional-motion");
+	Require(!task.Commands().SelectedProject() && !task.Commands().ClockState().Playing && task.Commands().CachedTimeline() == original_timeline && task.Commands().SelectionSerial() == original_serial, "missing native motion must clear only its lookup root/playing state and retain the cached selection");
+	task.Progress(0);
+	Require(task.GenericPlayer()->Scene() == original_scene && original_scene->PacketRows().size() == original_rows && original_rows == 3 && fixture.Runtime->Identifiers().LiveCount() == original_ids && fixture.Events == events && fixture.Asset.use_count() == asset_references, "stopped retained scene must keep its evaluated sources, geometry, IDs and ownership without fabricating a selection or replaying actions");
+	fixture.Tasks.Group(sgre::scene::MotionTaskGroup::Second).Draw(0);
+	const std::array<sgre::resource::MotionPoint, 1> sizes{{{4, 4}}};
+	const auto frame = fixture.Runtime->SceneContext().Prepare(Globals(sizes));
+	Require(frame.Nodes.size() == 3 && frame.Queue.size() == 2 && frame.Queue[0].Texture == 0 && frame.Queue[1].Texture == 0, "failed lookup discarded or changed actual retained source-backed draw packets");
+	fixture.Runtime->SceneContext().Clear();
+	Require(fixture.Manager.Unregister(fixture.Project), "negative source lifetime requires actual final project unregistration");
+	RequireFailure([&] {
+		task.Progress(0);
+	},
+	    "registered");
+}
+
 int main(int argc, char** argv) {
 	try {
 		if (argc == 3 && std::string_view(argv[1]) == "--validation-work") {
@@ -1905,6 +1934,9 @@ int main(int argc, char** argv) {
 		}
 		Require(argc == 1, "usage: motion_scene_player_task_tests [--validation-work output.json]");
 		static_cast<void>(TestNestedValidationWorkAndOutput());
+		TestFailedMotionLookupKeepsEvaluatedSourceOwner(false, false);
+		TestFailedMotionLookupKeepsEvaluatedSourceOwner(true, false);
+		TestFailedMotionLookupKeepsEvaluatedSourceOwner(false, true);
 		TestDormantDeepChildCloneAfterActualReset();
 		TestUnpublishedSelectedTreeCloneRemainsRejected();
 		TestFreshSceneSelectionAfterClearedSnapshotRetires();

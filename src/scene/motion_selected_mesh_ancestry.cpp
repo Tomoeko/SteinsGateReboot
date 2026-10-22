@@ -78,7 +78,7 @@ namespace sgre::scene {
 	}
 
 	void MotionSelectedMeshAncestry::RequireOwners() const {
-		const auto& selection = m_Selected.m_Commands.SelectedProject();
+		const auto& selection = m_Selected.m_Commands.CachedSelection();
 		if (!selection || !m_Selected.m_Published || m_Selected.m_Mutating || (m_Selected.m_DeformationOwner != nullptr && m_Selected.m_DeformationOwner != this) || m_Selected.m_SourceOwner != &m_Sources || &m_Manager.Manager() != &m_Selected.m_Commands.Manager() || m_Sources.RequestingProject() != selection->Project) {
 			throw std::runtime_error("motion mixed ancestry requires its exact live selected registered owners");
 		}

@@ -104,6 +104,8 @@ namespace sgre::scene {
 		[[nodiscard]] const MotionPlayerCommandNames& Names() const noexcept;
 		[[nodiscard]] const MotionTimelineClockState& ClockState() const noexcept;
 		[[nodiscard]] const std::optional<ResolvedMotionTimeline>& SelectedProject() const noexcept;
+		// Owner identity derived from the retained+140 timeline atom, independently of the current+150 lookup root.
+		[[nodiscard]] const std::optional<ResolvedMotionTimeline>& CachedSelection() const noexcept;
 		[[nodiscard]] const std::optional<MotionProjectIdentity>& PreferredProject() const noexcept;
 		[[nodiscard]] const resource::MotionTimeline* CachedTimeline() const noexcept;
 		[[nodiscard]] const std::shared_ptr<const resource::MotionResource>& CachedResource() const noexcept;
@@ -130,6 +132,7 @@ namespace sgre::scene {
 		std::uint64_t m_SelectionSerial = 0;
 		float m_MeshDivisionRatio = 1;
 		std::optional<ResolvedMotionTimeline> m_SelectedProject;
+		std::optional<ResolvedMotionTimeline> m_CachedSelection;
 		std::optional<MotionProjectIdentity> m_PreferredProject;
 		const resource::MotionTimeline* m_CachedTimeline = nullptr;
 		std::function<void(const ResolvedMotionTimeline&, MotionPlayFlags)> m_InstallSelection;

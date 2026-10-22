@@ -49,7 +49,7 @@ namespace sgre::scene {
 	}
 
 	void MotionSelectedMeshGeometry::RequireOwners() const {
-		const auto& selection = m_Selected.m_Commands.SelectedProject();
+		const auto& selection = m_Selected.m_Commands.CachedSelection();
 		if (!selection || !m_Selected.m_Published || m_Selected.m_Mutating || (m_Selected.m_MeshGeometryOwner != nullptr && m_Selected.m_MeshGeometryOwner != this) || m_Selected.m_SourceOwner != &m_Sources || m_Composition.m_SelectedOwner != &m_Selected || &m_Composition.m_Timeline != &m_Selected.m_Preparation || &m_Composition.m_Root != &m_Selected.m_Root || &m_Manager.Manager() != &m_Selected.m_Commands.Manager() || m_Sources.RequestingProject() != selection->Project) {
 			throw std::runtime_error("motion selected mesh geometry requires its exact live selected numeric/source/manager owners");
 		}
