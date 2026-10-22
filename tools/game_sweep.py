@@ -417,7 +417,7 @@ def suite_pins(repository, build, installation, plan, options):
 	identity = hashlib.sha256()
 	for name in ("sgre_steam.exe", "wind3d11data/script_info.psb.m", "wind3d11data/script_body.bin", "wind3d11data/scenario_info.psb.m", "wind3d11data/scenario_body.bin"):
 		identity.update(name.encode() + b"\0" + digest_file(installation / name).encode())
-	return {"schema": 1, "pins": {str(path.relative_to(repository)) if path.is_relative_to(repository) else str(path): digest_file(path) for path in paths}, "resource_identity": identity.hexdigest(), "plan": hashlib.sha256(json_bytes(plan)).hexdigest(), "timeout": options.timeout, "post_seconds": options.post_seconds}
+	return {"schema": 1, "pins": {str(path.relative_to(repository)) if path.is_relative_to(repository) else str(path): digest_file(path) for path in paths}, "resource_identity": identity.hexdigest(), "plan": hashlib.sha256(json_bytes(plan)).hexdigest(), "timeout": options.timeout, "post_seconds": options.post_seconds, "cold": options.cold}
 
 
 def prior_queue(options, manifest):
@@ -445,18 +445,21 @@ def main():
 	parser.add_argument("--output", type=Path, default=Path("Files/testing/game-sweep"))
 	parser.add_argument("--target", action="append", default=[], help="original SCENE.ks:LINE; may repeat")
 	parser.add_argument("--limit", type=int, help="bound the number of queued scene checks this invocation")
-	parser.add_argument("--timeout", type=float, default=60)
+	parser.add_argument("--timeout", type=float, default=180)
 	parser.add_argument("--post-seconds", type=float, default=2)
 	parser.add_argument("--plan-only", action="store_true")
 	parser.add_argument("--retry-failures", action="store_true")
 	parser.add_argument("--retry-from", type=Path, help="check the failures from an older build's suite in this fresh output directory")
 	parser.add_argument("--replay", type=Path, help="reproduce one retained result with its pinned original predecessor and fresh isolated saves")
+	parser.add_argument("--cold", action="store_true", help="start from the original new game instead of using a retained predecessor; checks full traversal lifetimes")
 	parser.add_argument("--keep-going", action="store_true", help="continue past a runtime failure instead of stopping at its first reproducible cause")
 	options = parser.parse_args()
 	if not 5 <= options.timeout <= 900 or not 0.5 <= options.post_seconds <= 60 or options.post_seconds >= options.timeout - 2 or (options.limit is not None and options.limit < 1):
 		parser.error("timeout requires5..900 seconds, post-seconds0.5..60 below timeout-2, limit must be positive")
 	if sum(bool(value) for value in (options.retry_from, options.replay, options.target)) > 1:
 		parser.error("--retry-from, --replay and --target select different queues; use one")
+	if options.cold and (options.retry_from or options.replay):
+		parser.error("--cold selects new-game ancestry; replay and retry-from retain the earlier recorded ancestry")
 	repository = Path(__file__).resolve().parent.parent
 	os.chdir(repository)
 	build = options.build.resolve()
@@ -480,6 +483,8 @@ def main():
 		write_json(output / "plan.json", plan)
 	targets, predecessors = prior_queue(options, manifest)
 	cases = choose_cases(plan, make_cases(plan), targets) if targets or not options.retry_from else []
+	if options.cold:
+		predecessors = {case["id"]: "new-game" for case in cases}
 	if options.plan_only:
 		print(str(len(plan["scenes"])) + " scenes, " + str(sum(len(scene["snapshots"]) for scene in plan["scenes"])) + " snapshot records, " + str(len(cases)) + " queued scene targets")
 		return 0
