@@ -159,7 +159,7 @@ class Observation:
 				self.fail("protocol", "malformed test receipt fields: " + str(error))
 			return
 		text = line.decode("utf-8", errors="replace").strip()
-		if "original script retirement:" in text:
+		if "original script retirement:" in text or "original application retirement:" in text:
 			self.retirement.append(text[:4096])
 			self.fail("retirement", text)
 		elif "original startup failed:" in text and self.boundary and self.boundary.get("kind") == "observation_stopped":
@@ -222,22 +222,25 @@ class Observation:
 	def result(self, returncode, elapsed, command):
 		if self.arrived and not self.target_seen:
 			self.fail("wrong_target", "seek arrival lacks the exact storage/label/line/point/record receipt")
-		runtime_reached = self.arrived and self.target_seen and self.post_draws > 0 and not any(error["kind"] != "retirement" for error in self.errors)
-		if self.errors and all(error["kind"] == "retirement" for error in self.errors):
-			status = "retirement_failed"
-		elif self.errors:
+		runtime_errors = any(error["kind"] != "retirement" for error in self.errors)
+		retirement_failed = any(error["kind"] == "retirement" for error in self.errors)
+		finished_observation = self.boundary is not None and self.boundary.get("kind") in ("observation_stopped", "application_ended")
+		runtime_reached = self.arrived and self.target_seen and self.post_draws > 0 and finished_observation and not runtime_errors
+		if runtime_errors:
 			status = "failed"
 		elif self.blocked:
 			status = "blocked"
+		elif retirement_failed:
+			status = "retirement_failed" if runtime_reached else "incomplete"
 		elif returncode != 0:
 			status = "crashed" if returncode is not None and returncode < 0 else "failed"
 		elif not self.started or not self.boundary:
 			status = "incomplete"
-		elif not self.arrived or not self.target_seen or self.post_draws <= 0:
+		elif not runtime_reached:
 			status = "incomplete"
 		else:
 			status = "reached"
-		return {"case": self.case, "status": status, "runtime_reached": runtime_reached, "seconds": round(elapsed, 3), "returncode": returncode, "command": command, "identity": getattr(self, "identity", None), "parent": getattr(self, "parent", None), "target_seen": self.target_seen, "arrived": self.arrived, "post_draws": self.post_draws, "snapshots": self.snapshots, "errors": self.errors, "blocked": self.blocked, "boundary": self.boundary, "retirement_warnings": self.retirement}
+		return {"case": self.case, "status": status, "runtime_reached": runtime_reached, "retirement_failed": retirement_failed, "seconds": round(elapsed, 3), "returncode": returncode, "command": command, "identity": getattr(self, "identity", None), "parent": getattr(self, "parent", None), "target_seen": self.target_seen, "arrived": self.arrived, "post_draws": self.post_draws, "snapshots": self.snapshots, "errors": self.errors, "blocked": self.blocked, "boundary": self.boundary, "retirement_warnings": self.retirement}
 
 
 def stop_process(process):
@@ -361,8 +364,9 @@ def summarize(plan, results):
 			destination = (exit["storage"], exit["label"]) if exit["label"] else first_scenes.get(exit["storage"])
 			branch_edges.append({"source": scene_key(scene), "ordinal": index, "destination": destination, "conditional": exit["conditional"], "resolved": destination in known_scenes, "transition_observed": (scene_key(scene), destination) in edges, "predicate_outcome_verified": False})
 	planned = {case["id"] for case in make_cases(plan)}
-	completed = {result["case"]["id"] for result in results}
-	return {"schema": 1, "cases": len(results), "statuses": dict(Counter(result["status"] for result in results)), "planned_scene_checks": len(planned), "remaining_scene_checks": len(planned - completed), "runtime_reached_cases": sum(result.get("runtime_reached", False) for result in results), "snapshot_records_observed": len(snapshots), "snapshot_records_total": len(inventory), "unrecognized_snapshot_receipts": unknown_snapshots, "scene_ids_observed": len({key[:2] for key in snapshots}), "scene_ids_total": len(plan["scenes"]), "transitions_observed": len(edges), "branches": branch_edges, "failures": groups, "unaddressable_scenes": [scene_key(scene) for scene in plan["scenes"] if not any(row["jump_line"] is not None for row in scene["snapshots"])], "qualification": "Original sequential skip-path execution plus a short normal-frame probe after arrival. Counts do not prove alternate route states, predicate truth, menu coverage, normal timing, pixels, audio fidelity or complete game recovery."}
+	attempted = {result["case"]["id"] for result in results}
+	completed = {result["case"]["id"] for result in results if result["status"] == "reached"}
+	return {"schema": 1, "cases": len(results), "statuses": dict(Counter(result["status"] for result in results)), "planned_scene_checks": len(planned), "remaining_scene_checks": len(planned - completed), "attempted_scene_checks": len(planned & attempted), "completed_scene_checks": len(planned & completed), "pending_scene_checks": len(planned - attempted), "retirement_failed_cases": sum(result.get("retirement_failed", any(error["kind"] == "retirement" for error in result["errors"])) for result in results), "runtime_reached_cases": sum(result.get("runtime_reached", False) for result in results), "snapshot_records_observed": len(snapshots), "snapshot_records_total": len(inventory), "unrecognized_snapshot_receipts": unknown_snapshots, "scene_ids_observed": len({key[:2] for key in snapshots}), "scene_ids_total": len(plan["scenes"]), "transitions_observed": len(edges), "branches": branch_edges, "failures": groups, "unaddressable_scenes": [scene_key(scene) for scene in plan["scenes"] if not any(row["jump_line"] is not None for row in scene["snapshots"])], "qualification": "Original sequential skip-path execution plus a short normal-frame probe after arrival. Counts do not prove alternate route states, predicate truth, menu coverage, normal timing, pixels, audio fidelity or complete game recovery."}
 
 
 def require_output(repository, output, installation):
@@ -526,6 +530,10 @@ def run_queue(repository, build, installation, output, user_saves, plan, cases, 
 		summary = summarize(plan, list(latest.values()))
 		write_json(output / "summary.json", summary)
 		print(f"[{index}/{len(queue)}] {case['target']}: {result['status']} ({result['seconds']}s); {summary['snapshot_records_observed']}/{summary['snapshot_records_total']} snapshot records observed", flush=True)
+		if result["blocked"]:
+			print("  Route input required: " + result["blocked"].get("reason", "original route blocked"), flush=True)
+		if result["retirement_failed"]:
+			print("  Separate retirement failure retained; runtime_reached=" + str(result["runtime_reached"]).lower(), flush=True)
 		if not result["protected_state_unchanged"]:
 			raise RuntimeError("protected state changed; test queue stopped after retaining the result")
 		if index % 20 == 0:
@@ -537,7 +545,7 @@ def run_queue(repository, build, installation, output, user_saves, plan, cases, 
 		write_json(output / "summary.json", summarize(plan, list(latest.values())))
 	print("Report: " + str((output / "summary.json").relative_to(repository)))
 	check_storage(repository)
-	if any(result["status"] not in ("reached", "blocked") for result in latest.values()):
+	if any(result["status"] not in ("reached", "blocked") or result.get("retirement_failed", any(error["kind"] == "retirement" for error in result["errors"])) for result in latest.values()):
 		return 1
 	return 2 if any(result["status"] == "blocked" for result in latest.values()) else 0
 

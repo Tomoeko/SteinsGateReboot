@@ -110,6 +110,33 @@ class CoverageTests(unittest.TestCase):
 		self.assertTrue(result["runtime_reached"])
 		self.assertEqual(result["errors"][0]["kind"], "retirement")
 
+	def test_blocked_route_survives_a_later_retirement_failure(self):
+		observation = SWEEP.Observation(case())
+		event(observation, "begin", **begin())
+		event(observation, "seek", phase=4, reason="original keypad requires route input")
+		event(observation, "boundary", kind="observation_stopped", reason="fixture")
+		observation.line(b"original application retirement: fixture shutdown owner")
+		observation.line(b"original startup failed: fixture shutdown owner")
+		result = observation.result(1, 1, ["fixture"])
+		self.assertEqual(result["status"], "blocked")
+		self.assertFalse(result["runtime_reached"])
+		self.assertTrue(result["retirement_failed"])
+		self.assertEqual(result["blocked"]["reason"], "original keypad requires route input")
+		report = SWEEP.summarize(plan(), [result])
+		self.assertEqual(report["retirement_failed_cases"], 1)
+		self.assertEqual(report["completed_scene_checks"], 0)
+		self.assertEqual(report["remaining_scene_checks"], report["planned_scene_checks"])
+
+	def test_retirement_alone_cannot_establish_target_completion(self):
+		observation = SWEEP.Observation(case())
+		event(observation, "begin", **begin())
+		event(observation, "boundary", kind="observation_stopped", reason="fixture")
+		observation.line(b"original startup failed: fixture shutdown owner")
+		result = observation.result(1, 1, ["fixture"])
+		self.assertEqual(result["status"], "incomplete")
+		self.assertFalse(result["runtime_reached"])
+		self.assertTrue(result["retirement_failed"])
+
 	def test_transition_counts_do_not_claim_predicate_coverage(self):
 		result = {"case": case(), "status": "reached", "snapshots": [{**case(), "digest": "a" * 64}, {**case(), "storage": "next.ks", "label": "*first", "digest": "b" * 64}], "errors": [], "command": ["fixture"]}
 		report = SWEEP.summarize(plan(), [result])
