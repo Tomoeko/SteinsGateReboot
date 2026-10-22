@@ -148,9 +148,10 @@ namespace sgre::script {
 		void DetachMotionRuntime(const SquirrelValue& instance, const scene::MotionManagerRuntime& actual_runtime);
 		void ReleaseInstance(const SquirrelValue& instance);
 		// RawTex owns its common task/texture graph; this registry supplies inherited LayerBase and weak-parent state.
+		// Its observational preflight checks the actual owner without retiring or retaining the receiver.
 		[[nodiscard]] bool IsLayerOwner(const SquirrelValue& owner) const;
 		[[nodiscard]] scene::RawLayerAttachment RawTextureAttachment(const SquirrelValue& owner) const;
-		void AttachRawTextureInstance(const SquirrelValue& instance, scene::LayerHandle handle, const SquirrelValue& owner, std::function<void(bool)> set_smoothing, std::function<void(const SquirrelValue&)> retire);
+		void AttachRawTextureInstance(const SquirrelValue& instance, scene::LayerHandle handle, const SquirrelValue& owner, std::function<void(bool)> set_smoothing, std::function<void(const SquirrelValue&)> require_can_retire, std::function<void(const SquirrelValue&)> retire);
 		// Invoke these in the RawLayerOwner parent/Object phases before its tree record is released.
 		void DropRawTextureParent(const SquirrelValue& instance);
 		void ReleaseRawTextureObject(const SquirrelValue& instance);

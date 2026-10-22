@@ -1,5 +1,10 @@
 #include "prepared_driver_leaf_fixture.hpp"
 
+#include "raw_texture_fixture.hpp"
+#include "sgre/script/binary_bindings.hpp"
+#include "sgre/script/raw_image_bindings.hpp"
+#include "sgre/script/raw_texture_bindings.hpp"
+
 #include <array>
 #include <cstddef>
 #include <cstdlib>
@@ -176,6 +181,67 @@ static void TestLayerEndsFirstAndDetach(const std::filesystem::path& directory) 
 	fixture.Driver.Close->Close();
 }
 
+static void TestRawTexturePreflightAndOrderedRetirement(const std::filesystem::path& directory) {
+	sgre::scene::tests::TaskFixtureBackend backend;
+	PreparedCloseFixture fixture(directory);
+	sgre::script::ScriptBinaryBindings binary(fixture.Vm, fixture.Objects);
+	sgre::script::ScriptRawImageBindings images(fixture.Vm, fixture.Objects, binary);
+	auto& priority = fixture.Close->Scene().Group(sgre::scene::DefaultDriverTaskGroup::Priority);
+	sgre::script::ScriptRawTextureBindings raw(fixture.Vm, fixture.Objects, fixture.Layers, images, binary, fixture.Tree, backend, priority);
+	const std::array<sgre::script::SquirrelValue, 3> arguments{fixture.Vm.RootTable(), std::int32_t{2}, std::int32_t{1}};
+	const auto instance = fixture.Vm.Invoke(raw.RawTextureClass(), arguments).Value;
+	auto& owner = raw.Owner(instance);
+	const auto handle = owner.Handle();
+	const auto task_count = fixture.Controller.Parallel().Count();
+	std::array<sgre::scene::ParallelTaskHandle, 1> order{};
+	Require(priority.WriteOrder(order) == 1 && backend.Live && fixture.Tree.State(handle).Attached, "actual RawTex must own its real texture, manager membership and captured Priority task");
+	fixture.Layers.RequireCanReleaseAll(fixture.Vm, fixture.Objects, fixture.Tree);
+	Require(priority.Count() == 1 && priority.State(order[0]).Status == sgre::scene::TaskStatus::Active && fixture.Objects.HasInstance(instance) && backend.Live, "idle RawTex preflight must observe without retiring texture, task or Object state");
+
+	std::size_t rejections = 0;
+	const auto reject_active = [&] {
+		RequireFailure([&] {
+			fixture.Close->Close();
+		});
+		Require(fixture.Close->Phase() == sgre::script::PreparedDriverClosePhase::Threads && !fixture.Vm.IsClosed() && fixture.Logs.IsInitialized() && !fixture.Manager.IsClosed() && !fixture.Meter.IsClosed() && fixture.Controller.Parallel().Count() == task_count && fixture.Events.empty() && backend.Live && fixture.Tree.State(handle).Attached && fixture.Objects.HasInstance(instance) && priority.State(order[0]).Status == sgre::scene::TaskStatus::Active, "active actual RawTex groups must reject before any sibling Thread, VM, texture, parent or background-task mutation");
+		++rejections;
+	};
+	const std::array parallel_groups{&owner.Group(sgre::scene::RawLayerTaskGroup::CommonFirst), &owner.Group(sgre::scene::RawLayerTaskGroup::CommonSecond), &owner.CommonTasks().Parallel(), &owner.TextureTask().ParallelTasks()};
+	for (auto* group : parallel_groups) {
+		sgre::scene::ParallelTaskCallbacks callbacks;
+		callbacks.Update = [&](auto) {
+			reject_active();
+		};
+		static_cast<void>(group->Append(std::move(callbacks)));
+		group->Update();
+	}
+	const std::array serial_groups{&owner.SerialTasks(), &owner.TextureTask().SerialTasks()};
+	for (auto* group : serial_groups) {
+		sgre::scene::SerialTaskCallbacks callbacks;
+		callbacks.Update = [&](auto&) {
+			reject_active();
+		};
+		static_cast<void>(group->Append(std::make_unique<sgre::scene::SerialTask>(std::move(callbacks))));
+		group->Update();
+	}
+	Require(rejections == 6, "every actual RawTex common and inner process group must reach the containing preflight rejection");
+
+	const auto listener = fixture.Vm.Retain(fixture.Listener());
+	const auto thread = fixture.Vm.Retain(fixture.Threads.Spawn(fixture.DormantFunction()));
+	fixture.Objects.Subscribe(thread.Value(), listener.Value(), [&](const auto&) {
+		Require(backend.Live && fixture.Tree.State(handle).Attached, "actual Thread notifications precede RawTex ownership retirement");
+		fixture.Events.emplace_back("thread");
+
+		return false;
+	});
+	backend.OnTextureRelease = [&] {
+		Require(fixture.Close->Phase() == sgre::script::PreparedDriverClosePhase::Vm && fixture.Logs.IsInitialized() && !fixture.Manager.IsClosed() && !fixture.Meter.IsClosed() && fixture.Tree.Contains(handle) && !fixture.Tree.State(handle).Attached && priority.State(order[0]).Status == sgre::scene::TaskStatus::Retire, "actual RawTex texture must retire during VM cleanup after parent unlink/background marking while enclosing scene services remain live");
+		fixture.Events.emplace_back("raw texture");
+	};
+	fixture.Close->Close();
+	Require(fixture.Events == std::vector<std::string>{"thread", "raw texture"} && fixture.Close->Phase() == sgre::script::PreparedDriverClosePhase::Closed && fixture.Vm.IsClosed() && !fixture.Logs.IsInitialized() && fixture.Manager.IsClosed() && fixture.Meter.IsClosed() && !backend.Live && !fixture.Tree.Contains(handle) && fixture.Controller.Parallel().Count() == 0, "actual idle RawTex must complete Thread, VM, histories and Driver retirement with no residual common or background owner");
+}
+
 [[noreturn]] static void ExitAfterExpectedRuntimeDestruction() noexcept {
 	std::_Exit(0);
 }
@@ -214,7 +280,8 @@ int main(int argc, char** argv) {
 		TestActualLeafCallbacksAndPreparation(directory);
 		TestLateNotificationRecheck(directory);
 		TestLayerEndsFirstAndDetach(directory);
-		std::cout << "PASS 5 prepared Driver actual leaf/runtime preflight groups\n";
+		TestRawTexturePreflightAndOrderedRetirement(directory);
+		std::cout << "PASS 6 prepared Driver actual leaf/runtime/RawTex preflight groups\n";
 
 		return 0;
 	} catch (const std::exception& error) {

@@ -80,6 +80,7 @@ namespace sgre::script {
 		ScriptMotionLayerProperties MotionProperties;
 		std::vector<LayerBorrowedViewEntry> BorrowedViews;
 		std::function<void(bool)> RawSmoothing;
+		std::function<void(const SquirrelValue&)> RawPreflight;
 		std::function<void(const SquirrelValue&)> RawRetirement;
 		bool UpdatingBorrowedViews = false;
 		bool Releasing = false;
@@ -700,6 +701,9 @@ namespace sgre::script {
 			}
 			if ((record.BaseFrame && !record.BaseFrame->CanClose()) || (record.BaseTasks && !record.BaseTasks->CanClear())) {
 				throw std::runtime_error("native Base cannot retire while its concrete graph is traversing or detached");
+			}
+			if (record.RawPreflight) {
+				record.RawPreflight(instance);
 			}
 			if (record.BasePreflight) {
 				record.BasePreflight(instance);
@@ -1640,9 +1644,9 @@ namespace sgre::script {
 		return attachment;
 	}
 
-	void ScriptLayerBindings::AttachRawTextureInstance(const SquirrelValue& instance, scene::LayerHandle handle, const SquirrelValue& owner, std::function<void(bool)> set_smoothing, std::function<void(const SquirrelValue&)> retire) {
+	void ScriptLayerBindings::AttachRawTextureInstance(const SquirrelValue& instance, scene::LayerHandle handle, const SquirrelValue& owner, std::function<void(bool)> set_smoothing, std::function<void(const SquirrelValue&)> require_can_retire, std::function<void(const SquirrelValue&)> retire) {
 		auto& state = *m_Implementation;
-		if (!state.Vm.IsInstanceOf(instance, state.BaseClass) || !state.Tree.Contains(handle) || state.Tree.State(handle).Kind != scene::LayerKind::RawTexture || !set_smoothing || !retire) {
+		if (!state.Vm.IsInstanceOf(instance, state.BaseClass) || !state.Tree.Contains(handle) || state.Tree.State(handle).Kind != scene::LayerKind::RawTexture || !set_smoothing || !require_can_retire || !retire) {
 			throw std::runtime_error("RawTex common registration requires a genuine LayerBase descendant, raw leaf and live task bridges");
 		}
 		const auto index = std::get<SquirrelObjectHandle>(instance).Index;
@@ -1659,6 +1663,7 @@ namespace sgre::script {
 		record.Instance = state.Vm.BorrowObjectIdentity(instance);
 		record.Handle = handle;
 		record.RawSmoothing = std::move(set_smoothing);
+		record.RawPreflight = std::move(require_can_retire);
 		record.RawRetirement = std::move(retire);
 		if (!std::holds_alternative<std::monostate>(owner)) {
 			record.Owner = state.Vm.Retain(state.Vm.CreateWeakReference(owner));
@@ -1735,10 +1740,6 @@ namespace sgre::script {
 		}
 		for (const auto& [index, record] : state.Instances) {
 			static_cast<void>(index);
-			if (record.RawRetirement) {
-				throw std::runtime_error("prepared Driver RawTex retirement requires its actual separate texture/context preflight");
-			}
-
 			state.Vm.DispatchBorrowedReceiver(record.Instance, [&state](const SquirrelValue& receiver) {
 				state.RequireCanRelease(receiver);
 			});

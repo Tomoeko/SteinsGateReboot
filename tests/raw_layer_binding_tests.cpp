@@ -86,6 +86,11 @@ struct RawBindingFixture {
 		Layers.AttachRawTextureInstance(Instance, Owner->Handle(), Parent, [this](bool smoothing) {
 			Owner->TextureTask().SetFiltering(smoothing ? 1u : 0u, smoothing ? 1u : 0u);
 		},
+		    [this](const SquirrelValue&) {
+			    if (!Owner->CanClose()) {
+				    throw std::runtime_error("fixture raw owner cannot retire during an active task callback");
+			    }
+		    },
 		    [this](const SquirrelValue& receiver) {
 			    Close(receiver);
 		    });
@@ -201,6 +206,8 @@ static void TestRegistrationAndStageGuards() {
 		fixture.Layers.AttachRawTextureInstance(fixture.Instance, handle, fixture.Parent, [](bool) {
 		},
 		    [](const SquirrelValue&) {
+		    },
+		    [](const SquirrelValue&) {
 		    });
 	},
 	    "already attached");
@@ -208,6 +215,8 @@ static void TestRegistrationAndStageGuards() {
 	RequireError([&] {
 		fixture.Layers.AttachRawTextureInstance(unregistered, fixture.Layers.Handle(fixture.Parent), {}, [](bool) {
 		},
+		    [](const SquirrelValue&) {
+		    },
 		    [](const SquirrelValue&) {
 		    });
 	},

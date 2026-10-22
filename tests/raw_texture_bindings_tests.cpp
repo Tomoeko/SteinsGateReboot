@@ -124,8 +124,7 @@ static void TestActualImageOptionsAndBinaryRestoration() {
 	const auto folder = services.Vm.Invoke(services.Layers.LayerFolderClass(), root).Value;
 	const std::array<SquirrelValue, 3> image_arguments{services.Vm.RootTable(), std::int32_t(2), std::int32_t(1)};
 	const auto image = services.Vm.Invoke(services.Images.RawImageClass(), image_arguments).Value;
-	const auto pixels = services.Binary.WrapBuffer(std::make_shared<const std::vector<std::uint8_t>>(std::vector<std::uint8_t>{1, 2, 3, 4, 5, 6, 7, 8}));
-	static_cast<void>(Call(services.Vm, image, "restore", {pixels}));
+	services.Images.StoreThumbnail(image, std::array<std::uint8_t, 8>{3, 2, 1, 4, 7, 6, 5, 8});
 	const auto options = services.Vm.CreateTable();
 	services.Vm.NewSlot(options, std::string("specFlag"), std::string("not-bool"));
 	services.Vm.NewSlot(options, std::string("mipCount"), std::string("auto"));

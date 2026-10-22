@@ -336,14 +336,18 @@ namespace sgre::script {
 			return plan;
 		}
 
-		void Release(const SquirrelValue& instance) {
+		void RequireCanRelease(const SquirrelValue& instance) {
 			RequirePriorityIdle();
 			Objects.RequireCanRelease(instance);
-			auto& record = Record(instance);
+			const auto& record = Record(instance);
 			if (record.ClosingReceiver || record.Dispatching || (record.Frame && !record.Frame->CanClose()) || !record.Owner->CanClose()) {
 				throw std::runtime_error("RawTex cannot retire during its own task callback or cleanup");
 			}
+		}
 
+		void Release(const SquirrelValue& instance) {
+			RequireCanRelease(instance);
+			auto& record = Record(instance);
 			record.ClosingReceiver = &instance;
 			std::exception_ptr failure;
 			try {
@@ -428,6 +432,14 @@ namespace sgre::script {
 						owner->Instances.at(index).Owner->TextureTask().SetFiltering(smoothing ? 1u : 0u, smoothing ? 1u : 0u);
 					}
 				},
+				    [weak](const SquirrelValue& receiver) {
+					    const auto owner = weak.lock();
+					    if (!owner) {
+						    throw std::runtime_error("RawTex retirement preflight requires its actual live texture services");
+					    }
+
+					    owner->RequireCanRelease(receiver);
+				    },
 				    [weak](const SquirrelValue& receiver) {
 					    if (const auto owner = weak.lock()) {
 						    owner->Release(receiver);
