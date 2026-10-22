@@ -413,17 +413,25 @@ namespace sgre::script {
 					return SquirrelNativeResult::ReturnValue(NumericAttribute(numeric, index));
 				}));
 			}
-			static constexpr std::array<std::string_view, 2> unsupported{"getPosition", "containsArea"};
-			for (const auto method : unsupported) {
-				Vm.NewSlot(GetterClass, std::string(method), Vm.CreateNativeClosure("MotionLayerGetter." + std::string(method), [weak, method](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
-					const auto owner = weak.lock();
-					if (!owner || arguments.empty()) {
-						throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
-					}
-					static_cast<void>(owner->Getter(arguments[0]));
-					throw std::runtime_error("MotionLayerGetter." + std::string(method) + " requires its actual unrecovered native producer");
-				}));
-			}
+			Vm.NewSlot(GetterClass, std::string("containsArea"), Vm.CreateNativeClosure("MotionLayerGetter.containsArea", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) {
+				const auto owner = weak.lock();
+				if (!owner || arguments.size() < 4) {
+					throw std::runtime_error("MotionLayerGetter.containsArea requires its original receiver, coordinates and area name");
+				}
+				const auto record = owner->Getter(arguments[0]);
+				const resource::MotionPoint point{ShapeNumber(arguments[1]), ShapeNumber(arguments[2])};
+				const auto name = owner->Vm.ToString(arguments[3]);
+
+				return SquirrelNativeResult::ReturnValue(ActualScene(record.Task, record.Child).ContainsArea(record.Layer, point, name.substr(0, name.find('\0'))));
+			}));
+			Vm.NewSlot(GetterClass, std::string("getPosition"), Vm.CreateNativeClosure("MotionLayerGetter.getPosition", [weak](SquirrelVm&, std::span<const SquirrelValue> arguments) -> SquirrelNativeResult {
+				const auto owner = weak.lock();
+				if (!owner || arguments.empty()) {
+					throw std::runtime_error("MotionLayerGetter binding owner has retired or lacks its receiver");
+				}
+				static_cast<void>(owner->Getter(arguments[0]));
+				throw std::runtime_error("MotionLayerGetter.getPosition requires its actual unrecovered native producer");
+			}));
 			Vm.NewSlot(Vm.RootTable(), std::string("MotionLayerGetter"), GetterClass);
 			Vm.NewSlot(Vm.RootTable(), std::string("MotionShapeContains"), ShapeClass);
 		}

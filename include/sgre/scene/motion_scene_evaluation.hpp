@@ -101,6 +101,7 @@ namespace sgre::scene {
 		[[nodiscard]] MotionShapeSnapshot Shape(const MotionSceneLayerReference& reference) const;
 		// Queries retained shape owners without advancing selected frames or requiring an unqueued draw.
 		[[nodiscard]] bool Contains(const MotionSceneLayerReference& reference, resource::MotionPoint point) const;
+		[[nodiscard]] bool ContainsArea(const MotionSceneLayerReference& reference, resource::MotionPoint point, std::string_view name) const;
 		[[nodiscard]] std::uint32_t LayerType(const MotionSceneLayerReference& reference) const;
 		// Immediate same-player children in native ordinal order; never includes another selected player's tree.
 		[[nodiscard]] std::vector<MotionSceneLayerReference> LayerChildren(const MotionSceneLayerReference& reference) const;

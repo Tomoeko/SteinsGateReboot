@@ -1492,6 +1492,49 @@ namespace sgre::scene {
 			return false;
 		}
 
+		bool NamedChildContains(const Context& context, std::uint32_t layer, resource::MotionPoint point, std::string_view name) const {
+			const auto& child = context.Children.at(layer);
+			if (!child) {
+				if (const auto* selected = context.Selected.ChildNodes(layer); selected != nullptr && !selected->Nodes().empty()) {
+					throw std::runtime_error("motion named-area hit test requires its actual completed child context");
+				}
+				return false;
+			}
+			const auto target = FindLayer(name, &child->Commands);
+			if (!target) {
+				return false;
+			}
+			static_cast<void>(ResolveLayer(*target));
+			for (const auto& entry : Catalogue) {
+				if (entry.Actual != nullptr && entry.Actual->Identity == target->ContextIdentity) {
+					return LayerContains(*entry.Actual, target->NativeOrdinal - 1, point);
+				}
+			}
+			throw std::runtime_error("motion named-area hit test lost its exact child lookup context");
+		}
+
+		bool LayerContainsArea(const Context& context, std::uint32_t layer, resource::MotionPoint point, std::string_view name) const {
+			const auto nodes = context.Selected.Nodes();
+			std::vector<std::pair<std::uint32_t, bool>> pending{{layer, false}};
+			while (!pending.empty()) {
+				const auto [index, recursive] = pending.back();
+				pending.pop_back();
+				const auto kind = nodes[index].Prepared->Type;
+				if (kind == 3 && NamedChildContains(context, index, point, name)) {
+					return true;
+				}
+				// Native2743b0 searches named areas inside child players; shapes alone do not qualify.
+				if (kind == 2 || recursive) {
+					for (std::size_t next = nodes.size(); next != 0; --next) {
+						if (nodes[next - 1].Parent == index) {
+							pending.emplace_back(static_cast<std::uint32_t>(next - 1), true);
+						}
+					}
+				}
+			}
+			return false;
+		}
+
 		const LoadedMotionAsset& ReadAsset(MotionProjectId project) const {
 			const auto& asset = Services.ReadRegisteredAsset(project);
 			if (!Runtime.Manager().Contains(project) || Runtime.Manager().Identity(project) != asset.Identity || !Catalog.ContainsPrepared(asset) || asset.Model.get() != &Runtime.Manager().Resource(project)) {
@@ -2000,6 +2043,17 @@ namespace sgre::scene {
 			}
 		}
 		throw std::runtime_error("motion layer hit test context is no longer current");
+	}
+
+	bool MotionSceneEvaluation::ContainsArea(const MotionSceneLayerReference& reference, resource::MotionPoint point, std::string_view name) const {
+		const auto& state = *m_Implementation;
+		static_cast<void>(state.ResolveLayer(reference));
+		for (const auto& entry : state.Catalogue) {
+			if (entry.Actual != nullptr && entry.Actual->Identity == reference.ContextIdentity) {
+				return state.LayerContainsArea(*entry.Actual, reference.NativeOrdinal - 1, point, name);
+			}
+		}
+		throw std::runtime_error("motion named-area hit test context is no longer current");
 	}
 
 	std::uint64_t MotionSceneEvaluation::GraphGeneration() const noexcept {

@@ -1437,6 +1437,74 @@ static std::shared_ptr<const sgre::resource::PsbDocument> FolderContainsDocument
 	return document;
 }
 
+static void TestNamedAreasInActualChildPlayers() {
+	Fixture fixture(2, false, NestedGetterDocument());
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("child map key")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto shape = fixture.Call(motion, "getLayerGetter", {std::string("outer only")});
+	const auto shape_root = fixture.Vm.Retain(shape);
+	const auto task = fixture.Bindings->NativeOwners().Task(motion);
+	const auto tick = task.Commands().ClockState().TickCount;
+	const auto identifiers = fixture.Secondary->Identifiers().LiveCount();
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {7.0f, 11.0f, std::string("inner only")})), "named-area hit test must use its actual child's own lookup map");
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {3.0f, 5.0f, std::string("deep shape key")})), "named-area lookup must include the actual nested child catalogue");
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {-12.0f, 5.0f, std::string("deep shape key")})) && !std::get<bool>(fixture.Call(getter, "containsArea", {-12.0f, 5.0f, std::string("inner only")})), "area names must select distinct genuine shapes rather than test the whole child player");
+	Require(!std::get<bool>(fixture.Call(getter, "containsArea", {900.0f, 900.0f, std::string("inner only")})) && !std::get<bool>(fixture.Call(getter, "containsArea", {7.0f, 11.0f, std::string("outer only")})), "named-area hit test cannot accept a missed point or escape to the containing player's map");
+	Require(!std::get<bool>(fixture.Call(shape, "containsArea", {20.0f, 40.0f, std::string("outer only")})), "a shape alone must not stand in for an area inside a child player");
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {7.0f, 11.0f, std::string("inner only\0suffix", 17)})), "named-area bridge must use the original C-string boundary");
+	std::size_t conversions = 0;
+	const auto name_class = fixture.Vm.CreateClass();
+	const auto name_class_root = fixture.Vm.Retain(name_class);
+	fixture.Vm.NewSlot(name_class, std::string("_tostring"), fixture.Vm.CreateNativeClosure("area_name_conversion", [&](auto&, const auto) {
+		++conversions;
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::string("inner only"));
+	}));
+	const auto name = fixture.Vm.CreateInstance(name_class);
+	const auto name_root = fixture.Vm.Retain(name);
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {7.0f, 11.0f, name, std::int32_t{99}})) && conversions == 1, "named-area bridge stringifies its name once and ignores extra operands");
+	fixture.Second().Draw(0);
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {3.0f, 5.0f, std::string("deep shape key")})), "named-area queries may read actual retained geometry while its draw is queued");
+	fixture.Secondary->SceneContext().Clear();
+	Require(task.Commands().ClockState().TickCount == tick && fixture.Secondary->Identifiers().LiveCount() == identifiers && fixture.Uploads == 0, "named-area hit tests must not advance clocks, allocate players or upload textures");
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main"), std::int32_t{1}}));
+	RequireFailure([&] {
+		static_cast<void>(fixture.Call(getter, "containsArea", {3.0f, 5.0f, std::string("deep shape key")}));
+	},
+	    "root selection");
+}
+
+static void TestNamedAreaFolderTraversal() {
+	using sgre::resource::PsbArray;
+	auto document = std::make_shared<sgre::resource::PsbDocument>(*FolderContainsDocument());
+	auto& timeline = FixtureField(FixtureField(FixtureField(FixtureField(document->Root, "object"), "outer"), "motion"), "main");
+	auto& folder = std::get<PsbArray>(FixtureField(timeline, "layer").Data)[0];
+	auto& ordinary = std::get<PsbArray>(FixtureField(folder, "children").Data)[0];
+	FixtureField(ordinary, "children") = Atom(PsbArray{Layer(true, 0)});
+	for (auto* layer : {&folder, &ordinary}) {
+		auto& frame = std::get<PsbArray>(FixtureField(*layer, "frameList").Data)[0];
+		FixtureField(FixtureField(frame, "content"), "zx") = Atom(1.0);
+		FixtureField(FixtureField(frame, "content"), "zy") = Atom(1.0);
+	}
+	Fixture fixture(2, false, std::move(document));
+	const auto motion = fixture.Vm.Invoke(fixture.Bindings->MotionClass(), std::array<sgre::script::SquirrelValue, 2>{fixture.Vm.RootTable(), fixture.Leaf}).Value;
+	const auto motion_root = fixture.Vm.Retain(motion);
+	static_cast<void>(fixture.Call(motion, "setChara", {std::string("outer")}));
+	static_cast<void>(fixture.Call(motion, "play", {std::string("main")}));
+	static_cast<void>(fixture.Call(motion, "progress", {0.0f}));
+	const auto getter = fixture.Call(motion, "getLayerGetter", {std::string("folder")});
+	const auto getter_root = fixture.Vm.Retain(getter);
+	const auto ordinary_getter = fixture.Call(motion, "getLayerGetter", {std::string("ordinary")});
+	const auto ordinary_root = fixture.Vm.Retain(ordinary_getter);
+	Require(std::get<bool>(fixture.Call(getter, "containsArea", {60.0f, 120.0f, std::string("nested map key")})), "folder area traversal must continue through an ordinary node into its actual child player");
+	Require(!std::get<bool>(fixture.Call(ordinary_getter, "containsArea", {60.0f, 120.0f, std::string("nested map key")})), "ordinary direct area queries cannot begin a recursive folder search");
+	Require(!std::get<bool>(fixture.Call(getter, "containsArea", {60.0f, 120.0f, std::string("missing")})), "named-area traversal cannot replace an absent name with a whole-player hit test");
+}
+
 static void TestGetterContainsActualVmMouseAndTypedArguments() {
 	for (const auto shape : {std::uint32_t{0}, std::uint32_t{1}, std::uint32_t{2}, std::uint32_t{3}}) {
 		Fixture fixture(shape);
@@ -1656,6 +1724,8 @@ int main() {
 	try {
 		TestImmediateChildrenAndWrapperLifetime();
 		TestGetterContainsActualVmMouseAndTypedArguments();
+		TestNamedAreasInActualChildPlayers();
+		TestNamedAreaFolderTraversal();
 		TestGetterContainsRetainedGeometryAndNoVisibilityFilter();
 		TestGetterContainsFolderAndActualChildSubtree();
 		TestGetterContainsQueuedReadonlyAndWeakRetirement();
