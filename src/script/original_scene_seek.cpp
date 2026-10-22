@@ -486,14 +486,16 @@ namespace sgre::script {
 			state.Vm.NewSlot(layer, std::string("setDelegate"), delegate_hook);
 			const auto original_update = state.Vm.GetSlot(layer, std::string("onMotionUpdate"));
 			const auto update_hook = state.Vm.CreateNativeClosureWithCaptures("seek.MotionPanelLayer.onMotionUpdate", [weak](SquirrelVm& vm, std::span<const SquirrelValue> arguments) {
-				if (arguments.size() != 3) {
-					throw std::runtime_error("original seek numpad update requires its layer and panel");
+				if (arguments.size() < 2) {
+					throw std::runtime_error("original seek panel update requires its receiver and captured method");
 				}
 				const auto receiver = arguments[0];
-				const auto panel = arguments[1];
-				const auto result = CallSeekMethod(vm, vm.NativeStackValue(-1), std::array<SquirrelValue, 2>{receiver, panel});
-				if (const auto owner = weak.lock()) {
-					owner->AdvanceNumpad(receiver, panel);
+				const auto original_arguments = arguments.first(arguments.size() - 1);
+				// The original panel method supplies its own optional argument. ExDialog
+				// calls base.onMotionUpdate() without a panel; preserve that call exactly.
+				const auto result = CallSeekMethod(vm, vm.NativeStackValue(-1), original_arguments);
+				if (const auto owner = weak.lock(); owner && original_arguments.size() >= 2) {
+					owner->AdvanceNumpad(receiver, original_arguments[1]);
 				}
 
 				return SquirrelNativeResult::ReturnValue(result);

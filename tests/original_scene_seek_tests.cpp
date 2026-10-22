@@ -193,6 +193,37 @@ struct SeekFixture {
 	}
 };
 
+static void TestPanelUpdatePreservesOriginalArguments() {
+	SeekFixture fixture;
+	auto& vm = fixture.Vm;
+	const auto layer_class = vm.CreateClass();
+	vm.NewSlot(vm.RootTable(), std::string("MotionPanelLayer"), layer_class);
+	vm.NewSlot(layer_class, std::string("setDelegate"), vm.CreateNativeClosure("prepared-panel-delegate", [](SquirrelVm&, auto) {
+		return sgre::script::SquirrelNativeResult::NoValues();
+	}));
+	std::vector<SquirrelValue> received;
+	vm.NewSlot(layer_class, std::string("onMotionUpdate"), vm.CreateNativeClosure("prepared-original-optional-panel-update", [&received](SquirrelVm&, auto arguments) {
+		received.assign(arguments.begin(), arguments.end());
+
+		return sgre::script::SquirrelNativeResult::ReturnValue(std::int32_t{37});
+	}));
+	auto target = Target();
+	target.Navigation = std::make_shared<const sgre::scenario::ScenarioNavigation>();
+	sgre::script::OriginalSceneSeek seek(vm, std::move(target));
+	const auto player = fixture.Start(seek);
+	const auto player_root = vm.Retain(player);
+	const auto layer = vm.CreateInstance(layer_class);
+	const auto layer_root = vm.Retain(layer);
+	const auto panel = vm.CreateTable();
+	const auto panel_root = vm.Retain(panel);
+	const auto hooked = vm.GetSlot(layer, std::string("onMotionUpdate"));
+	for (const auto& arguments : std::vector<std::vector<SquirrelValue>>{{layer}, {layer, panel}, {layer, panel, std::int32_t{19}, true}}) {
+		Require(vm.Invoke(hooked, arguments).Value == SquirrelValue{std::int32_t{37}} && received == arguments, "panel seek wrapper required optional arguments, dropped supplied arguments or forwarded its capture");
+	}
+	seek.Cancel();
+	Require(vm.Invoke(hooked, std::array<SquirrelValue, 1>{layer}).Value == SquirrelValue{std::int32_t{37}} && received.size() == 1, "cancelled seek changed the original base update's optional-argument behavior");
+}
+
 static void TestCurrentSceneArgumentPropagation() {
 	SeekFixture fixture;
 	fixture.CurrentScene = fixture.Vm.CreateTable();
@@ -891,6 +922,7 @@ int main(int argc, char** argv) {
 	try {
 		Require(argc == 1 || argc == 4, "usage: original_scene_seek_tests [envplayer-bytecode util-bytecode init-bytecode]");
 		TestFirstEntryFailureLatchesAndPreservesException();
+		TestPanelUpdatePreservesOriginalArguments();
 		TestCurrentSceneArgumentPropagation();
 		TestCheckpointPredecessorEntry();
 		TestMailInputAtOriginalCallsites();
